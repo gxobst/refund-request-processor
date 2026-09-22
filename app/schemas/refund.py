@@ -2,10 +2,35 @@
 
 from datetime import datetime, timezone
 from typing import Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 RefundStatus = Literal["pending", "completed", "escalated"]
 RefundDecision = Literal["auto_approve", "deny", "escalate"]
+
+
+class RefundCreateRequest(BaseModel):
+    """Request payload for submitting a new refund request."""
+
+    order_id: str = Field(..., min_length=1, description="Associated order identifier.")
+    customer_request_text: str = Field(
+        ..., min_length=1, description="Customer refund explanation."
+    )
+
+    @field_validator("order_id", "customer_request_text")
+    @classmethod
+    def not_blank(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Field cannot be blank or empty.")
+        return v.strip()
+
+
+class RefundCreateResponse(BaseModel):
+    """Response payload returned upon accepting a refund submission."""
+
+    refund_id: str
+    order_id: str
+    status: str = "pending"
+    created_at: str
 
 
 class RefundRecord(BaseModel):
