@@ -1,0 +1,58 @@
+[
+  {
+    "order_id": "ORD-1001",
+    "item": "Ergonomic Office Chair",
+    "purchase_date": "2026-09-10",
+    "delivery_date": "2026-09-12",
+    "order_amount": 250.0,
+    "delivery_status": "delivered"
+  },
+  {
+    "order_id": "ORD-1002",
+    "item": "Noise-Cancelling Headphones",
+    "purchase_date": "2026-09-05",
+    "delivery_date": "2026-09-08",
+    "order_amount": 500.0,
+    "delivery_status": "delivered"
+  },
+  {
+    "order_id": "ORD-1003",
+    "item": "Ultra-Wide Gaming Monitor",
+    "purchase_date": "2026-09-01",
+    "delivery_date": "2026-09-04",
+    "order_amount": 750.0,
+    "delivery_status": "delivered"
+  },
+  {
+    "order_id": "ORD-1004",
+    "item": "Wireless Mechanical Keyboard",
+    "purchase_date": "2026-08-01",
+    "delivery_date": "2026-08-05",
+    "order_amount": 150.0,
+    "delivery_status": "delivered"
+  },
+  {
+    "order_id": "ORD-1005",
+    "item": "Standing Desk Converter",
+    "purchase_date": "2026-09-18",
+    "delivery_date": null,
+    "order_amount": 199.99,
+    "delivery_status": "in_transit"
+  },
+  {
+    "order_id": "ORD-1006",
+    "item": "USB-C Multi-port Hub",
+    "purchase_date": "2026-09-15",
+    "delivery_date": null,
+    "order_amount": 45.0,
+    "delivery_status": "cancelled"
+  },
+  {
+    "order_id": "ORD-1007",
+    "item": "Designer Wool Sweater",
+    "purchase_date": "2026-09-14",
+    "delivery_date": "2026-09-16",
+    "order_amount": 200.0,
+    "delivery_status": "delivered"
+  }
+]
