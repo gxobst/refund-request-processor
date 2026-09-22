@@ -62,3 +62,17 @@ class PolicyConfig(BaseModel):
     def get(self, item: str | RefundCategory, default: Any = None) -> Any:
         key = item.value if isinstance(item, RefundCategory) else str(item)
         return getattr(self, key, default)
+
+
+PolicyEvaluationStatus = Literal["pass", "fail", "ambiguous"]
+
+
+class PolicyEvaluationResult(BaseModel):
+    """Result of deterministic policy evaluation."""
+
+    status: Literal["pass", "fail", "ambiguous"]
+    passed_rules: list[str] = Field(default_factory=list)
+    failed_rules: list[str] = Field(default_factory=list)
+    details: str | dict[str, str] = ""
+    matched_policy_rule: CategoryPolicy | dict[str, Any] | None = None
+
