@@ -1,11 +1,17 @@
 """Unit tests for the multi-agent LangGraph workflow orchestration and checkpointing."""
 
-from unittest.mock import MagicMock
+from decimal import Decimal
+from unittest.mock import MagicMock, patch
 from langchain_core.runnables import RunnableLambda
 from langgraph.checkpoint.memory import MemorySaver
 import pytest
 
 from app.graph.checkpoint import get_checkpointer
+from app.graph.nodes import (
+    _lookup_order_data,
+    intake_validate_node,
+    set_current_repository,
+)
 from app.graph.runner import run_refund_workflow
 from app.graph.workflow import build_refund_graph
 from app.schemas.classifier import ClassificationOutput
@@ -184,3 +190,215 @@ async def test_workflow_state_persisted_in_checkpointer():
     assert state_snapshot is not None
     assert state_snapshot.values["refund_id"] == "ref_checkpoint_123"
     assert state_snapshot.values["decision"] == "auto_approve"
+
+
+def test_lookup_order_data_empty_or_none():
+    # Arrange & Act & Assert
+    assert _lookup_order_data("") is None
+    assert _lookup_order_data(None) is None
+    assert _lookup_order_data("   ") is None
+
+
+def test_lookup_order_data_from_dynamodb_with_decimal_conversion():
+    # Arrange: Mock DynamoDB item with Decimals
+    mock_item = {
+        "order_id": "ORD-DYNAMO-100",
+        "item": "Premium Desk",
+        "order_amount": Decimal("450.75"),
+        "delivery_status": "delivered",
+        "purchase_date": "2026-09-01",
+        "quantity": Decimal("1"),
+    }
+    mock_table = MagicMock()
+    mock_table.get_item.return_value = {"Item": mock_item}
+    mock_resource = MagicMock()
+    mock_resource.Table.return_value = mock_table
+
+    mock_repo = MagicMock()
+    mock_repo.dynamodb_resource = mock_resource
+
+    # Act
+    set_current_repository(mock_repo)
+    try:
+        result = _lookup_order_data("ORD-DYNAMO-100")
+    finally:
+        set_current_repository(None)
+
+    # Assert
+    mock_table.get_item.assert_called_once_with(Key={"order_id": "ORD-DYNAMO-100"})
+    assert result is not None
+    assert result["order_id"] == "ORD-DYNAMO-100"
+    assert isinstance(result["order_amount"], float)
+    assert result["order_amount"] == 450.75
+    assert isinstance(result["quantity"], int)
+    assert result["quantity"] == 1
+
+
+def test_lookup_order_data_initializes_boto3_resource_when_no_active_repository():
+    # Arrange: No repo in context, boto3.resource is called with settings
+    mock_item = {
+        "order_id": "ORD-DYNAMO-200",
+        "order_amount": Decimal("100.00"),
+    }
+    mock_table = MagicMock()
+    mock_table.get_item.return_value = {"Item": mock_item}
+    mock_resource = MagicMock()
+    mock_resource.Table.return_value = mock_table
+
+    set_current_repository(None)
+    with patch("boto3.resource", return_value=mock_resource) as mock_boto3_resource:
+        # Act
+        result = _lookup_order_data("ORD-DYNAMO-200")
+
+    # Assert
+    mock_boto3_resource.assert_called_once()
+    mock_table.get_item.assert_called_once_with(Key={"order_id": "ORD-DYNAMO-200"})
+    assert result is not None
+    assert result["order_id"] == "ORD-DYNAMO-200"
+    assert result["order_amount"] == 100
+
+
+def test_lookup_order_data_fallback_to_json_on_dynamodb_exception():
+    # Arrange: DynamoDB raises an exception (e.g. connection error)
+    mock_table = MagicMock()
+    mock_table.get_item.side_effect = Exception("DynamoDB connection error")
+    mock_resource = MagicMock()
+    mock_resource.Table.return_value = mock_table
+    mock_repo = MagicMock()
+    mock_repo.dynamodb_resource = mock_resource
+
+    set_current_repository(mock_repo)
+    try:
+        # Act: ORD-1001 exists in mock_orders.json
+        result = _lookup_order_data("ORD-1001")
+    finally:
+        set_current_repository(None)
+
+    # Assert: successfully falls back to mock_orders.json
+    assert result is not None
+    assert result["order_id"] == "ORD-1001"
+    assert result["delivery_status"] == "delivered"
+
+
+def test_lookup_order_data_fallback_to_json_when_not_in_dynamodb():
+    # Arrange: DynamoDB returns no item
+    mock_table = MagicMock()
+    mock_table.get_item.return_value = {}
+    mock_resource = MagicMock()
+    mock_resource.Table.return_value = mock_table
+    mock_repo = MagicMock()
+    mock_repo.dynamodb_resource = mock_resource
+
+    set_current_repository(mock_repo)
+    try:
+        # Act: ORD-1001 exists in mock_orders.json
+        result = _lookup_order_data("ORD-1001")
+    finally:
+        set_current_repository(None)
+
+    # Assert: retrieved from mock_orders.json
+    assert result is not None
+    assert result["order_id"] == "ORD-1001"
+
+
+def test_lookup_order_data_returns_none_when_in_neither():
+    # Arrange: item neither in DynamoDB nor in mock_orders.json
+    mock_table = MagicMock()
+    mock_table.get_item.return_value = {}
+    mock_resource = MagicMock()
+    mock_resource.Table.return_value = mock_table
+    mock_repo = MagicMock()
+    mock_repo.dynamodb_resource = mock_resource
+
+    set_current_repository(mock_repo)
+    try:
+        # Act
+        result = _lookup_order_data("NONEXISTENT-ORDER-0000")
+    finally:
+        set_current_repository(None)
+
+    # Assert
+    assert result is None
+
+
+def test_intake_validate_node_populates_missing_order_data_flags():
+    # Arrange: mock DynamoDB order
+    mock_item = {
+        "order_id": "ORD-FOUND-1",
+        "order_amount": Decimal("50.00"),
+    }
+    mock_table = MagicMock()
+    mock_table.get_item.side_effect = lambda Key: (
+        {"Item": mock_item} if Key.get("order_id") == "ORD-FOUND-1" else {}
+    )
+    mock_resource = MagicMock()
+    mock_resource.Table.return_value = mock_table
+    mock_repo = MagicMock()
+    mock_repo.dynamodb_resource = mock_resource
+
+    set_current_repository(mock_repo)
+    try:
+        # Act 1: Order found
+        state_found = {"order_id": "ORD-FOUND-1"}
+        res_found = intake_validate_node(state_found)
+
+        # Act 2: Order missing
+        state_missing = {"order_id": "NONEXISTENT-ORD-9999"}
+        res_missing = intake_validate_node(state_missing)
+    finally:
+        set_current_repository(None)
+
+    # Assert
+    assert res_found["missing_order_data"] is False
+    assert res_found["order"] is not None
+    assert state_found["missing_order_data"] is False
+
+    assert res_missing["missing_order_data"] is True
+    assert res_missing["order"] is None
+    assert state_missing["missing_order_data"] is True
+
+
+@pytest.mark.asyncio
+async def test_workflow_with_dynamodb_order_lookup():
+    # Arrange: DynamoDB provides order data with Decimal amounts
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.95,
+        reasoning="Damaged item photo provided.",
+    )
+    mock_llm = make_mock_llm(mock_classification)
+    checkpointer = MemorySaver()
+
+    dynamo_order = {
+        "order_id": "ORD-LIVE-DYNAMO-1",
+        "item": "Monitor Arm",
+        "purchase_date": "2026-09-01",
+        "delivery_date": "2026-09-03",
+        "delivery_status": "delivered",
+        "order_amount": Decimal("120.00"),
+    }
+    mock_table = MagicMock()
+    mock_table.get_item.return_value = {"Item": dynamo_order}
+    mock_resource = MagicMock()
+    mock_resource.Table.return_value = mock_table
+    mock_repo = MagicMock()
+    mock_repo.dynamodb_resource = mock_resource
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_llm)
+
+        final_state = await run_refund_workflow(
+            refund_id="ref_dynamo_test",
+            order_id="ORD-LIVE-DYNAMO-1",
+            customer_request_text="Monitor arm bent on arrival.",
+            checkpointer=checkpointer,
+            repository=mock_repo,
+        )
+
+    # Assert: Order was populated from DynamoDB with Decimal converted
+    assert final_state["missing_order_data"] is False
+    assert final_state["order"]["order_id"] == "ORD-LIVE-DYNAMO-1"
+    assert final_state["order"]["order_amount"] == 120
+    assert final_state["decision"] == "auto_approve"
+    assert final_state["status"] == "completed"
+

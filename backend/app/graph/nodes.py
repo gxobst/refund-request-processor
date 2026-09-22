@@ -1,14 +1,21 @@
 """Node implementations for the LangGraph refund workflow."""
 
 import contextvars
+from decimal import Decimal
 import json
 from pathlib import Path
 from typing import Any
+import boto3
 
 from app.agents.classifier import classifier_node as agent_classifier_node
 from app.agents.decision import decision_node as agent_decision_node
 from app.agents.policy_checker import policy_checker_node as agent_policy_checker_node
-from app.db.repository import RefundNotFoundError, RefundRepository
+from app.core.config import get_settings
+from app.db.repository import (
+    RefundNotFoundError,
+    RefundRepository,
+    _convert_decimals_to_float,
+)
 
 _repository_context: contextvars.ContextVar[Any | None] = contextvars.ContextVar(
     "_repository_context", default=None
@@ -28,18 +35,54 @@ MOCK_ORDERS_PATH = Path(__file__).resolve().parent.parent / "data" / "mock_order
 
 
 def _lookup_order_data(order_id: str) -> dict[str, Any] | None:
-    """Helper to locate order details by order_id from the mock dataset."""
-    if not order_id or not MOCK_ORDERS_PATH.is_file():
+    """Helper to locate order details by order_id from DynamoDB or fallback dataset."""
+    if not order_id or not str(order_id).strip():
         return None
 
+    # 1. Attempt lookup from DynamoDB table
     try:
-        with open(MOCK_ORDERS_PATH, "r", encoding="utf-8") as f:
-            orders = json.load(f)
-        for order in orders:
-            if order.get("order_id") == order_id:
-                return order
+        settings = get_settings()
+        repo = get_current_repository()
+        dynamodb_resource = (
+            getattr(repo, "dynamodb_resource", None)
+            if repo is not None
+            else None
+        )
+
+        if dynamodb_resource is None:
+            kwargs: dict[str, Any] = {
+                "region_name": settings.aws_region,
+            }
+            if settings.aws_access_key_id and settings.aws_secret_access_key:
+                kwargs["aws_access_key_id"] = settings.aws_access_key_id
+                kwargs["aws_secret_access_key"] = settings.aws_secret_access_key
+                if settings.aws_session_token:
+                    kwargs["aws_session_token"] = settings.aws_session_token
+            if settings.dynamodb_endpoint_url:
+                kwargs["endpoint_url"] = settings.dynamodb_endpoint_url
+            dynamodb_resource = boto3.resource("dynamodb", **kwargs)
+
+        table_name = getattr(settings, "dynamodb_table_orders", "mock-orders")
+        table = dynamodb_resource.Table(table_name)
+        response = table.get_item(Key={"order_id": order_id})
+        item = response.get("Item")
+        if item:
+            return _convert_decimals_to_float(item)
     except Exception:
+        # Gracefully handle any DynamoDB exception and fall back to local mock orders
         pass
+
+    # 2. Fall back to local mock orders JSON
+    if MOCK_ORDERS_PATH.is_file():
+        try:
+            with open(MOCK_ORDERS_PATH, "r", encoding="utf-8") as f:
+                orders = json.load(f)
+            for order in orders:
+                if order.get("order_id") == order_id:
+                    return order
+        except Exception:
+            pass
+
     return None
 
 
@@ -59,6 +102,8 @@ def intake_validate_node(state: dict[str, Any]) -> dict[str, Any]:
         order = _lookup_order_data(order_id)
 
     missing_order_data = order is None
+    state["order"] = order
+    state["missing_order_data"] = missing_order_data
 
     return {
         "order": order,
