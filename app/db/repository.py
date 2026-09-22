@@ -1,0 +1,203 @@
+"""DynamoDB repository for refund requests and decisions."""
+
+from datetime import datetime, timezone
+from decimal import Decimal
+import os
+from typing import Any
+import uuid
+import boto3
+
+from app.schemas.refund import RefundRecord
+
+
+class RefundNotFoundError(KeyError):
+    """Raised when a refund request is not found in the database."""
+
+    pass
+
+
+def _convert_floats_to_decimal(val: Any) -> Any:
+    """Recursively convert float values to Decimal for DynamoDB storage."""
+    if isinstance(val, float):
+        return Decimal(str(val))
+    if isinstance(val, dict):
+        return {k: _convert_floats_to_decimal(v) for k, v in val.items() if v is not None}
+    if isinstance(val, list):
+        return [_convert_floats_to_decimal(v) for v in val]
+    return val
+
+
+def _convert_decimals_to_float(val: Any) -> Any:
+    """Recursively convert Decimal values back to float/int for Python/Pydantic."""
+    if isinstance(val, Decimal):
+        return int(val) if val % 1 == 0 else float(val)
+    if isinstance(val, dict):
+        return {k: _convert_decimals_to_float(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_convert_decimals_to_float(v) for v in val]
+    return val
+
+
+class RefundRepository:
+    """Data access repository for managing refund request lifecycles in DynamoDB."""
+
+    def __init__(self, dynamodb_resource: Any = None, table_name: str | None = None) -> None:
+        self.table_name = (
+            table_name
+            or os.getenv("REFUND_TABLE_NAME")
+            or "refund_requests"
+        )
+        if dynamodb_resource is None:
+            region = os.getenv("AWS_REGION", "us-east-1")
+            self.dynamodb_resource = boto3.resource("dynamodb", region_name=region)
+        else:
+            self.dynamodb_resource = dynamodb_resource
+
+        self.table = self.dynamodb_resource.Table(self.table_name)
+
+    def create_refund_request(self, order_id: str, customer_request_text: str) -> RefundRecord:
+        """Create and persist a new refund request record.
+
+        Args:
+            order_id: Associated order identifier.
+            customer_request_text: Customer-provided refund explanation.
+
+        Returns:
+            The created RefundRecord instance.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        refund_id = f"ref_{uuid.uuid4().hex[:12]}"
+
+        record = RefundRecord(
+            refund_id=refund_id,
+            order_id=order_id,
+            customer_request_text=customer_request_text,
+            status="pending",
+            created_at=now_iso,
+            updated_at=now_iso,
+        )
+
+        item = _convert_floats_to_decimal(record.model_dump())
+        self.table.put_item(Item=item)
+        return record
+
+    def get_refund_request(self, refund_id: str) -> RefundRecord | None:
+        """Retrieve a single refund request by ID.
+
+        Args:
+            refund_id: Partition key identifier.
+
+        Returns:
+            RefundRecord instance if found, None otherwise.
+        """
+        response = self.table.get_item(Key={"refund_id": refund_id})
+        item = response.get("Item")
+        if not item:
+            return None
+
+        cleaned = _convert_decimals_to_float(item)
+        return RefundRecord.model_validate(cleaned)
+
+    def list_refund_requests(self, status: str | None = None, limit: int = 50) -> list[RefundRecord]:
+        """List refund requests with optional status filtering.
+
+        Args:
+            status: Optional status to filter by ('pending', 'completed', 'escalated').
+            limit: Maximum number of records to return.
+
+        Returns:
+            List of matching RefundRecord instances.
+        """
+        response = self.table.scan()
+        raw_items = response.get("Items", [])
+
+        records = [
+            RefundRecord.model_validate(_convert_decimals_to_float(item))
+            for item in raw_items
+        ]
+
+        if status is not None:
+            status_lower = status.strip().lower()
+            records = [r for r in records if r.status.lower() == status_lower]
+
+        # Sort descending by created_at
+        records.sort(key=lambda r: r.created_at, reverse=True)
+        return records[:limit]
+
+    def update_decision(
+        self,
+        refund_id: str,
+        decision: str,
+        reasoning: str,
+        matched_policy_rule: dict[str, Any] | None,
+        confidence_score: float,
+        status: str,
+    ) -> RefundRecord:
+        """Update decision metadata and workflow status for an existing refund record.
+
+        Args:
+            refund_id: Target refund record ID.
+            decision: Automated decision ('auto_approve', 'deny', 'escalate').
+            reasoning: Reasoning text for the decision.
+            matched_policy_rule: Evaluated policy rule dict or None.
+            confidence_score: Float confidence score between 0.0 and 1.0.
+            status: Workflow status ('completed' or 'escalated').
+
+        Returns:
+            Updated RefundRecord instance.
+
+        Raises:
+            RefundNotFoundError: If the refund request does not exist.
+        """
+        existing = self.get_refund_request(refund_id)
+        if existing is None:
+            raise RefundNotFoundError(f"Refund request with id '{refund_id}' not found.")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        updated_dict = existing.model_dump()
+        updated_dict["decision"] = decision
+        updated_dict["reasoning"] = reasoning
+        updated_dict["matched_policy_rule"] = matched_policy_rule
+        updated_dict["confidence_score"] = confidence_score
+        updated_dict["status"] = status
+        updated_dict["updated_at"] = now_iso
+
+        item = _convert_floats_to_decimal(updated_dict)
+        self.table.put_item(Item=item)
+        return RefundRecord.model_validate(updated_dict)
+
+    def apply_override(
+        self,
+        refund_id: str,
+        override_decision: str,
+        override_reason: str,
+    ) -> RefundRecord:
+        """Record a human manual override and update final decision.
+
+        Args:
+            refund_id: Target refund request ID.
+            override_decision: Human override decision ('approve' or 'deny').
+            override_reason: Justification for the override.
+
+        Returns:
+            Updated RefundRecord instance.
+
+        Raises:
+            RefundNotFoundError: If the refund request does not exist.
+        """
+        existing = self.get_refund_request(refund_id)
+        if existing is None:
+            raise RefundNotFoundError(f"Refund request with id '{refund_id}' not found.")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        updated_dict = existing.model_dump()
+        updated_dict["override_decision"] = override_decision
+        updated_dict["override_reason"] = override_reason
+        updated_dict["overridden_at"] = now_iso
+        updated_dict["updated_at"] = now_iso
+        updated_dict["decision"] = override_decision
+        updated_dict["status"] = "completed"
+
+        item = _convert_floats_to_decimal(updated_dict)
+        self.table.put_item(Item=item)
+        return RefundRecord.model_validate(updated_dict)
