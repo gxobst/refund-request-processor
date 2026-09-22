@@ -1,12 +1,14 @@
-"""FastAPI router for refund request operations."""
+"""FastAPI router for refund request operations, queue listing, and manual overrides."""
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from typing import Literal
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 
-from app.db.repository import RefundRepository
+from app.db.repository import RefundNotFoundError, RefundRepository
 from app.graph.runner import run_refund_workflow
 from app.schemas.refund import (
     RefundCreateRequest,
     RefundCreateResponse,
+    RefundOverrideRequest,
     RefundRecord,
 )
 
@@ -16,6 +18,21 @@ router = APIRouter(prefix="/refunds", tags=["refunds"])
 def get_repository() -> RefundRepository:
     """Dependency provider for RefundRepository."""
     return RefundRepository()
+
+
+@router.get(
+    "",
+    response_model=list[RefundRecord],
+    status_code=status.HTTP_200_OK,
+    summary="List refund requests with optional status filtering",
+)
+async def list_refund_requests(
+    status: Literal["pending", "completed", "escalated"] | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    repo: RefundRepository = Depends(get_repository),
+) -> list[RefundRecord]:
+    """Retrieve refund queue records with optional status filtering."""
+    return repo.list_refund_requests(status=status, limit=limit)
 
 
 @router.post(
@@ -54,6 +71,32 @@ async def submit_refund_request(
     )
 
 
+@router.post(
+    "/{refund_id}/override",
+    response_model=RefundRecord,
+    status_code=status.HTTP_200_OK,
+    summary="Manually override a refund request decision",
+)
+async def override_refund_decision(
+    refund_id: str,
+    payload: RefundOverrideRequest,
+    repo: RefundRepository = Depends(get_repository),
+) -> RefundRecord:
+    """Apply a human operator decision override to a refund request."""
+    try:
+        updated = repo.apply_override(
+            refund_id=refund_id,
+            override_decision=payload.override_decision,
+            override_reason=payload.reason,
+        )
+    except (RefundNotFoundError, KeyError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Refund request '{refund_id}' not found",
+        )
+    return updated
+
+
 @router.get(
     "/{refund_id}",
     response_model=RefundRecord,
@@ -72,3 +115,4 @@ async def get_refund_request_by_id(
             detail=f"Refund request '{refund_id}' not found",
         )
     return record
+

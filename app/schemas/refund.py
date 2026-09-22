@@ -82,3 +82,25 @@ class RefundOverrideUpdate(BaseModel):
 
     override_decision: str
     override_reason: str = Field(..., min_length=1)
+
+
+OverrideDecisionType = Literal["approve", "deny"]
+
+
+class RefundOverrideRequest(BaseModel):
+    """Request payload for submitting a human operator override."""
+
+    override_decision: OverrideDecisionType = Field(
+        ..., description="Manual override decision ('approve' or 'deny')."
+    )
+    reason: str = Field(
+        ..., min_length=1, description="Operator explanation justifying the override."
+    )
+
+    @field_validator("reason")
+    @classmethod
+    def not_blank(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Reason cannot be blank or whitespace-only.")
+        return v.strip()
+
