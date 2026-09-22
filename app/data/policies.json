@@ -1,0 +1,27 @@
+{
+  "damaged": {
+    "refund_window_days": 30,
+    "eligible_delivery_statuses": ["delivered"],
+    "max_order_amount": 500.0
+  },
+  "wrong_item": {
+    "refund_window_days": 30,
+    "eligible_delivery_statuses": ["delivered"],
+    "max_order_amount": 1000.0
+  },
+  "changed_mind": {
+    "refund_window_days": 14,
+    "eligible_delivery_statuses": ["delivered"],
+    "max_order_amount": 200.0
+  },
+  "late_delivery": {
+    "refund_window_days": 14,
+    "eligible_delivery_statuses": ["in_transit", "delivered"],
+    "max_order_amount": 300.0
+  },
+  "missing_item": {
+    "refund_window_days": 30,
+    "eligible_delivery_statuses": ["delivered"],
+    "max_order_amount": 1000.0
+  }
+}
