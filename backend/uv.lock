@@ -511,6 +511,20 @@ wheels = [
 ]
 
 [[package]]
+name = "langgraph-checkpoint-aws"
+version = "1.2.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "boto3" },
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/27/46/efa07ef28c715402927f7f10b3dc8d59ae705f2e526c52b00dc6c74d7768/langgraph_checkpoint_aws-1.2.3.tar.gz", hash = "sha256:2dd448fef083c6c1f138f1ac07277a2e84ba7530b24d671f800adc5b8c3498b6", size = 324701, upload-time = "2026-09-03T11:35:19.745Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f2/79/908031e8905c7b9ffa53572702d5ac3ed755f03587e204531d96d07235b2/langgraph_checkpoint_aws-1.2.3-py3-none-any.whl", hash = "sha256:f417b38efb1d052052f9698003bc046ee6ef5736cac4088d078ccba8a42947d2", size = 179290, upload-time = "2026-09-03T11:35:18.467Z" },
+]
+
+[[package]]
 name = "langgraph-prebuilt"
 version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1106,6 +1120,7 @@ dependencies = [
     { name = "langchain-aws" },
     { name = "langchain-core" },
     { name = "langgraph" },
+    { name = "langgraph-checkpoint-aws" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "uvicorn", extra = ["standard"] },
@@ -1125,6 +1140,7 @@ requires-dist = [
     { name = "langchain-aws", specifier = ">=0.2.0" },
     { name = "langchain-core", specifier = ">=0.3.0" },
     { name = "langgraph", specifier = ">=0.2.20" },
+    { name = "langgraph-checkpoint-aws", specifier = ">=1.2.0" },
     { name = "pydantic", specifier = ">=2.8.0" },
     { name = "pydantic-settings", specifier = ">=2.4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
