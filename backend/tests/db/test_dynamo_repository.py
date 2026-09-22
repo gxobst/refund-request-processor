@@ -1,8 +1,10 @@
 """Unit tests for DynamoDB refund repository."""
 
 from decimal import Decimal
+from unittest.mock import MagicMock, patch
 import pytest
 
+from app.core.config import Settings
 from app.db.repository import RefundNotFoundError, RefundRepository
 from app.schemas.refund import RefundRecord
 
@@ -247,3 +249,216 @@ def test_apply_override_nonexistent_id_raises_error(repository: RefundRepository
             override_decision="deny",
             override_reason="Invalid request",
         )
+
+
+# --- Tests for RefundRepository configuration & AWS initialization (Task 14) ---
+
+
+def test_init_default_settings():
+    """Verify default initialization uses application settings and defaults."""
+    fake_table = MagicMock()
+    fake_resource = MagicMock()
+    fake_resource.Table.return_value = fake_table
+
+    mock_settings = Settings(
+        aws_region="us-east-1",
+        aws_access_key_id=None,
+        aws_secret_access_key=None,
+        aws_session_token=None,
+        dynamodb_table_refunds="refund-requests",
+        dynamodb_endpoint_url=None,
+    )
+
+    with patch("app.db.repository.get_settings", return_value=mock_settings), \
+         patch("app.db.repository.boto3.resource", return_value=fake_resource) as mock_boto:
+        repo = RefundRepository()
+
+        assert repo.table_name == "refund-requests"
+        mock_boto.assert_called_once_with("dynamodb", region_name="us-east-1")
+        fake_resource.Table.assert_called_once_with("refund-requests")
+        assert repo.table == fake_table
+
+
+def test_init_explicit_table_name_overrides_settings():
+    """Verify that an explicit table_name overrides the default from settings."""
+    fake_table = MagicMock()
+    fake_resource = MagicMock()
+    fake_resource.Table.return_value = fake_table
+
+    mock_settings = Settings(
+        aws_region="us-east-1",
+        dynamodb_table_refunds="default-settings-table",
+    )
+
+    with patch("app.db.repository.get_settings", return_value=mock_settings), \
+         patch("app.db.repository.boto3.resource", return_value=fake_resource):
+        repo = RefundRepository(table_name="custom-override-table")
+
+        assert repo.table_name == "custom-override-table"
+        fake_resource.Table.assert_called_once_with("custom-override-table")
+
+
+def test_init_explicit_dynamodb_resource_bypasses_boto3_resource():
+    """Verify that passing an explicit dynamodb_resource does not invoke boto3.resource."""
+    custom_resource = MockDynamoResource()
+
+    with patch("app.db.repository.boto3.resource") as mock_boto:
+        repo = RefundRepository(dynamodb_resource=custom_resource)
+
+        mock_boto.assert_not_called()
+        assert repo.dynamodb_resource is custom_resource
+        assert repo.table_name == "refund-requests"
+        assert repo.table.name == "refund-requests"
+
+
+def test_init_explicit_resource_and_table_name_bypasses_get_settings():
+    """Verify that passing both explicit resource and table_name avoids calling get_settings."""
+    custom_resource = MockDynamoResource()
+
+    with patch("app.db.repository.get_settings") as mock_get_settings, \
+         patch("app.db.repository.boto3.resource") as mock_boto:
+        repo = RefundRepository(
+            dynamodb_resource=custom_resource,
+            table_name="explicit-table",
+        )
+
+        mock_boto.assert_not_called()
+        mock_get_settings.assert_not_called()
+        assert repo.dynamodb_resource is custom_resource
+        assert repo.table_name == "explicit-table"
+        assert repo.table.name == "explicit-table"
+
+
+def test_init_with_explicit_credentials_and_endpoint_url():
+    """Verify explicit AWS credentials, session token, and endpoint_url are passed to boto3.resource."""
+    fake_table = MagicMock()
+    fake_resource = MagicMock()
+    fake_resource.Table.return_value = fake_table
+
+    mock_settings = Settings(
+        aws_region="eu-west-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_session_token="test-session-token",
+        dynamodb_endpoint_url="http://localhost:8000",
+        dynamodb_table_refunds="local-refunds",
+    )
+
+    with patch("app.db.repository.get_settings", return_value=mock_settings), \
+         patch("app.db.repository.boto3.resource", return_value=fake_resource) as mock_boto:
+        repo = RefundRepository()
+
+        assert repo.table_name == "local-refunds"
+        mock_boto.assert_called_once_with(
+            "dynamodb",
+            region_name="eu-west-1",
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+            aws_session_token="test-session-token",
+            endpoint_url="http://localhost:8000",
+        )
+
+
+def test_init_with_credentials_without_session_token():
+    """Verify credentials without session token pass key and secret without aws_session_token."""
+    fake_table = MagicMock()
+    fake_resource = MagicMock()
+    fake_resource.Table.return_value = fake_table
+
+    mock_settings = Settings(
+        aws_region="ap-southeast-1",
+        aws_access_key_id="test-key",
+        aws_secret_access_key="test-secret",
+        aws_session_token=None,
+        dynamodb_endpoint_url=None,
+    )
+
+    with patch("app.db.repository.get_settings", return_value=mock_settings), \
+         patch("app.db.repository.boto3.resource", return_value=fake_resource) as mock_boto:
+        repo = RefundRepository()
+
+        mock_boto.assert_called_once_with(
+            "dynamodb",
+            region_name="ap-southeast-1",
+            aws_access_key_id="test-key",
+            aws_secret_access_key="test-secret",
+        )
+        kwargs = mock_boto.call_args[1]
+        assert "aws_session_token" not in kwargs
+        assert "endpoint_url" not in kwargs
+
+
+def test_init_missing_credentials_allows_boto3_credential_chain():
+    """Verify that when credentials are None, boto3.resource is called without credential kwargs."""
+    fake_table = MagicMock()
+    fake_resource = MagicMock()
+    fake_resource.Table.return_value = fake_table
+
+    mock_settings = Settings(
+        aws_region="us-west-2",
+        aws_access_key_id=None,
+        aws_secret_access_key=None,
+        aws_session_token=None,
+        dynamodb_endpoint_url=None,
+    )
+
+    with patch("app.db.repository.get_settings", return_value=mock_settings), \
+         patch("app.db.repository.boto3.resource", return_value=fake_resource) as mock_boto:
+        repo = RefundRepository()
+
+        mock_boto.assert_called_once_with("dynamodb", region_name="us-west-2")
+        kwargs = mock_boto.call_args[1]
+        assert "aws_access_key_id" not in kwargs
+        assert "aws_secret_access_key" not in kwargs
+        assert "aws_session_token" not in kwargs
+
+
+def test_init_partial_credentials_omits_credential_kwargs():
+    """Verify that if access key is present but secret key is None/empty, credential kwargs are omitted."""
+    fake_table = MagicMock()
+    fake_resource = MagicMock()
+    fake_resource.Table.return_value = fake_table
+
+    mock_settings = Settings(
+        aws_region="us-east-1",
+        aws_access_key_id="only-access-key",
+        aws_secret_access_key=None,
+        dynamodb_endpoint_url=None,
+    )
+
+    with patch("app.db.repository.get_settings", return_value=mock_settings), \
+         patch("app.db.repository.boto3.resource", return_value=fake_resource) as mock_boto:
+        repo = RefundRepository()
+
+        mock_boto.assert_called_once_with("dynamodb", region_name="us-east-1")
+        kwargs = mock_boto.call_args[1]
+        assert "aws_access_key_id" not in kwargs
+        assert "aws_secret_access_key" not in kwargs
+
+
+def test_init_endpoint_url_without_credentials():
+    """Verify endpoint_url is passed even when credentials are not configured."""
+    fake_table = MagicMock()
+    fake_resource = MagicMock()
+    fake_resource.Table.return_value = fake_table
+
+    mock_settings = Settings(
+        aws_region="us-east-1",
+        aws_access_key_id=None,
+        aws_secret_access_key=None,
+        dynamodb_endpoint_url="http://localhost:4566",
+    )
+
+    with patch("app.db.repository.get_settings", return_value=mock_settings), \
+         patch("app.db.repository.boto3.resource", return_value=fake_resource) as mock_boto:
+        repo = RefundRepository()
+
+        mock_boto.assert_called_once_with(
+            "dynamodb",
+            region_name="us-east-1",
+            endpoint_url="http://localhost:4566",
+        )
+        kwargs = mock_boto.call_args[1]
+        assert "aws_access_key_id" not in kwargs
+        assert "aws_secret_access_key" not in kwargs
+

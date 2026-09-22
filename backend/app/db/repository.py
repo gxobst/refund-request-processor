@@ -2,11 +2,11 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal
-import os
 from typing import Any
 import uuid
 import boto3
 
+from app.core.config import get_settings
 from app.schemas.refund import RefundRecord
 
 
@@ -42,16 +42,31 @@ class RefundRepository:
     """Data access repository for managing refund request lifecycles in DynamoDB."""
 
     def __init__(self, dynamodb_resource: Any = None, table_name: str | None = None) -> None:
-        self.table_name = (
-            table_name
-            or os.getenv("REFUND_TABLE_NAME")
-            or "refund_requests"
-        )
-        if dynamodb_resource is None:
-            region = os.getenv("AWS_REGION", "us-east-1")
-            self.dynamodb_resource = boto3.resource("dynamodb", region_name=region)
+        if table_name is None or dynamodb_resource is None:
+            settings = get_settings()
         else:
+            settings = None
+
+        if table_name is not None:
+            self.table_name = table_name
+        else:
+            self.table_name = settings.dynamodb_table_refunds
+
+        if dynamodb_resource is not None:
             self.dynamodb_resource = dynamodb_resource
+        else:
+            kwargs: dict[str, Any] = {
+                "region_name": settings.aws_region,
+            }
+            if settings.aws_access_key_id and settings.aws_secret_access_key:
+                kwargs["aws_access_key_id"] = settings.aws_access_key_id
+                kwargs["aws_secret_access_key"] = settings.aws_secret_access_key
+                if settings.aws_session_token:
+                    kwargs["aws_session_token"] = settings.aws_session_token
+            if settings.dynamodb_endpoint_url:
+                kwargs["endpoint_url"] = settings.dynamodb_endpoint_url
+
+            self.dynamodb_resource = boto3.resource("dynamodb", **kwargs)
 
         self.table = self.dynamodb_resource.Table(self.table_name)
 
