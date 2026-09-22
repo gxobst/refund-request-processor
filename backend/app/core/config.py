@@ -1,6 +1,7 @@
 """Application configuration using Pydantic Settings."""
 
 from functools import lru_cache
+import os
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -46,3 +47,35 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Retrieve cached singleton Settings instance."""
     return Settings()
+
+
+def setup_langsmith_environment(settings: Settings | None = None) -> bool:
+    """Configure LangSmith tracing environment variables based on application settings.
+
+    When tracing is enabled and a valid API key is present:
+    - Populates LANGSMITH_TRACING, LANGCHAIN_TRACING_V2, LANGSMITH_ENDPOINT,
+      LANGSMITH_API_KEY, and LANGSMITH_PROJECT in os.environ.
+    - Returns True.
+
+    When tracing is disabled or the API key is missing/empty:
+    - Disables LANGSMITH_TRACING and LANGCHAIN_TRACING_V2 in os.environ.
+    - Returns False.
+    """
+    if settings is None:
+        settings = get_settings()
+
+    api_key = settings.langsmith_api_key
+    has_valid_api_key = bool(api_key and api_key.strip())
+
+    if settings.langsmith_tracing and has_valid_api_key:
+        os.environ["LANGSMITH_TRACING"] = "true"
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        os.environ["LANGSMITH_ENDPOINT"] = settings.langsmith_endpoint
+        os.environ["LANGSMITH_API_KEY"] = api_key
+        os.environ["LANGSMITH_PROJECT"] = settings.langsmith_project
+        return True
+
+    os.environ["LANGSMITH_TRACING"] = "false"
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"
+    return False
+
