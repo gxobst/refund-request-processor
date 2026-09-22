@@ -4,10 +4,18 @@ from datetime import date
 from decimal import Decimal
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from app.db.seed import DEFAULT_MOCK_ORDERS_PATH, prepare_dynamo_item, seed_orders
+from app.core.config import Settings
+from app.db.seed import (
+    DEFAULT_MOCK_ORDERS_PATH,
+    DEFAULT_ORDERS_TABLE_NAME,
+    main,
+    prepare_dynamo_item,
+    seed_orders,
+)
 from app.schemas.order import MockOrder
 
 
@@ -316,3 +324,221 @@ def test_seed_orders_fallback_put_item_without_batch_writer():
     # Assert
     assert count >= 5
     assert len(res.table.items) == count
+
+
+# --- 4. Configuration, AWS Settings & CLI Entrypoint Tests (Task 16) ---
+
+
+def test_default_orders_table_name_constant():
+    """Verify that DEFAULT_ORDERS_TABLE_NAME is updated to 'mock-orders'."""
+    assert DEFAULT_ORDERS_TABLE_NAME == "mock-orders"
+
+
+def test_seed_orders_defaults_to_settings_table_name():
+    """Verify seed_orders defaults to settings.dynamodb_table_orders ('mock-orders')."""
+    fake_table = MagicMock()
+    fake_resource = MagicMock()
+    fake_resource.Table.return_value = fake_table
+
+    mock_settings = Settings(
+        dynamodb_table_orders="mock-orders",
+        aws_region="us-east-1",
+        aws_access_key_id=None,
+        aws_secret_access_key=None,
+        aws_session_token=None,
+        dynamodb_endpoint_url=None,
+    )
+
+    with patch("app.db.seed.get_settings", return_value=mock_settings), \
+         patch("app.db.seed.boto3.resource", return_value=fake_resource) as mock_boto:
+        count = seed_orders()
+
+        assert count >= 5
+        mock_boto.assert_called_once_with("dynamodb", region_name="us-east-1")
+        fake_resource.Table.assert_called_once_with("mock-orders")
+
+
+def test_seed_orders_with_injected_settings():
+    """Verify seed_orders uses injected settings instance when provided."""
+    fake_table = MagicMock()
+    fake_resource = MagicMock()
+    fake_resource.Table.return_value = fake_table
+
+    custom_settings = Settings(
+        dynamodb_table_orders="custom-orders-table",
+        aws_region="eu-west-1",
+        aws_access_key_id=None,
+        aws_secret_access_key=None,
+        aws_session_token=None,
+        dynamodb_endpoint_url=None,
+    )
+
+    with patch("app.db.seed.boto3.resource", return_value=fake_resource) as mock_boto:
+        count = seed_orders(settings=custom_settings)
+
+        assert count >= 5
+        mock_boto.assert_called_once_with("dynamodb", region_name="eu-west-1")
+        fake_resource.Table.assert_called_once_with("custom-orders-table")
+
+
+def test_seed_orders_explicit_table_name_overrides_settings():
+    """Verify explicit table_name argument overrides application settings."""
+    fake_table = MagicMock()
+    fake_resource = MagicMock()
+    fake_resource.Table.return_value = fake_table
+
+    mock_settings = Settings(
+        dynamodb_table_orders="default-settings-orders",
+        aws_region="us-east-1",
+    )
+
+    with patch("app.db.seed.get_settings", return_value=mock_settings), \
+         patch("app.db.seed.boto3.resource", return_value=fake_resource):
+        count = seed_orders(table_name="explicit-orders-table")
+
+        assert count >= 5
+        fake_resource.Table.assert_called_once_with("explicit-orders-table")
+
+
+def test_seed_orders_explicit_dynamodb_resource_bypasses_boto3():
+    """Verify that passing an explicit dynamodb_resource bypasses boto3.resource instantiation."""
+    custom_resource = MockDynamoResource()
+
+    with patch("app.db.seed.boto3.resource") as mock_boto:
+        count = seed_orders(dynamodb_resource=custom_resource)
+
+        mock_boto.assert_not_called()
+        assert count >= 5
+        assert "mock-orders" in custom_resource.tables
+        assert len(custom_resource.tables["mock-orders"].items) == count
+
+
+def test_seed_orders_boto3_resource_with_credentials_and_endpoint():
+    """Verify credentials, session token, and endpoint_url are passed to boto3.resource."""
+    fake_table = MagicMock()
+    fake_resource = MagicMock()
+    fake_resource.Table.return_value = fake_table
+
+    mock_settings = Settings(
+        aws_region="us-west-2",
+        aws_access_key_id="test-key-id",
+        aws_secret_access_key="test-secret-key",
+        aws_session_token="test-session-token",
+        dynamodb_endpoint_url="http://localhost:8000",
+        dynamodb_table_orders="mock-orders",
+    )
+
+    with patch("app.db.seed.get_settings", return_value=mock_settings), \
+         patch("app.db.seed.boto3.resource", return_value=fake_resource) as mock_boto:
+        count = seed_orders()
+
+        assert count >= 5
+        mock_boto.assert_called_once_with(
+            "dynamodb",
+            region_name="us-west-2",
+            aws_access_key_id="test-key-id",
+            aws_secret_access_key="test-secret-key",
+            aws_session_token="test-session-token",
+            endpoint_url="http://localhost:8000",
+        )
+        fake_resource.Table.assert_called_once_with("mock-orders")
+
+
+def test_seed_orders_boto3_resource_with_credentials_no_session_token():
+    """Verify credentials without session token pass key and secret without aws_session_token."""
+    fake_table = MagicMock()
+    fake_resource = MagicMock()
+    fake_resource.Table.return_value = fake_table
+
+    mock_settings = Settings(
+        aws_region="us-west-1",
+        aws_access_key_id="test-key",
+        aws_secret_access_key="test-secret",
+        aws_session_token=None,
+        dynamodb_endpoint_url=None,
+    )
+
+    with patch("app.db.seed.get_settings", return_value=mock_settings), \
+         patch("app.db.seed.boto3.resource", return_value=fake_resource) as mock_boto:
+        count = seed_orders()
+
+        mock_boto.assert_called_once_with(
+            "dynamodb",
+            region_name="us-west-1",
+            aws_access_key_id="test-key",
+            aws_secret_access_key="test-secret",
+        )
+
+
+def test_seed_orders_boto3_resource_without_credentials():
+    """Verify boto3 standard credential chain resolution when credentials are None."""
+    fake_table = MagicMock()
+    fake_resource = MagicMock()
+    fake_resource.Table.return_value = fake_table
+
+    mock_settings = Settings(
+        aws_region="us-east-1",
+        aws_access_key_id=None,
+        aws_secret_access_key=None,
+        aws_session_token=None,
+        dynamodb_endpoint_url=None,
+    )
+
+    with patch("app.db.seed.get_settings", return_value=mock_settings), \
+         patch("app.db.seed.boto3.resource", return_value=fake_resource) as mock_boto:
+        seed_orders()
+
+        mock_boto.assert_called_once_with(
+            "dynamodb",
+            region_name="us-east-1",
+        )
+
+
+def test_cli_main_default_arguments(capsys: pytest.CaptureFixture):
+    """Verify CLI main entrypoint seeds default file path and prints result."""
+    with patch("sys.argv", ["seed.py"]), \
+         patch("app.db.seed.seed_orders", return_value=7) as mock_seed:
+        result = main()
+
+        assert result == 7
+        mock_seed.assert_called_once_with(file_path=None)
+        captured = capsys.readouterr()
+        assert "Successfully seeded 7 orders into DynamoDB." in captured.out
+
+
+def test_cli_main_custom_file_argument(capsys: pytest.CaptureFixture):
+    """Verify CLI main entrypoint accepts a custom file path argument."""
+    with patch("sys.argv", ["seed.py", "custom/orders.json"]), \
+         patch("app.db.seed.seed_orders", return_value=4) as mock_seed:
+        result = main()
+
+        assert result == 4
+        mock_seed.assert_called_once_with(file_path="custom/orders.json")
+        captured = capsys.readouterr()
+        assert "Successfully seeded 4 orders into DynamoDB." in captured.out
+
+
+def test_cli_main_with_explicit_argv(capsys: pytest.CaptureFixture):
+    """Verify CLI main entrypoint with explicit argv parameter."""
+    with patch("app.db.seed.seed_orders", return_value=3) as mock_seed:
+        result = main(["explicit/orders.json"])
+
+        assert result == 3
+        mock_seed.assert_called_once_with(file_path="explicit/orders.json")
+        captured = capsys.readouterr()
+        assert "Successfully seeded 3 orders into DynamoDB." in captured.out
+
+
+def test_cli_module_execution(capsys: pytest.CaptureFixture):
+    """Verify executing module as __main__ invokes main and prints status."""
+    import runpy
+    import warnings
+
+    with patch("sys.argv", ["seed.py"]), \
+         patch("app.db.seed.seed_orders", return_value=7), \
+         warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        runpy.run_module("app.db.seed", run_name="__main__")
+        captured = capsys.readouterr()
+        assert "Successfully seeded 7 orders into DynamoDB." in captured.out
+
