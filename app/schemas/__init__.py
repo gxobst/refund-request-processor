@@ -1,5 +1,6 @@
 """Pydantic schemas for the application."""
 
+from app.schemas.classifier import ClassificationOutput, RefundCategoryType
 from app.schemas.order import MockOrder
 from app.schemas.refund import (
     RefundDecision,
@@ -16,5 +17,8 @@ __all__ = [
     "RefundOverrideUpdate",
     "RefundStatus",
     "RefundDecision",
+    "ClassificationOutput",
+    "RefundCategoryType",
 ]
+
 
