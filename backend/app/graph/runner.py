@@ -3,6 +3,7 @@
 from typing import Any
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
+from app.core.config import get_settings
 from app.graph.checkpoint import get_checkpointer
 from app.graph.nodes import set_current_repository
 from app.graph.state import RefundWorkflowState
@@ -16,6 +17,7 @@ async def run_refund_workflow(
     thread_id: str | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     repository: Any = None,
+    use_dynamodb: bool | None = None,
 ) -> dict[str, Any]:
     """Execute the multi-agent refund evaluation workflow asynchronously.
 
@@ -24,13 +26,24 @@ async def run_refund_workflow(
         order_id: Associated order identifier.
         customer_request_text: Customer explanation text.
         thread_id: Optional thread ID for checkpointer tracking. Defaults to refund_id.
-        checkpointer: Optional BaseCheckpointSaver. Defaults to in-memory checkpointer.
+        checkpointer: Optional BaseCheckpointSaver. If provided, used directly.
         repository: Optional repository instance for database operations.
+        use_dynamodb: Optional bool indicating whether to enable DynamoDB checkpointing.
+            Defaults to True in non-test environments if checkpointer is None.
 
     Returns:
         Final state dictionary containing decision, reasoning, and status.
     """
-    effective_checkpointer = checkpointer or get_checkpointer(use_dynamodb=False)
+    if checkpointer is not None:
+        effective_checkpointer = checkpointer
+    else:
+        settings = get_settings()
+        if use_dynamodb is None:
+            use_dynamodb = settings.app_env != "test"
+        effective_checkpointer = get_checkpointer(
+            use_dynamodb=use_dynamodb, settings=settings
+        )
+
     graph = build_refund_graph(checkpointer=effective_checkpointer)
 
     initial_state: dict[str, Any] = {

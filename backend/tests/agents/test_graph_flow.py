@@ -1,11 +1,13 @@
 """Unit tests for the multi-agent LangGraph workflow orchestration and checkpointing."""
 
+import boto3
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 from langchain_core.runnables import RunnableLambda
 from langgraph.checkpoint.memory import MemorySaver
 import pytest
 
+from app.core.config import Settings
 from app.graph.checkpoint import get_checkpointer
 from app.graph.nodes import (
     _lookup_order_data,
@@ -151,12 +153,159 @@ def test_get_checkpointer_memory_default():
     assert isinstance(saver, MemorySaver)
 
 
-def test_get_checkpointer_dynamo_option():
-    # Arrange & Act: should return DynamoDBSaver or fallback without error
-    saver = get_checkpointer(use_dynamodb=True, table_name="test-checkpoints")
+def test_get_checkpointer_defaults_to_memory_saver_when_app_env_test():
+    # Arrange
+    settings = Settings(app_env="test")
+
+    # Act
+    saver = get_checkpointer(settings=settings)
 
     # Assert
-    assert saver is not None
+    assert isinstance(saver, MemorySaver)
+
+
+def test_get_checkpointer_dynamo_instantiation_with_settings():
+    # Arrange
+    fake_saver = MagicMock()
+    settings = Settings(
+        aws_region="eu-west-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_session_token="test-session-token",
+        dynamodb_table_checkpoints="custom-checkpoints-table",
+        dynamodb_endpoint_url="http://localhost:8000",
+        app_env="production",
+    )
+
+    with patch("langgraph_checkpoint_aws.DynamoDBSaver", return_value=fake_saver) as mock_dynamo_cls:
+        # Act
+        saver = get_checkpointer(use_dynamodb=True, settings=settings)
+
+        # Assert
+        assert saver == fake_saver
+        mock_dynamo_cls.assert_called_once()
+        call_kwargs = mock_dynamo_cls.call_args[1]
+        assert call_kwargs["table_name"] == "custom-checkpoints-table"
+        assert call_kwargs["region_name"] == "eu-west-1"
+        assert call_kwargs["endpoint_url"] == "http://localhost:8000"
+        session = call_kwargs.get("session")
+        assert session is not None
+        assert isinstance(session, boto3.Session)
+        credentials = session.get_credentials()
+        assert credentials.access_key == "test-access-key"
+        assert credentials.secret_key == "test-secret-key"
+        assert credentials.token == "test-session-token"
+
+
+def test_get_checkpointer_explicit_table_name_overrides_settings():
+    # Arrange
+    fake_saver = MagicMock()
+    settings = Settings(dynamodb_table_checkpoints="default-checkpoints-table")
+
+    with patch("langgraph_checkpoint_aws.DynamoDBSaver", return_value=fake_saver) as mock_dynamo_cls:
+        # Act
+        saver = get_checkpointer(
+            use_dynamodb=True, table_name="override-checkpoints-table", settings=settings
+        )
+
+        # Assert
+        assert saver == fake_saver
+        call_kwargs = mock_dynamo_cls.call_args[1]
+        assert call_kwargs["table_name"] == "override-checkpoints-table"
+
+
+def test_get_checkpointer_dynamo_without_credentials_omits_session_and_endpoint():
+    # Arrange
+    fake_saver = MagicMock()
+    settings = Settings(
+        aws_region="us-east-1",
+        aws_access_key_id=None,
+        aws_secret_access_key=None,
+        dynamodb_endpoint_url=None,
+    )
+
+    with patch("langgraph_checkpoint_aws.DynamoDBSaver", return_value=fake_saver) as mock_dynamo_cls:
+        # Act
+        saver = get_checkpointer(use_dynamodb=True, settings=settings)
+
+        # Assert
+        assert saver == fake_saver
+        call_kwargs = mock_dynamo_cls.call_args[1]
+        assert call_kwargs["table_name"] == "langgraph-checkpoints"
+        assert call_kwargs["region_name"] == "us-east-1"
+        assert "session" not in call_kwargs
+        assert "endpoint_url" not in call_kwargs
+
+
+def test_get_checkpointer_dynamo_exception_fallback_to_memory_saver():
+    # Arrange: DynamoDBSaver raises an exception upon initialization
+    with patch(
+        "langgraph_checkpoint_aws.DynamoDBSaver",
+        side_effect=Exception("Failed to connect to DynamoDB checkpoints table"),
+    ):
+        # Act
+        saver = get_checkpointer(use_dynamodb=True)
+
+        # Assert: Gracefully falls back to MemorySaver
+        assert isinstance(saver, MemorySaver)
+
+
+@pytest.mark.asyncio
+async def test_run_refund_workflow_defaults_to_memory_saver_when_app_env_test():
+    # Arrange
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.95,
+        reasoning="Valid report.",
+    )
+    mock_llm = make_mock_llm(mock_classification)
+    mock_settings = Settings(app_env="test")
+
+    with patch("app.graph.runner.get_settings", return_value=mock_settings), \
+         patch("app.graph.runner.get_checkpointer", wraps=get_checkpointer) as spy_get_checkpointer, \
+         pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_llm)
+
+        # Act: Execute workflow without passing explicit checkpointer
+        final_state = await run_refund_workflow(
+            refund_id="ref_test_default_checkpointer",
+            order_id="ORD-1001",
+            customer_request_text="The chair arrived broken.",
+        )
+
+        # Assert: Workflow completed and get_checkpointer was called with use_dynamodb=False
+        assert final_state["status"] == "completed"
+        spy_get_checkpointer.assert_called_once_with(
+            use_dynamodb=False, settings=mock_settings
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_refund_workflow_uses_explicit_checkpointer_bypassing_factory():
+    # Arrange
+    explicit_checkpointer = MemorySaver()
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.95,
+        reasoning="Valid report.",
+    )
+    mock_llm = make_mock_llm(mock_classification)
+
+    with patch("app.graph.runner.get_checkpointer") as mock_get_checkpointer, \
+         pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_llm)
+
+        # Act: Execute workflow with explicit checkpointer
+        final_state = await run_refund_workflow(
+            refund_id="ref_test_explicit_checkpointer",
+            order_id="ORD-1001",
+            customer_request_text="The chair arrived broken.",
+            checkpointer=explicit_checkpointer,
+        )
+
+        # Assert: get_checkpointer was never invoked
+        assert final_state["status"] == "completed"
+        mock_get_checkpointer.assert_not_called()
 
 
 @pytest.mark.asyncio
