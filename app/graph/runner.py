@@ -4,6 +4,7 @@ from typing import Any
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.graph.checkpoint import get_checkpointer
+from app.graph.nodes import set_current_repository
 from app.graph.state import RefundWorkflowState
 from app.graph.workflow import build_refund_graph
 
@@ -39,7 +40,7 @@ async def run_refund_workflow(
         "status": "pending",
     }
     if repository is not None:
-        initial_state["_repository"] = repository
+        set_current_repository(repository)
 
     config = {"configurable": {"thread_id": thread_id or refund_id}}
     final_state = await graph.ainvoke(initial_state, config=config)

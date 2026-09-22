@@ -1,5 +1,6 @@
 """Node implementations for the LangGraph refund workflow."""
 
+import contextvars
 import json
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,20 @@ from app.agents.classifier import classifier_node as agent_classifier_node
 from app.agents.decision import decision_node as agent_decision_node
 from app.agents.policy_checker import policy_checker_node as agent_policy_checker_node
 from app.db.repository import RefundNotFoundError, RefundRepository
+
+_repository_context: contextvars.ContextVar[Any | None] = contextvars.ContextVar(
+    "_repository_context", default=None
+)
+
+
+def set_current_repository(repo: Any | None) -> None:
+    """Set the active repository in the current execution context."""
+    _repository_context.set(repo)
+
+
+def get_current_repository() -> Any | None:
+    """Retrieve the active repository from the current execution context."""
+    return _repository_context.get()
 
 MOCK_ORDERS_PATH = Path(__file__).resolve().parent.parent / "data" / "mock_orders.json"
 
@@ -92,7 +107,7 @@ def save_dynamo_node(state: dict[str, Any]) -> dict[str, Any]:
     status = state.get("status", "completed")
 
     if refund_id:
-        repo = state.get("_repository") or RefundRepository()
+        repo = get_current_repository() or state.get("_repository") or RefundRepository()
         try:
             repo.update_decision(
                 refund_id=refund_id,
