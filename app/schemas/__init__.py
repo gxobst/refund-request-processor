@@ -2,6 +2,7 @@
 
 from app.schemas.classifier import ClassificationOutput, RefundCategoryType
 from app.schemas.order import MockOrder
+from app.schemas.policy_checker import PolicyCheckerOutput, PolicyStatusType
 from app.schemas.refund import (
     RefundDecision,
     RefundDecisionUpdate,
@@ -19,6 +20,9 @@ __all__ = [
     "RefundDecision",
     "ClassificationOutput",
     "RefundCategoryType",
+    "PolicyCheckerOutput",
+    "PolicyStatusType",
 ]
+
 
 
