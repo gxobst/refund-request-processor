@@ -25,8 +25,94 @@ def test_get_bedrock_llm_defaults():
     assert llm.region_name == "us-east-1"
     assert llm.temperature == 0.0
     assert llm.additional_model_request_fields == {
-        "inferenceConfig": {"thinking": {"type": "low"}}
+        "reasoningConfig": {"type": "enabled", "maxReasoningEffort": "low"}
     }
+
+
+@pytest.mark.parametrize(
+    "effort, expected_effort",
+    [
+        ("medium", "medium"),
+        ("high", "high"),
+        ("LOW", "low"),
+        ("Medium", "medium"),
+        ("HIGH", "high"),
+    ],
+)
+def test_get_bedrock_llm_nova_reasoning_effort_levels(effort: str, expected_effort: str):
+    # Arrange
+    test_settings = Settings(
+        bedrock_model_id="us.amazon.nova-2-lite-v1:0",
+        bedrock_thinking_effort=effort,
+        _env_file=None,
+    )
+
+    # Act
+    llm = get_bedrock_llm(settings=test_settings)
+
+    # Assert
+    assert llm.additional_model_request_fields == {
+        "reasoningConfig": {"type": "enabled", "maxReasoningEffort": expected_effort}
+    }
+
+
+@pytest.mark.parametrize(
+    "disabled_effort",
+    [None, "", "   ", "disabled", "Disabled", "DISABLED"],
+)
+def test_get_bedrock_llm_reasoning_disabled_or_empty(disabled_effort: str | None):
+    # Arrange
+    test_settings = Settings(
+        bedrock_model_id="us.amazon.nova-2-lite-v1:0",
+        bedrock_thinking_effort=disabled_effort,
+        _env_file=None,
+    )
+
+    # Act
+    llm = get_bedrock_llm(settings=test_settings)
+
+    # Assert: reasoningConfig should be omitted
+    assert (
+        llm.additional_model_request_fields is None
+        or "reasoningConfig" not in llm.additional_model_request_fields
+    )
+
+
+def test_get_bedrock_llm_non_nova_model_omits_reasoning():
+    # Arrange: non-Nova model with thinking effort configured
+    test_settings = Settings(
+        bedrock_model_id="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        bedrock_thinking_effort="high",
+        _env_file=None,
+    )
+
+    # Act
+    llm = get_bedrock_llm(settings=test_settings)
+
+    # Assert: reasoningConfig should not be injected for non-Nova models
+    assert (
+        llm.additional_model_request_fields is None
+        or "reasoningConfig" not in llm.additional_model_request_fields
+    )
+
+
+def test_get_bedrock_llm_caller_additional_fields_precedence():
+    # Arrange: Nova model with default effort, but caller explicitly provides additional_model_request_fields
+    test_settings = Settings(
+        bedrock_model_id="us.amazon.nova-2-lite-v1:0",
+        bedrock_thinking_effort="low",
+        _env_file=None,
+    )
+    custom_fields = {"customKey": "customValue"}
+
+    # Act
+    llm = get_bedrock_llm(
+        settings=test_settings,
+        additional_model_request_fields=custom_fields,
+    )
+
+    # Assert: caller's custom fields are preserved without being overwritten
+    assert llm.additional_model_request_fields == {"customKey": "customValue"}
 
 
 def test_get_bedrock_llm_custom_arguments():

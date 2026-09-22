@@ -43,10 +43,20 @@ def get_bedrock_llm(
         if app_settings.aws_session_token:
             params["aws_session_token"] = app_settings.aws_session_token
 
-    # Pass thinking effort configuration if set
-    if app_settings.bedrock_thinking_effort and "additional_model_request_fields" not in kwargs:
+    # Configure reasoningConfig for Amazon Nova models when thinking effort is enabled
+    is_nova = "nova" in target_model_id.lower()
+    effort = (app_settings.bedrock_thinking_effort or "").strip()
+    if (
+        is_nova
+        and effort
+        and effort.lower() != "disabled"
+        and "additional_model_request_fields" not in kwargs
+    ):
         params["additional_model_request_fields"] = {
-            "inferenceConfig": {"thinking": {"type": app_settings.bedrock_thinking_effort}}
+            "reasoningConfig": {
+                "type": "enabled",
+                "maxReasoningEffort": effort.lower(),
+            }
         }
 
     # Override/merge with explicit user kwargs

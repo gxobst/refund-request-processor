@@ -18,7 +18,7 @@ class Settings(BaseSettings):
 
     # AWS Bedrock
     bedrock_model_id: str = "us.amazon.nova-2-lite-v1:0"
-    bedrock_thinking_effort: str = "low"
+    bedrock_thinking_effort: str | None = "low"
 
     # AWS DynamoDB
     dynamodb_table_refunds: str = "refund-requests"
