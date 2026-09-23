@@ -462,3 +462,272 @@ def test_init_endpoint_url_without_credentials():
         assert "aws_access_key_id" not in kwargs
         assert "aws_secret_access_key" not in kwargs
 
+
+# --- Tests for clarification requests and customer responses (Task 22) ---
+
+
+def test_create_refund_request_default_clarification_values(repository: RefundRepository):
+    """Verify newly created refund request has default clarification fields."""
+    record = repository.create_refund_request(
+        order_id="ORD-CLAR-01",
+        customer_request_text="Clarification test order",
+    )
+    assert record.clarification_prompt is None
+    assert record.clarification_response is None
+    assert record.clarification_count == 0
+
+    raw = repository.table.items[record.refund_id]
+    assert raw.get("clarification_prompt") is None
+    assert raw.get("clarification_response") is None
+    assert raw.get("clarification_count") == 0
+
+
+def test_deserialization_legacy_record_without_clarification(repository: RefundRepository):
+    """Verify legacy DynamoDB items lacking clarification attributes deserialize cleanly."""
+    legacy_item = {
+        "refund_id": "ref_legacy_01",
+        "order_id": "ORD-LEGACY",
+        "customer_request_text": "Legacy refund without clarification fields",
+        "status": "pending",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    # Direct model validation
+    record = RefundRecord.model_validate(legacy_item)
+    assert record.clarification_prompt is None
+    assert record.clarification_response is None
+    assert record.clarification_count == 0
+
+    # Retrieval through repository
+    repository.table.items["ref_legacy_01"] = legacy_item
+    fetched = repository.get_refund_request("ref_legacy_01")
+    assert fetched is not None
+    assert fetched.clarification_prompt is None
+    assert fetched.clarification_response is None
+    assert fetched.clarification_count == 0
+
+
+def test_request_clarification_success(repository: RefundRepository):
+    """Verify request_clarification sets status, prompt, increments count, and persists."""
+    record = repository.create_refund_request(
+        order_id="ORD-CLAR-02",
+        customer_request_text="Need refund for damaged jacket",
+    )
+    initial_updated_at = record.updated_at
+
+    updated = repository.request_clarification(
+        refund_id=record.refund_id,
+        clarification_prompt="Could you specify where the damage is located?",
+    )
+
+    assert updated.refund_id == record.refund_id
+    assert updated.status == "awaiting_clarification"
+    assert updated.clarification_prompt == "Could you specify where the damage is located?"
+    assert updated.clarification_count == 1
+    assert updated.clarification_response is None
+    assert updated.updated_at >= initial_updated_at
+
+    # Check raw DynamoDB storage
+    raw = repository.table.items[record.refund_id]
+    assert raw["status"] == "awaiting_clarification"
+    assert raw["clarification_prompt"] == "Could you specify where the damage is located?"
+    assert raw["clarification_count"] == 1
+
+    # Second clarification cycle increments count
+    second_updated = repository.request_clarification(
+        refund_id=record.refund_id,
+        clarification_prompt="Could you also provide photo evidence?",
+    )
+    assert second_updated.status == "awaiting_clarification"
+    assert second_updated.clarification_prompt == "Could you also provide photo evidence?"
+    assert second_updated.clarification_count == 2
+
+
+@pytest.mark.parametrize("blank_prompt", ["", "   ", "\t\n"])
+def test_request_clarification_blank_prompt_raises_value_error(
+    repository: RefundRepository, blank_prompt: str
+):
+    """Verify request_clarification rejects blank or empty clarification prompts."""
+    record = repository.create_refund_request(
+        order_id="ORD-CLAR-03",
+        customer_request_text="Test blank prompt",
+    )
+    with pytest.raises(ValueError, match="clarification_prompt cannot be blank"):
+        repository.request_clarification(
+            refund_id=record.refund_id,
+            clarification_prompt=blank_prompt,
+        )
+
+
+def test_request_clarification_nonexistent_id_raises_not_found(repository: RefundRepository):
+    """Verify request_clarification raises RefundNotFoundError for nonexistent ID."""
+    with pytest.raises((RefundNotFoundError, KeyError)):
+        repository.request_clarification(
+            refund_id="nonexistent-ref-id",
+            clarification_prompt="Valid question",
+        )
+
+
+def test_submit_clarification_response_success(repository: RefundRepository):
+    """Verify submit_clarification_response updates response, resets status to pending, and persists."""
+    record = repository.create_refund_request(
+        order_id="ORD-CLAR-04",
+        customer_request_text="Missing item from box",
+    )
+    repository.request_clarification(
+        refund_id=record.refund_id,
+        clarification_prompt="Which item from your order was missing?",
+    )
+
+    responded = repository.submit_clarification_response(
+        refund_id=record.refund_id,
+        clarification_response="The blue wool scarf was missing from the box.",
+    )
+
+    assert responded.refund_id == record.refund_id
+    assert responded.status == "pending"
+    assert responded.clarification_response == "The blue wool scarf was missing from the box."
+    assert responded.clarification_prompt == "Which item from your order was missing?"
+    assert responded.clarification_count == 1
+
+    # Check raw DynamoDB storage
+    raw = repository.table.items[record.refund_id]
+    assert raw["status"] == "pending"
+    assert raw["clarification_response"] == "The blue wool scarf was missing from the box."
+
+
+@pytest.mark.parametrize("blank_response", ["", "   ", "\t\n"])
+def test_submit_clarification_response_blank_response_raises_value_error(
+    repository: RefundRepository, blank_response: str
+):
+    """Verify submit_clarification_response rejects blank or empty responses."""
+    record = repository.create_refund_request(
+        order_id="ORD-CLAR-05",
+        customer_request_text="Item damaged",
+    )
+    repository.request_clarification(
+        refund_id=record.refund_id,
+        clarification_prompt="Please explain damage",
+    )
+    with pytest.raises(ValueError, match="clarification_response cannot be blank"):
+        repository.submit_clarification_response(
+            refund_id=record.refund_id,
+            clarification_response=blank_response,
+        )
+
+
+def test_submit_clarification_response_nonexistent_id_raises_not_found(
+    repository: RefundRepository,
+):
+    """Verify submit_clarification_response raises RefundNotFoundError for nonexistent ID."""
+    with pytest.raises((RefundNotFoundError, KeyError)):
+        repository.submit_clarification_response(
+            refund_id="nonexistent-ref-id",
+            clarification_response="Valid customer answer",
+        )
+
+
+def test_list_refund_requests_filter_awaiting_clarification(repository: RefundRepository):
+    """Verify list_refund_requests correctly filters by awaiting_clarification status."""
+    r1 = repository.create_refund_request(order_id="ORD-FLT-1", customer_request_text="Request 1")
+    r2 = repository.create_refund_request(order_id="ORD-FLT-2", customer_request_text="Request 2")
+    r3 = repository.create_refund_request(order_id="ORD-FLT-3", customer_request_text="Request 3")
+
+    repository.request_clarification(
+        refund_id=r2.refund_id,
+        clarification_prompt="Please clarify request 2",
+    )
+
+    clarification_list = repository.list_refund_requests(status="awaiting_clarification")
+    pending_list = repository.list_refund_requests(status="pending")
+
+    assert len(clarification_list) == 1
+    assert clarification_list[0].refund_id == r2.refund_id
+    assert clarification_list[0].status == "awaiting_clarification"
+    assert clarification_list[0].clarification_prompt == "Please clarify request 2"
+
+    assert not any(r.refund_id == r2.refund_id for r in pending_list)
+    assert any(r.refund_id == r1.refund_id for r in pending_list)
+    assert any(r.refund_id == r3.refund_id for r in pending_list)
+
+
+def test_update_decision_and_apply_override_preserve_clarification_fields(
+    repository: RefundRepository,
+):
+    """Verify update_decision and apply_override preserve existing clarification fields."""
+    record = repository.create_refund_request(
+        order_id="ORD-PRES-1",
+        customer_request_text="Ambiguous item issue",
+    )
+    repository.request_clarification(
+        refund_id=record.refund_id,
+        clarification_prompt="Please specify condition of the packaging.",
+    )
+    repository.submit_clarification_response(
+        refund_id=record.refund_id,
+        clarification_response="The packaging was torn open and wet.",
+    )
+
+    # Now decision update
+    updated_dec = repository.update_decision(
+        refund_id=record.refund_id,
+        decision="escalate",
+        reasoning="Packaging damaged but item condition ambiguous.",
+        matched_policy_rule=None,
+        confidence_score=0.6,
+        status="escalated",
+    )
+
+    assert updated_dec.clarification_prompt == "Please specify condition of the packaging."
+    assert updated_dec.clarification_response == "The packaging was torn open and wet."
+    assert updated_dec.clarification_count == 1
+
+    raw_dec = repository.table.items[record.refund_id]
+    assert raw_dec["clarification_prompt"] == "Please specify condition of the packaging."
+    assert raw_dec["clarification_response"] == "The packaging was torn open and wet."
+    assert raw_dec["clarification_count"] == 1
+
+    # Now apply override
+    overridden = repository.apply_override(
+        refund_id=record.refund_id,
+        override_decision="approve",
+        override_reason="Customer verified carrier damage.",
+    )
+
+    assert overridden.clarification_prompt == "Please specify condition of the packaging."
+    assert overridden.clarification_response == "The packaging was torn open and wet."
+    assert overridden.clarification_count == 1
+
+    raw_ovr = repository.table.items[record.refund_id]
+    assert raw_ovr["clarification_prompt"] == "Please specify condition of the packaging."
+    assert raw_ovr["clarification_response"] == "The packaging was torn open and wet."
+    assert raw_ovr["clarification_count"] == 1
+
+
+def test_refund_workflow_state_clarification_fields():
+    """Verify RefundWorkflowState supports clarification fields and maintains total=False."""
+    from app.graph.state import RefundWorkflowState
+
+    # State without clarification fields does not raise KeyError
+    minimal_state: RefundWorkflowState = {
+        "refund_id": "ref_min",
+        "order_id": "ORD-MIN",
+        "customer_request_text": "Minimal test",
+    }
+    assert minimal_state.get("clarification_prompt") is None
+    assert minimal_state.get("needs_clarification") is None
+
+    # State with clarification fields
+    full_clarification_state: RefundWorkflowState = {
+        "refund_id": "ref_full",
+        "clarification_prompt": "Are you sure?",
+        "clarification_response": "Yes, positive.",
+        "clarification_count": 1,
+        "needs_clarification": True,
+    }
+    assert full_clarification_state["clarification_prompt"] == "Are you sure?"
+    assert full_clarification_state["clarification_response"] == "Yes, positive."
+    assert full_clarification_state["clarification_count"] == 1
+    assert full_clarification_state["needs_clarification"] is True
+
+

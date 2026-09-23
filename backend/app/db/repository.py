@@ -90,6 +90,9 @@ class RefundRepository:
             status="pending",
             created_at=now_iso,
             updated_at=now_iso,
+            clarification_prompt=None,
+            clarification_response=None,
+            clarification_count=0,
         )
 
         item = _convert_floats_to_decimal(record.model_dump())
@@ -117,7 +120,7 @@ class RefundRepository:
         """List refund requests with optional status filtering.
 
         Args:
-            status: Optional status to filter by ('pending', 'completed', 'escalated').
+            status: Optional status to filter by ('pending', 'completed', 'escalated', 'awaiting_clarification').
             limit: Maximum number of records to return.
 
         Returns:
@@ -216,3 +219,75 @@ class RefundRepository:
         item = _convert_floats_to_decimal(updated_dict)
         self.table.put_item(Item=item)
         return RefundRecord.model_validate(updated_dict)
+
+    def request_clarification(
+        self,
+        refund_id: str,
+        clarification_prompt: str,
+    ) -> RefundRecord:
+        """Update refund request to awaiting_clarification with a clarification prompt.
+
+        Args:
+            refund_id: Target refund request ID.
+            clarification_prompt: Clarification question for the customer.
+
+        Returns:
+            Updated RefundRecord instance.
+
+        Raises:
+            ValueError: If clarification_prompt is empty or whitespace-only.
+            RefundNotFoundError: If the refund request does not exist.
+        """
+        if not clarification_prompt or not clarification_prompt.strip():
+            raise ValueError("clarification_prompt cannot be blank or empty.")
+
+        existing = self.get_refund_request(refund_id)
+        if existing is None:
+            raise RefundNotFoundError(f"Refund request with id '{refund_id}' not found.")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        updated_dict = existing.model_dump()
+        updated_dict["status"] = "awaiting_clarification"
+        updated_dict["clarification_prompt"] = clarification_prompt.strip()
+        updated_dict["clarification_count"] = (existing.clarification_count or 0) + 1
+        updated_dict["updated_at"] = now_iso
+
+        item = _convert_floats_to_decimal(updated_dict)
+        self.table.put_item(Item=item)
+        return RefundRecord.model_validate(updated_dict)
+
+    def submit_clarification_response(
+        self,
+        refund_id: str,
+        clarification_response: str,
+    ) -> RefundRecord:
+        """Record customer clarification response and return status to pending.
+
+        Args:
+            refund_id: Target refund request ID.
+            clarification_response: Customer-provided clarification details.
+
+        Returns:
+            Updated RefundRecord instance.
+
+        Raises:
+            ValueError: If clarification_response is empty or whitespace-only.
+            RefundNotFoundError: If the refund request does not exist.
+        """
+        if not clarification_response or not clarification_response.strip():
+            raise ValueError("clarification_response cannot be blank or empty.")
+
+        existing = self.get_refund_request(refund_id)
+        if existing is None:
+            raise RefundNotFoundError(f"Refund request with id '{refund_id}' not found.")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        updated_dict = existing.model_dump()
+        updated_dict["status"] = "pending"
+        updated_dict["clarification_response"] = clarification_response.strip()
+        updated_dict["updated_at"] = now_iso
+
+        item = _convert_floats_to_decimal(updated_dict)
+        self.table.put_item(Item=item)
+        return RefundRecord.model_validate(updated_dict)
+

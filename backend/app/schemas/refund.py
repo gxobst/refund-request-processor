@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
-RefundStatus = Literal["pending", "completed", "escalated"]
+RefundStatus = Literal["pending", "completed", "escalated", "awaiting_clarification"]
 RefundDecision = Literal["auto_approve", "deny", "escalate"]
 
 
@@ -64,6 +64,15 @@ class RefundRecord(BaseModel):
     )
     overridden_at: str | None = Field(
         default=None, description="ISO-8601 timestamp when override was applied."
+    )
+    clarification_prompt: str | None = Field(
+        default=None, description="Question asked to customer for request clarification."
+    )
+    clarification_response: str | None = Field(
+        default=None, description="Customer-provided clarification response."
+    )
+    clarification_count: int = Field(
+        default=0, ge=0, description="Number of clarification cycles attempted."
     )
 
 

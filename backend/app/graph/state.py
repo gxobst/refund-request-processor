@@ -25,3 +25,7 @@ class RefundWorkflowState(TypedDict, total=False):
     decision_reasoning: str | None
     reasoning: str | None
     status: str
+    clarification_prompt: str | None
+    clarification_response: str | None
+    clarification_count: int
+    needs_clarification: bool
