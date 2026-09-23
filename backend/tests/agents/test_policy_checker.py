@@ -1,13 +1,14 @@
 """Unit tests for Policy Checker Agent and deterministic bypass behavior."""
 
 from datetime import date
+import json
 from typing import Any
 from unittest.mock import MagicMock
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableLambda
 import pytest
 
-from app.agents.policy_checker import check_policy, policy_checker_node
+from app.agents.policy_checker import FINAL_SYNTHESIS_PROMPT, check_policy, policy_checker_node
 from app.schemas.policy_checker import PolicyCheckerOutput
 
 
@@ -15,7 +16,14 @@ from app.schemas.policy_checker import PolicyCheckerOutput
 def make_mock_llm(output: PolicyCheckerOutput) -> MagicMock:
     """Helper to create a mocked BaseChatModel returning a structured PolicyCheckerOutput."""
     mock = MagicMock()
+    json_text = output.model_dump_json()
+    ai_msg = AIMessage(content=f"```json\n{json_text}\n```")
+    mock.invoke.return_value = ai_msg
+    bound = MagicMock()
+    bound.invoke.return_value = ai_msg
+    mock.bind_tools.return_value = bound
     mock.with_structured_output.return_value = RunnableLambda(lambda _: output)
+    mock.final_output = output
     return mock
 
 
@@ -41,6 +49,8 @@ def test_check_policy_deterministic_pass_bypasses_llm():
 
     # Verify LLM was NOT called
     mock_llm.with_structured_output.assert_not_called()
+    mock_llm.invoke.assert_not_called()
+    mock_llm.bind_tools.assert_not_called()
 
 
 def test_check_policy_deterministic_fail_bypasses_llm():
@@ -64,6 +74,8 @@ def test_check_policy_deterministic_fail_bypasses_llm():
 
     # Verify LLM was NOT called
     mock_llm.with_structured_output.assert_not_called()
+    mock_llm.invoke.assert_not_called()
+    mock_llm.bind_tools.assert_not_called()
 
 
 def test_check_policy_ambiguous_invokes_llm():
@@ -89,8 +101,9 @@ def test_check_policy_ambiguous_invokes_llm():
     assert result.policy_status == "ambiguous"
     assert "escalation" in result.policy_reasoning.lower()
 
-    # Verify LLM WAS called
-    mock_llm.with_structured_output.assert_called_once()
+    # Verify LLM WAS called and with_structured_output was NOT called
+    mock_llm.with_structured_output.assert_not_called()
+    assert mock_llm.bind_tools.called or mock_llm.invoke.called
 
 
 def test_check_policy_ambiguous_resolved_by_llm():
@@ -115,7 +128,8 @@ def test_check_policy_ambiguous_resolved_by_llm():
     # Assert
     assert result.policy_status == "pass"
     assert "yesterday" in result.policy_reasoning
-    mock_llm.with_structured_output.assert_called_once()
+    mock_llm.with_structured_output.assert_not_called()
+    assert mock_llm.bind_tools.called or mock_llm.invoke.called
 
 
 def test_policy_checker_node_contract():
@@ -193,7 +207,7 @@ class MockToolCallingLLM:
         self.invocations.append(list(messages))
         if self.responses:
             return self.responses.pop(0)
-        return AIMessage(content="Evaluation complete.", tool_calls=[])
+        return AIMessage(content=f"```json\n{self.final_output.model_dump_json()}\n```", tool_calls=[])
 
     def with_structured_output(self, schema: Any, **kwargs: Any) -> Any:
         return RunnableLambda(lambda _: self.final_output)
@@ -405,13 +419,20 @@ def test_check_policy_max_tool_iterations_enforced():
     class InfiniteLoopLLM:
         def __init__(self, output: PolicyCheckerOutput) -> None:
             self.output = output
-            self.invoke_count = 0
+            self.tool_loop_invocations = 0
+            self.synthesis_invocations = 0
 
         def bind_tools(self, tools: list[Any]) -> "InfiniteLoopLLM":
             return self
 
         def invoke(self, messages: list[Any], **kwargs: Any) -> AIMessage:
-            self.invoke_count += 1
+            if any(
+                isinstance(m, HumanMessage) and "Provide your final policy determination" in str(getattr(m, "content", ""))
+                for m in messages
+            ):
+                self.synthesis_invocations += 1
+                return AIMessage(content=f"```json\n{self.output.model_dump_json()}\n```")
+            self.tool_loop_invocations += 1
             return infinite_tool_call
 
         def with_structured_output(self, schema: Any, **kwargs: Any) -> Any:
@@ -429,7 +450,7 @@ def test_check_policy_max_tool_iterations_enforced():
     result = check_policy(category="damaged", order=order, llm=loop_llm, max_tool_iterations=3)
 
     # Assert: invoke loop stopped exactly at 3 iterations
-    assert loop_llm.invoke_count == 3
+    assert loop_llm.tool_loop_invocations == 3
     assert result.policy_status == "ambiguous"
 
 
@@ -599,5 +620,194 @@ def test_policy_checker_node_includes_tool_calls():
     assert "tool_calls" in node_result
     assert isinstance(node_result["tool_calls"], list)
     assert node_result["tool_calls"] == []
+
+
+def test_check_policy_extracts_json_enclosed_in_markdown_code_fences():
+    """Verify structured output extraction when LLM returns JSON enclosed in markdown code fences."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+    }
+    fenced_json = """Here is the policy evaluation:
+```json
+{
+  "policy_status": "pass",
+  "passed_rules": ["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+  "failed_rules": [],
+  "policy_reasoning": "Carrier tracking verified shipment is delayed in transit past expected delivery date."
+}
+```
+Evaluation complete."""
+
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = AIMessage(content=fenced_json)
+    bound_mock = MagicMock()
+    bound_mock.invoke.return_value = AIMessage(content=fenced_json, tool_calls=[])
+    mock_llm.bind_tools.return_value = bound_mock
+
+    result = check_policy(category="late_delivery", order=order, llm=mock_llm)
+
+    assert isinstance(result, PolicyCheckerOutput)
+    assert result.policy_status == "pass"
+    assert "refund_window_days" in result.passed_rules
+    assert "delayed in transit" in result.policy_reasoning
+    mock_llm.with_structured_output.assert_not_called()
+
+
+def test_check_policy_extracts_raw_unfenced_json_with_surrounding_text():
+    """Verify structured output extraction when LLM returns raw un-fenced JSON with surrounding text."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+    }
+    unfenced_json = """Based on the policy rules and verified shipment status:
+{
+  "policy_status": "fail",
+  "passed_rules": ["max_order_amount"],
+  "failed_rules": ["refund_window_days"],
+  "policy_reasoning": "Shipment arrived within standard transit window and is not eligible."
+}
+Please proceed accordingly."""
+
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = AIMessage(content=unfenced_json)
+    bound_mock = MagicMock()
+    bound_mock.invoke.return_value = AIMessage(content=unfenced_json, tool_calls=[])
+    mock_llm.bind_tools.return_value = bound_mock
+
+    result = check_policy(category="late_delivery", order=order, llm=mock_llm)
+
+    assert isinstance(result, PolicyCheckerOutput)
+    assert result.policy_status == "fail"
+    assert "refund_window_days" in result.failed_rules
+    assert "not eligible" in result.policy_reasoning
+    mock_llm.with_structured_output.assert_not_called()
+
+
+def test_check_policy_does_not_pass_tool_choice_with_reasoning_config():
+    """Verify structured output extraction does NOT pass toolChoice='tool' or 'any' when reasoningConfig is present."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+        "purchase_date": "2026-09-01",
+    }
+
+    invoked_kwargs_list: list[dict[str, Any]] = []
+
+    mock_model = MagicMock()
+    mock_model.additional_model_request_fields = {
+        "reasoningConfig": {"type": "enabled", "maxReasoningEffort": "high"}
+    }
+
+    bound_mock = MagicMock()
+
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "query_carrier_tracking",
+            "args": {"tracking_number": "TRK-1005"},
+            "id": "call_trk_reasoning",
+        }],
+    )
+    synthesis_msg = AIMessage(
+        content=json.dumps({
+            "policy_status": "pass",
+            "passed_rules": ["refund_window_days"],
+            "failed_rules": [],
+            "policy_reasoning": "Tracking confirmed delay.",
+        })
+    )
+
+    def mock_bound_invoke(messages: list[Any], **kwargs: Any) -> AIMessage:
+        invoked_kwargs_list.append(kwargs)
+        if len(invoked_kwargs_list) == 1:
+            return tool_call_msg
+        return synthesis_msg
+
+    def mock_model_invoke(messages: list[Any], **kwargs: Any) -> AIMessage:
+        invoked_kwargs_list.append(kwargs)
+        return synthesis_msg
+
+    bound_mock.invoke.side_effect = mock_bound_invoke
+    mock_model.bind_tools.return_value = bound_mock
+    mock_model.invoke.side_effect = mock_model_invoke
+
+    result = check_policy(category="late_delivery", order=order, llm=mock_model)
+
+    assert result.policy_status == "pass"
+    mock_model.with_structured_output.assert_not_called()
+
+    # Check that neither bind_tools nor invoke calls passed toolChoice='tool' or 'any'
+    if mock_model.bind_tools.call_args:
+        bind_kwargs = mock_model.bind_tools.call_args[1]
+        assert bind_kwargs.get("tool_choice") not in ("tool", "any")
+        assert bind_kwargs.get("toolChoice") not in ("tool", "any")
+
+    for kw in invoked_kwargs_list:
+        assert kw.get("tool_choice") not in ("tool", "any")
+        assert kw.get("toolChoice") not in ("tool", "any")
+        if isinstance(kw.get("tool_choice"), dict):
+            assert "tool" not in kw["tool_choice"]
+
+
+def test_check_policy_invalid_json_falls_back_to_ambiguous():
+    """Verify graceful fallback to policy_status='ambiguous' when model returns invalid JSON."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+    }
+    non_json_msg = AIMessage(
+        content="I am unable to provide a structured policy determination due to unclear order facts."
+    )
+
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value = non_json_msg
+    bound_mock = MagicMock()
+    bound_mock.invoke.return_value = non_json_msg
+    mock_llm.bind_tools.return_value = bound_mock
+
+    result = check_policy(category="late_delivery", order=order, llm=mock_llm)
+
+    assert isinstance(result, PolicyCheckerOutput)
+    assert result.policy_status == "ambiguous"
+    assert "Could not parse policy determination" in result.policy_reasoning or "unclear" in result.policy_reasoning
+
+
+def test_policy_checker_node_produces_expected_output_with_reasoning_extraction():
+    """Verify policy_checker_node produces the expected output state dictionary from reasoning-compatible structured output."""
+    state = {
+        "refund_id": "ref_node_reasoning_test",
+        "category": "late_delivery",
+        "order": {
+            "order_id": "ORD-1005",
+            "order_amount": 200.0,
+            "delivery_status": "in_transit",
+        },
+    }
+    json_payload = json.dumps({
+        "policy_status": "pass",
+        "passed_rules": ["refund_window_days", "eligible_delivery_statuses"],
+        "failed_rules": [],
+        "policy_reasoning": "Reasoning safe extraction verified late delivery.",
+    })
+    mock_llm = MagicMock()
+    bound_mock = MagicMock()
+    bound_mock.invoke.return_value = AIMessage(
+        content=f"```json\n{json_payload}\n```", tool_calls=[]
+    )
+    mock_llm.bind_tools.return_value = bound_mock
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.policy_checker.get_bedrock_llm", lambda: mock_llm)
+        node_result = policy_checker_node(state)
+
+    assert node_result["policy_status"] == "pass"
+    assert "refund_window_days" in node_result["passed_rules"]
+    assert "Reasoning safe extraction" in node_result["policy_reasoning"]
+    assert "tool_calls" in node_result
 
 

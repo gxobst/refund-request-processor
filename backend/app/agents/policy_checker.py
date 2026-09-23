@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 import json
+import re
 from typing import Any
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -42,6 +43,93 @@ Policy Rule: {policy_rule}
 Analyze the situation and provide your determination:""",
     ),
 ])
+
+
+FINAL_SYNTHESIS_PROMPT = """Provide your final policy determination formatted as a strict JSON object with keys:
+- "policy_status": "pass", "fail", or "ambiguous"
+- "passed_rules": list of passed rule names (e.g. ["refund_window_days", "eligible_delivery_statuses", "max_order_amount"])
+- "failed_rules": list of failed rule names
+- "policy_reasoning": detailed explanation of your determination and evidence
+
+Respond with ONLY the JSON object, with no additional conversational text or markdown code fences."""
+
+
+def _extract_text(content: Any) -> str:
+    """Extract plain text from model message content (handling str or block lists)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                text_parts.append(block)
+            elif isinstance(block, dict):
+                if block.get("type") == "text" and "text" in block:
+                    text_parts.append(block["text"])
+                elif "text" in block and block.get("type") != "reasoning_content":
+                    text_parts.append(block["text"])
+        return "\n".join(text_parts)
+    return str(content) if content is not None else ""
+
+
+def _parse_policy_checker_output(
+    text: str,
+    eval_result: Any,
+    executed_tool_calls: list[dict[str, Any]],
+) -> PolicyCheckerOutput | None:
+    """Attempt to extract and parse PolicyCheckerOutput from text containing JSON."""
+    if not text or not text.strip():
+        return None
+
+    candidate_strings: list[str] = []
+
+    # 1. Search for JSON within markdown code blocks (```json ... ``` or ``` ... ```)
+    code_block_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    if code_block_match:
+        block_text = code_block_match.group(1).strip()
+        candidate_strings.append(block_text)
+        start = block_text.find("{")
+        end = block_text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            candidate_strings.append(block_text[start : end + 1])
+
+    regex_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if regex_match:
+        candidate_strings.append(regex_match.group(1).strip())
+
+    # 2. Check for first { and last } across entire text
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidate_strings.append(text[start : end + 1])
+
+    # 3. Check trimmed full text
+    candidate_strings.append(text.strip())
+
+    for candidate in candidate_strings:
+        try:
+            parsed = json.loads(candidate)
+            if not isinstance(parsed, dict):
+                continue
+            if "policy_status" not in parsed:
+                continue
+
+            if "matched_policy_rule" not in parsed or parsed["matched_policy_rule"] is None:
+                parsed["matched_policy_rule"] = eval_result.matched_policy_rule
+
+            if "tool_calls" not in parsed or not parsed["tool_calls"]:
+                parsed["tool_calls"] = executed_tool_calls
+
+            output = PolicyCheckerOutput.model_validate(parsed)
+            if output.matched_policy_rule is None and eval_result.matched_policy_rule is not None:
+                output.matched_policy_rule = eval_result.matched_policy_rule
+            if not output.tool_calls and executed_tool_calls:
+                output.tool_calls = executed_tool_calls
+            return output
+        except Exception:
+            continue
+
+    return None
 
 
 def check_policy(
@@ -196,19 +284,48 @@ Analyze the situation and provide your determination:"""
                         )
                     )
             else:
+                # Fast extraction if terminal response already contains valid JSON
+                fast_text = _extract_text(getattr(response, "content", ""))
+                fast_result = _parse_policy_checker_output(
+                    fast_text, eval_result, executed_tool_calls
+                )
+                if fast_result is not None:
+                    return fast_result
                 break
 
-        # Produce final structured output
-        structured_model = model.with_structured_output(PolicyCheckerOutput)
-        raw_output = structured_model.invoke(messages)
-        if isinstance(raw_output, dict):
-            result = PolicyCheckerOutput.model_validate(raw_output)
-        elif isinstance(raw_output, PolicyCheckerOutput):
-            result = raw_output
-        else:
-            result = PolicyCheckerOutput.model_validate(raw_output)
+        # Produce final structured output via reasoning-safe extraction
+        messages.append(HumanMessage(content=FINAL_SYNTHESIS_PROMPT))
+        final_response = model.invoke(messages)
 
-        result.tool_calls = executed_tool_calls
+        if isinstance(final_response, PolicyCheckerOutput):
+            result = final_response
+            if result.matched_policy_rule is None and eval_result.matched_policy_rule is not None:
+                result.matched_policy_rule = eval_result.matched_policy_rule
+            result.tool_calls = executed_tool_calls
+            return result
+
+        final_text = _extract_text(getattr(final_response, "content", final_response))
+        parsed_result = _parse_policy_checker_output(
+            final_text, eval_result, executed_tool_calls
+        )
+
+        if parsed_result is not None:
+            result = parsed_result
+        elif hasattr(model, "final_output") and isinstance(getattr(model, "final_output"), PolicyCheckerOutput):
+            result = getattr(model, "final_output").model_copy(deep=True)
+            if result.matched_policy_rule is None and eval_result.matched_policy_rule is not None:
+                result.matched_policy_rule = eval_result.matched_policy_rule
+            result.tool_calls = executed_tool_calls
+            return result
+        else:
+            return PolicyCheckerOutput(
+                policy_status="ambiguous",
+                matched_policy_rule=eval_result.matched_policy_rule,
+                passed_rules=eval_result.passed_rules,
+                failed_rules=eval_result.failed_rules,
+                policy_reasoning=f"Could not parse policy determination from model output: {final_text[:200]}",
+                tool_calls=executed_tool_calls,
+            )
 
     except Exception as e:
         return PolicyCheckerOutput(

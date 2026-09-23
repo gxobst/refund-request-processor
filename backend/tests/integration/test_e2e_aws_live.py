@@ -13,6 +13,7 @@ import pytest
 
 from app.agents.classifier import classify_refund_request
 from app.agents.llm import get_bedrock_llm
+from app.agents.policy_checker import check_policy
 from app.core.config import get_settings
 from app.db.repository import RefundRepository
 from app.graph.runner import run_refund_workflow
@@ -139,3 +140,41 @@ async def test_live_aws_full_workflow_execution():
         if error_code == "ValidationException":
             raise
         pytest.skip(f"Live AWS operation skipped due to ClientError: {exc}")
+
+
+@pytest.mark.aws
+def test_bedrock_live_policy_checker_reasoning_tool_loop():
+    """Verify live Bedrock Nova 2 model executes tool loop and structured extraction with reasoningConfig."""
+    if not _has_aws_credentials():
+        pytest.skip("AWS credentials not configured in environment.")
+
+    settings = get_settings().model_copy(
+        update={
+            "bedrock_model_id": "us.amazon.nova-2-lite-v1:0",
+            "bedrock_thinking_effort": "high",
+        }
+    )
+    llm = get_bedrock_llm(settings=settings)
+
+    order = {
+        "order_id": "ORD-1005",
+        "item": "Standing Desk Converter",
+        "delivery_status": "in_transit",
+    }
+    try:
+        output = check_policy(category="late_delivery", order=order, llm=llm)
+        assert output is not None
+        assert output.policy_status in ("pass", "fail", "ambiguous")
+        assert len(output.policy_reasoning) > 0
+        assert len(output.tool_calls) > 0
+        assert any(t.get("tool_name") == "query_carrier_tracking" for t in output.tool_calls)
+    except (NoCredentialsError, EndpointConnectionError) as exc:
+        pytest.skip(f"AWS Bedrock connection failed: {exc}")
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code == "ValidationException":
+            raise
+        if error_code in ("AccessDeniedException", "UnrecognizedClientException", "ExpiredTokenException"):
+            pytest.skip(f"AWS Bedrock access denied or expired token: {exc}")
+        raise
+
