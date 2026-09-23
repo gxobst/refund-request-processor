@@ -4,8 +4,9 @@ from typing import Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 
 from app.db.repository import RefundNotFoundError, RefundRepository
-from app.graph.runner import run_refund_workflow
+from app.graph.runner import resume_refund_workflow, run_refund_workflow
 from app.schemas.refund import (
+    RefundClarificationRequest,
     RefundCreateRequest,
     RefundCreateResponse,
     RefundOverrideRequest,
@@ -115,4 +116,41 @@ async def get_refund_request_by_id(
             detail=f"Refund request '{refund_id}' not found",
         )
     return record
+
+
+@router.post(
+    "/{refund_id}/clarify",
+    response_model=RefundRecord,
+    status_code=status.HTTP_200_OK,
+    summary="Submit customer clarification response and resume evaluation",
+)
+async def clarify_refund_request(
+    refund_id: str,
+    payload: RefundClarificationRequest,
+    background_tasks: BackgroundTasks,
+    repo: RefundRepository = Depends(get_repository),
+) -> RefundRecord:
+    """Submit customer clarification response to resume paused evaluation."""
+    record = repo.get_refund_request(refund_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Refund request '{refund_id}' not found",
+        )
+    if record.status != "awaiting_clarification":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Refund request '{refund_id}' is not awaiting clarification (current status: '{record.status}')",
+        )
+    updated = repo.submit_clarification_response(
+        refund_id=refund_id,
+        clarification_response=payload.response_text,
+    )
+    background_tasks.add_task(
+        resume_refund_workflow,
+        refund_id=record.refund_id,
+        response_text=payload.response_text,
+        repository=repo,
+    )
+    return updated
 

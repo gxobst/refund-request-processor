@@ -107,19 +107,20 @@ def mock_repo(mock_dynamo_resource: MockDynamoResource) -> RefundRepository:
 
 def _classify_text_to_output(text: str) -> ClassificationOutput:
     t = text.lower()
-    if "low confidence" in t or "unsure" in t:
+    eval_text = t.split("[clarification]:")[-1] if "[clarification]:" in t else t
+    if "low confidence" in eval_text or "unsure" in eval_text:
         return ClassificationOutput(
             category="damaged",
             confidence_score=0.52,
             reasoning="Low confidence classification due to ambiguous customer wording.",
         )
-    elif "wrong item" in t or "incorrect" in t:
+    elif "wrong item" in eval_text or "incorrect" in eval_text:
         return ClassificationOutput(
             category="wrong_item",
             confidence_score=0.94,
             reasoning="Customer received incorrect item.",
         )
-    elif "changed mind" in t or "mistake" in t:
+    elif "changed mind" in eval_text or "mistake" in eval_text:
         return ClassificationOutput(
             category="changed_mind",
             confidence_score=0.91,
@@ -299,7 +300,7 @@ async def test_e2e_escalation_flow_missing_order_data(mock_repo: RefundRepositor
 
 @pytest.mark.asyncio
 async def test_e2e_escalation_flow_low_confidence(mock_repo: RefundRepository):
-    """AC 4: Verify escalation triggered when classifier confidence is low (< 0.7)."""
+    """AC 4: Verify escalation triggered when classifier confidence is low and clarification cycles are exhausted."""
     # Arrange: text triggers low confidence in mock classifier
     payload = {
         "order_id": "ORD-1001",
@@ -308,16 +309,82 @@ async def test_e2e_escalation_flow_low_confidence(mock_repo: RefundRepository):
     transport = ASGITransport(app=app)
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Step 1: Initial submission pauses at awaiting_clarification (cycle 1)
         post_response = await client.post("/refunds", json=payload)
         assert post_response.status_code == 202
         refund_id = post_response.json()["refund_id"]
 
+        clarify_1 = await poll_until_not_pending(client, refund_id)
+        assert clarify_1["status"] == "awaiting_clarification"
+        assert clarify_1["clarification_count"] == 1
+
+        # Step 2: Customer provides still-ambiguous clarification (cycle 2)
+        res1 = await client.post(
+            f"/refunds/{refund_id}/clarify",
+            json={"response_text": "Still unsure about what happened, low confidence info."},
+        )
+        assert res1.status_code == 200
+
+        clarify_2 = await poll_until_not_pending(client, refund_id)
+        assert clarify_2["status"] == "awaiting_clarification"
+        assert clarify_2["clarification_count"] == 2
+
+        # Step 3: Customer provides clarification a second time (exhausts 2 attempts, routes to decision)
+        res2 = await client.post(
+            f"/refunds/{refund_id}/clarify",
+            json={"response_text": "Still unsure and low confidence."},
+        )
+        assert res2.status_code == 200
+
         final_record = await poll_until_not_pending(client, refund_id)
 
-    # Assert
+    # Assert: escalated after max clarification cycles exhausted
     assert final_record["status"] == "escalated"
     assert final_record["decision"] == "escalate"
     assert "confidence" in final_record["reasoning"].lower()
+
+
+@pytest.mark.asyncio
+async def test_e2e_clarification_lifecycle(mock_repo: RefundRepository):
+    """Verify end-to-end customer clarification lifecycle from pause to resumption and auto-approval."""
+    payload = {
+        "order_id": "ORD-1001",
+        "customer_request_text": "I am unsure what happened, low confidence description.",
+    }
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Submit ambiguous refund request
+        post_response = await client.post("/refunds", json=payload)
+        assert post_response.status_code == 202
+        refund_id = post_response.json()["refund_id"]
+
+        # 2. Poll until workflow pauses at awaiting_clarification
+        paused_record = await poll_until_not_pending(client, refund_id)
+        assert paused_record["status"] == "awaiting_clarification"
+        assert paused_record["clarification_count"] == 1
+        assert paused_record["clarification_prompt"] is not None
+
+        # 3. Customer submits clarification response via POST /refunds/{refund_id}/clarify
+        clarify_payload = {
+            "response_text": "The chair arrived broken with a snapped armrest in transit.",
+        }
+        clarify_response = await client.post(
+            f"/refunds/{refund_id}/clarify", json=clarify_payload
+        )
+        assert clarify_response.status_code == 200
+        clarify_data = clarify_response.json()
+        assert clarify_data["status"] == "pending"
+        assert clarify_data["clarification_response"] == clarify_payload["response_text"]
+
+        # 4. Background workflow resumes, poll until completed
+        final_record = await poll_until_not_pending(client, refund_id)
+
+    assert final_record["status"] == "completed"
+    assert final_record["decision"] == "auto_approve"
+    assert final_record["confidence_score"] >= 0.70
+    assert final_record["clarification_response"] == clarify_payload["response_text"]
+    assert "damaged" in final_record["reasoning"].lower() or "approved" in final_record["reasoning"].lower()
 
 
 @pytest.mark.asyncio
