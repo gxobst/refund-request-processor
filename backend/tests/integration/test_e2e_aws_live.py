@@ -6,6 +6,7 @@ fast offline unit/integration suites.
 """
 
 import os
+from typing import Any
 import boto3
 from botocore.exceptions import ClientError, EndpointConnectionError, NoCredentialsError
 import pytest
@@ -19,7 +20,8 @@ from app.graph.runner import run_refund_workflow
 
 def _has_aws_credentials() -> bool:
     """Check if environment has AWS credentials configured."""
-    if os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE"):
+    settings = get_settings()
+    if settings.aws_access_key_id or os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE"):
         return True
     try:
         session = boto3.Session()
@@ -45,6 +47,8 @@ def test_bedrock_live_model_invocation():
         pytest.skip(f"AWS Bedrock connection failed: {exc}")
     except ClientError as exc:
         error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code == "ValidationException":
+            raise
         if error_code in ("AccessDeniedException", "UnrecognizedClientException", "ExpiredTokenException"):
             pytest.skip(f"AWS Bedrock access denied or expired token: {exc}")
         raise
@@ -65,6 +69,9 @@ def test_bedrock_live_classifier_structured_output():
     except (NoCredentialsError, EndpointConnectionError) as exc:
         pytest.skip(f"AWS Bedrock connection failed: {exc}")
     except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code == "ValidationException":
+            raise
         pytest.skip(f"AWS Bedrock client error during live classification: {exc}")
 
 
@@ -77,11 +84,23 @@ async def test_live_aws_full_workflow_execution():
 
     settings = get_settings()
     # Check if DynamoDB table exists
-    dynamodb = boto3.resource("dynamodb", region_name=settings.aws_region)
+    dynamodb_kwargs: dict[str, Any] = {"region_name": settings.aws_region}
+    if settings.aws_access_key_id and settings.aws_secret_access_key:
+        dynamodb_kwargs["aws_access_key_id"] = settings.aws_access_key_id
+        dynamodb_kwargs["aws_secret_access_key"] = settings.aws_secret_access_key
+        if settings.aws_session_token:
+            dynamodb_kwargs["aws_session_token"] = settings.aws_session_token
+    if settings.dynamodb_endpoint_url:
+        dynamodb_kwargs["endpoint_url"] = settings.dynamodb_endpoint_url
+
+    dynamodb = boto3.resource("dynamodb", **dynamodb_kwargs)
     table = dynamodb.Table(settings.dynamodb_table_refunds)
     try:
         table.load()
     except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code == "ValidationException":
+            raise
         pytest.skip(
             f"Live DynamoDB table '{settings.dynamodb_table_refunds}' not accessible or not provisioned: {exc}"
         )
@@ -116,4 +135,7 @@ async def test_live_aws_full_workflow_execution():
         assert updated is not None
         assert updated.decision == final_state["decision"]
     except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code == "ValidationException":
+            raise
         pytest.skip(f"Live AWS operation skipped due to ClientError: {exc}")

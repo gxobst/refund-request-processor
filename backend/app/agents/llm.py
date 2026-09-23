@@ -33,7 +33,6 @@ def get_bedrock_llm(
     params: dict[str, Any] = {
         "model_id": target_model_id,
         "region_name": target_region,
-        "temperature": temperature,
     }
 
     # Pass explicit credentials if defined in settings
@@ -43,21 +42,37 @@ def get_bedrock_llm(
         if app_settings.aws_session_token:
             params["aws_session_token"] = app_settings.aws_session_token
 
-    # Configure reasoningConfig for Amazon Nova models when thinking effort is enabled
+    # Detect if reasoningConfig is enabled:
+    # (a) Caller provides additional_model_request_fields containing reasoningConfig with type == "enabled"
+    caller_fields = kwargs.get("additional_model_request_fields")
+    caller_reasoning_enabled = (
+        isinstance(caller_fields, dict)
+        and caller_fields.get("reasoningConfig", {}).get("type") == "enabled"
+    )
+
+    # (b) Model is an Amazon Nova model and bedrock_thinking_effort is non-empty and not "disabled"
     is_nova = "nova" in target_model_id.lower()
     effort = (app_settings.bedrock_thinking_effort or "").strip()
-    if (
+    nova_reasoning_enabled = (
         is_nova
-        and effort
+        and bool(effort)
         and effort.lower() != "disabled"
-        and "additional_model_request_fields" not in kwargs
-    ):
-        params["additional_model_request_fields"] = {
-            "reasoningConfig": {
-                "type": "enabled",
-                "maxReasoningEffort": effort.lower(),
+    )
+
+    reasoning_enabled = caller_reasoning_enabled or nova_reasoning_enabled
+
+    if reasoning_enabled:
+        # Amazon Bedrock rejects requests containing temperature when reasoningConfig is enabled
+        kwargs.pop("temperature", None)
+        if "additional_model_request_fields" not in kwargs:
+            params["additional_model_request_fields"] = {
+                "reasoningConfig": {
+                    "type": "enabled",
+                    "maxReasoningEffort": effort.lower(),
+                }
             }
-        }
+    else:
+        params["temperature"] = kwargs.pop("temperature", temperature)
 
     # Override/merge with explicit user kwargs
     params.update(kwargs)

@@ -63,6 +63,8 @@ def check_live_aws_and_dynamodb() -> None:
         pytest.skip(f"Live AWS DynamoDB connection failed: {exc}")
     except ClientError as exc:
         error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code == "ValidationException":
+            raise
         pytest.skip(
             f"Live DynamoDB table '{settings.dynamodb_table_refunds}' not accessible ({error_code}): {exc}"
         )
@@ -89,18 +91,6 @@ def check_live_aws_and_dynamodb() -> None:
 def ensure_aws_environment():
     """Module-level fixture ensuring live AWS and DynamoDB availability."""
     check_live_aws_and_dynamodb()
-
-
-@pytest.fixture(autouse=True)
-def configure_live_bedrock_compatibility(monkeypatch: pytest.MonkeyPatch):
-    """Ensure live Bedrock calls succeed without temperature/reasoningConfig conflict.
-
-    Amazon Nova 2 returns ValidationException if temperature is specified while
-    reasoningConfig is enabled. Setting bedrock_thinking_effort='disabled' allows
-    real Bedrock model invocation to proceed cleanly.
-    """
-    settings = get_settings()
-    monkeypatch.setattr(settings, "bedrock_thinking_effort", "disabled")
 
 
 @pytest.mark.asyncio
@@ -162,6 +152,9 @@ async def test_live_submit_and_poll_refund():
         assert db_record.status == refund_record["status"]
         assert db_record.decision == refund_record["decision"]
     except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code == "ValidationException":
+            raise
         pytest.skip(f"Live AWS Bedrock operation skipped due to ClientError: {exc}")
 
 

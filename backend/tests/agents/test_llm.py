@@ -23,7 +23,7 @@ def test_get_bedrock_llm_defaults():
     assert isinstance(llm, ChatBedrockConverse)
     assert llm.model_id == "us.amazon.nova-2-lite-v1:0"
     assert llm.region_name == "us-east-1"
-    assert llm.temperature == 0.0
+    assert llm.temperature is None
     assert llm.additional_model_request_fields == {
         "reasoningConfig": {"type": "enabled", "maxReasoningEffort": "low"}
     }
@@ -51,6 +51,7 @@ def test_get_bedrock_llm_nova_reasoning_effort_levels(effort: str, expected_effo
     llm = get_bedrock_llm(settings=test_settings)
 
     # Assert
+    assert llm.temperature is None
     assert llm.additional_model_request_fields == {
         "reasoningConfig": {"type": "enabled", "maxReasoningEffort": expected_effort}
     }
@@ -71,7 +72,8 @@ def test_get_bedrock_llm_reasoning_disabled_or_empty(disabled_effort: str | None
     # Act
     llm = get_bedrock_llm(settings=test_settings)
 
-    # Assert: reasoningConfig should be omitted
+    # Assert: reasoningConfig should be omitted and temperature should be 0.0
+    assert llm.temperature == 0.0
     assert (
         llm.additional_model_request_fields is None
         or "reasoningConfig" not in llm.additional_model_request_fields
@@ -89,7 +91,8 @@ def test_get_bedrock_llm_non_nova_model_omits_reasoning():
     # Act
     llm = get_bedrock_llm(settings=test_settings)
 
-    # Assert: reasoningConfig should not be injected for non-Nova models
+    # Assert: reasoningConfig should not be injected for non-Nova models and temperature should be 0.0
+    assert llm.temperature == 0.0
     assert (
         llm.additional_model_request_fields is None
         or "reasoningConfig" not in llm.additional_model_request_fields
@@ -113,6 +116,59 @@ def test_get_bedrock_llm_caller_additional_fields_precedence():
 
     # Assert: caller's custom fields are preserved without being overwritten
     assert llm.additional_model_request_fields == {"customKey": "customValue"}
+
+
+def test_get_bedrock_llm_caller_reasoning_config_omits_temperature():
+    # Arrange: caller provides reasoningConfig directly
+    test_settings = Settings(
+        bedrock_model_id="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        bedrock_thinking_effort="disabled",
+        _env_file=None,
+    )
+    custom_fields = {
+        "reasoningConfig": {"type": "enabled", "maxReasoningEffort": "high"}
+    }
+
+    # Act
+    llm = get_bedrock_llm(
+        settings=test_settings,
+        temperature=0.7,
+        additional_model_request_fields=custom_fields,
+    )
+
+    # Assert: temperature must be None because reasoningConfig is enabled
+    assert llm.temperature is None
+    assert llm.additional_model_request_fields == custom_fields
+
+
+def test_get_bedrock_llm_custom_temperature_when_reasoning_disabled():
+    # Arrange: reasoning effort is disabled and caller supplies custom temperature
+    test_settings = Settings(
+        bedrock_model_id="us.amazon.nova-2-lite-v1:0",
+        bedrock_thinking_effort="disabled",
+        _env_file=None,
+    )
+
+    # Act
+    llm = get_bedrock_llm(settings=test_settings, temperature=0.7)
+
+    # Assert: custom temperature is preserved
+    assert llm.temperature == 0.7
+
+
+def test_get_bedrock_llm_non_nova_model_preserves_custom_temperature():
+    # Arrange: non-Nova model with high thinking effort configured
+    test_settings = Settings(
+        bedrock_model_id="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        bedrock_thinking_effort="high",
+        _env_file=None,
+    )
+
+    # Act
+    llm = get_bedrock_llm(settings=test_settings, temperature=0.5)
+
+    # Assert: non-Nova models retain temperature even when thinking effort is set
+    assert llm.temperature == 0.5
 
 
 def test_get_bedrock_llm_custom_arguments():
