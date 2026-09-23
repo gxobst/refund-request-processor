@@ -1,0 +1,729 @@
+openapi: 3.1.0
+info:
+  title: AI Refund Request Processor API
+  version: 1.0.0
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  description: |
+    Automated back-office e-commerce refund evaluation engine powered by LangGraph,
+    AWS Bedrock (Amazon Nova 2), and DynamoDB. Provides asynchronous multi-agent
+    evaluation, queue status polling, and human-in-the-loop manual decision overrides.
+servers:
+  - url: http://127.0.0.1:8000
+    description: Local development server
+security: []
+
+paths:
+  /:
+    get:
+      operationId: getServiceInfo
+      summary: Get service metadata
+      description: Retrieve top-level service health and identity information.
+      tags:
+        - Service
+      x-source: backend/app/main.py:root
+      responses:
+        '200':
+          description: Service information successfully retrieved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceInfo'
+              example:
+                status: ok
+                service: refund-request-processor
+        '400':
+          $ref: '#/components/responses/ProblemBadRequest'
+        '500':
+          $ref: '#/components/responses/ProblemInternalServerError'
+
+  /v1/health:
+    get:
+      operationId: getHealthStatus
+      summary: Health check
+      description: Probe endpoint for container orchestrators and load balancers to assess application liveness.
+      tags:
+        - Service
+      x-source: backend/app/main.py:health
+      responses:
+        '200':
+          description: Service is healthy and responsive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+              example:
+                status: healthy
+        '400':
+          $ref: '#/components/responses/ProblemBadRequest'
+        '500':
+          $ref: '#/components/responses/ProblemInternalServerError'
+        '503':
+          description: Service Unavailable - System dependencies are degraded or unhealthy.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+              example:
+                type: "urn:problem:service-unavailable"
+                title: "Service Unavailable"
+                status: 503
+                detail: "Service is temporarily unable to handle incoming requests."
+                instance: "/v1/health"
+
+  /v1/refunds:
+    get:
+      operationId: listRefundRequests
+      summary: List refund requests
+      description: |
+        Retrieve a paginated list of refund requests from the evaluation queue with optional
+        status filtering. Records are ordered by creation timestamp descending.
+      tags:
+        - Refunds
+      x-source: backend/app/api/refunds.py:list_refund_requests
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Filter refund requests by current workflow processing status.
+          schema:
+            $ref: '#/components/schemas/RefundStatus'
+          example: escalated
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of refund records to return.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+          example: 20
+      responses:
+        '200':
+          description: Successfully retrieved list of refund requests.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RefundDetail'
+              example:
+                - refundId: ref_543c86069f0f
+                  orderId: ORD-1007
+                  customerRequestText: "The chair armrest arrived completely broken and cracked during delivery."
+                  status: completed
+                  decision: auto_approve
+                  reasoning: "Refund automatically approved. Category 'damaged' satisfied all policy rules (All policy rules passed.)."
+                  matchedPolicyRule:
+                    category: damaged
+                    policyName: standard_30_day_damaged
+                    action: auto_approve
+                    returnRequired: false
+                  confidenceScore: 0.95
+                  createdAt: "2026-09-23T14:10:00Z"
+                  updatedAt: "2026-09-23T14:10:05Z"
+                  overrideDecision: null
+                  overrideReason: null
+                  overriddenAt: null
+        '400':
+          $ref: '#/components/responses/ProblemBadRequest'
+        '422':
+          $ref: '#/components/responses/ProblemUnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/ProblemInternalServerError'
+
+    post:
+      operationId: submitRefundRequest
+      summary: Submit refund request for evaluation
+      description: |
+        Accept an incoming customer refund request, persist a pending record in DynamoDB,
+        and schedule asynchronous multi-agent evaluation via LangGraph and AWS Bedrock.
+      tags:
+        - Refunds
+      x-source: backend/app/api/refunds.py:submit_refund_request
+      requestBody:
+        required: true
+        description: Customer order identifier and refund request explanation.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundCreateRequest'
+            example:
+              orderId: ORD-1001
+              customerRequestText: "The ceramic vase arrived shattered inside the package with no protective bubble wrap."
+      responses:
+        '202':
+          description: Refund request accepted for background processing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundCreateResponse'
+              example:
+                refundId: ref_7f9b1c2e3a4d
+                orderId: ORD-1001
+                status: pending
+                createdAt: "2026-09-23T14:15:30Z"
+        '400':
+          $ref: '#/components/responses/ProblemBadRequest'
+        '422':
+          $ref: '#/components/responses/ProblemUnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/ProblemInternalServerError'
+
+  /v1/refunds/{refundId}:
+    get:
+      operationId: getRefundRequestById
+      summary: Get refund request details
+      description: |
+        Retrieve the latest status, agent classification, policy check outcome, and decision
+        for a specific refund request.
+      tags:
+        - Refunds
+      x-source: backend/app/api/refunds.py:get_refund_request_by_id
+      parameters:
+        - $ref: '#/components/parameters/RefundIdPathParam'
+      responses:
+        '200':
+          description: Detailed refund request record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundDetail'
+              example:
+                refundId: ref_543c86069f0f
+                orderId: ORD-1007
+                customerRequestText: "Received wrong shoe size (ordered 10, received 8.5)."
+                status: escalated
+                decision: escalate
+                reasoning: "Escalated to human review due to ambiguous item condition."
+                matchedPolicyRule:
+                  category: wrong_item
+                  policyName: wrong_item_exchange_policy
+                  action: manual_review
+                  returnRequired: true
+                confidenceScore: 0.88
+                createdAt: "2026-09-23T14:10:00Z"
+                updatedAt: "2026-09-23T14:10:04Z"
+                overrideDecision: null
+                overrideReason: null
+                overriddenAt: null
+        '404':
+          $ref: '#/components/responses/ProblemNotFound'
+        '500':
+          $ref: '#/components/responses/ProblemInternalServerError'
+
+  /v1/refunds/{refundId}/override:
+    post:
+      operationId: overrideRefundDecision
+      summary: Manually override refund decision
+      description: |
+        Apply a human operator decision override to an existing refund request (typically
+        one escalated for human review). Transitions status to `completed` and records an
+        audit trail of operator decision and rationale.
+      tags:
+        - Refunds
+      x-source: backend/app/api/refunds.py:override_refund_decision
+      parameters:
+        - $ref: '#/components/parameters/RefundIdPathParam'
+      requestBody:
+        required: true
+        description: Operator manual decision and justification.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundOverrideRequest'
+            example:
+              overrideDecision: approve
+              overrideReason: "Verified return tracking code delivered to warehouse. Discretionary customer satisfaction approval."
+      responses:
+        '200':
+          description: Override successfully recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundDetail'
+              example:
+                refundId: ref_543c86069f0f
+                orderId: ORD-1007
+                customerRequestText: "Received wrong shoe size (ordered 10, received 8.5)."
+                status: completed
+                decision: approve
+                reasoning: "Escalated to human review due to ambiguous item condition."
+                matchedPolicyRule:
+                  category: wrong_item
+                  policyName: wrong_item_exchange_policy
+                  action: manual_review
+                  returnRequired: true
+                confidenceScore: 0.88
+                createdAt: "2026-09-23T14:10:00Z"
+                updatedAt: "2026-09-23T14:25:12Z"
+                overrideDecision: approve
+                overrideReason: "Verified return tracking code delivered to warehouse. Discretionary customer satisfaction approval."
+                overriddenAt: "2026-09-23T14:25:12Z"
+        '400':
+          $ref: '#/components/responses/ProblemBadRequest'
+        '404':
+          $ref: '#/components/responses/ProblemNotFound'
+        '422':
+          $ref: '#/components/responses/ProblemUnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/ProblemInternalServerError'
+
+  /v1/refunds/{refundId}/clarify:
+    post:
+      operationId: submitRefundClarification
+      summary: Submit customer clarification
+      description: |
+        Provide customer clarification response for a refund request that is paused in
+        `awaiting_clarification` status. Appends clarification details and automatically
+        resumes the multi-agent workflow in the background.
+      tags:
+        - Refunds
+      x-source: backend/app/api/refunds.py:submit_clarification
+      parameters:
+        - $ref: '#/components/parameters/RefundIdPathParam'
+      requestBody:
+        required: true
+        description: Customer clarification response text.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundClarificationRequest'
+            example:
+              responseText: "The package was left at the front porch in heavy rain, soaked through."
+      responses:
+        '200':
+          description: Clarification accepted and workflow resumed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundDetail'
+              example:
+                refundId: ref_543c86069f0f
+                orderId: ORD-1007
+                customerRequestText: "Received wrong shoe size (ordered 10, received 8.5)."
+                status: pending
+                decision: null
+                reasoning: null
+                matchedPolicyRule: null
+                confidenceScore: null
+                clarificationPrompt: "Could you please specify if the packaging was unopened?"
+                clarificationResponse: "The package was left at the front porch in heavy rain, soaked through."
+                clarificationCount: 1
+                toolCalls: []
+                createdAt: "2026-09-23T14:10:00Z"
+                updatedAt: "2026-09-23T14:15:30Z"
+                overrideDecision: null
+                overrideReason: null
+                overriddenAt: null
+        '400':
+          $ref: '#/components/responses/ProblemBadRequest'
+        '404':
+          $ref: '#/components/responses/ProblemNotFound'
+        '422':
+          $ref: '#/components/responses/ProblemUnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/ProblemInternalServerError'
+
+components:
+  parameters:
+    RefundIdPathParam:
+      name: refundId
+      in: path
+      required: true
+      description: Unique identifier of the refund request (e.g. `ref_543c86069f0f`).
+      schema:
+        type: string
+        pattern: '^ref_[a-zA-Z0-9]+$'
+      example: ref_543c86069f0f
+
+  responses:
+    ProblemBadRequest:
+      description: Bad Request - Malformed request parameters or invalid payload syntax.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+          example:
+            type: "urn:problem:bad-request"
+            title: "Bad Request"
+            status: 400
+            detail: "The request query parameters could not be parsed."
+            instance: "/v1/refunds"
+
+    ProblemNotFound:
+      description: Not Found - The specified resource does not exist.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+          example:
+            type: "urn:problem:not-found"
+            title: "Resource Not Found"
+            status: 404
+            detail: "Refund request 'ref_nonexistent123' not found."
+            instance: "/v1/refunds/ref_nonexistent123"
+
+    ProblemUnprocessableEntity:
+      description: Unprocessable Content - Request payload failed schema validation rules.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ValidationProblemDetails'
+          example:
+            type: "urn:problem:validation-error"
+            title: "Validation Error"
+            status: 422
+            detail: "One or more fields in the request body failed validation."
+            instance: "/v1/refunds"
+            invalidParams:
+              - name: "orderId"
+                reason: "Field cannot be blank or empty."
+
+    ProblemInternalServerError:
+      description: Internal Server Error - An unexpected error occurred while processing the request.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+          example:
+            type: "urn:problem:internal-server-error"
+            title: "Internal Server Error"
+            status: 500
+            detail: "An unexpected error occurred while accessing persistence storage."
+            instance: "/v1/refunds"
+
+  schemas:
+    ServiceInfo:
+      type: object
+      required:
+        - status
+        - service
+      properties:
+        status:
+          type: string
+          description: Service health indicator.
+          example: ok
+        service:
+          type: string
+          description: Microservice identifier name.
+          example: refund-request-processor
+      x-source: backend/app/main.py:root
+
+    HealthStatus:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          description: Liveness status of the API service.
+          example: healthy
+      x-source: backend/app/main.py:health
+
+    RefundStatus:
+      type: string
+      enum:
+        - pending
+        - completed
+        - escalated
+        - awaiting_clarification
+      description: |
+        Lifecycle evaluation status of the refund request:
+        * `pending`: In queue or actively being evaluated by multi-agent workflow.
+        * `completed`: Decision reached (automated or manually overridden).
+        * `escalated`: Escalated to human operator review due to low confidence or policy ambiguity.
+        * `awaiting_clarification`: Paused awaiting customer details or photo clarification.
+      example: pending
+      x-source: backend/app/schemas/refund.py:RefundStatus
+
+    RefundDecision:
+      type: string
+      enum:
+        - auto_approve
+        - deny
+        - escalate
+        - approve
+      description: |
+        Outcome decision for the refund request:
+        * `auto_approve`: Automatically approved by policy evaluation.
+        * `deny`: Ineligible under policy rules.
+        * `escalate`: Transferred to human queue.
+        * `approve`: Manually approved by human operator override.
+      example: auto_approve
+      x-source: backend/app/schemas/refund.py:RefundDecision
+
+    OverrideDecisionType:
+      type: string
+      enum:
+        - approve
+        - deny
+      description: Final determination selected by human reviewer.
+      example: approve
+      x-source: backend/app/schemas/refund.py:OverrideDecisionType
+
+    RefundCreateRequest:
+      type: object
+      required:
+        - orderId
+        - customerRequestText
+      properties:
+        orderId:
+          type: string
+          minLength: 1
+          description: Associated purchase order identifier.
+          example: ORD-1001
+        customerRequestText:
+          type: string
+          minLength: 1
+          description: Customer-submitted explanation or reason for requesting a refund.
+          example: "The dining table leg arrived cracked in half inside the delivery carton."
+      x-source: backend/app/schemas/refund.py:RefundCreateRequest
+
+    RefundCreateResponse:
+      type: object
+      required:
+        - refundId
+        - orderId
+        - status
+        - createdAt
+      properties:
+        refundId:
+          type: string
+          description: Unique generated refund request identifier.
+          example: ref_7f9b1c2e3a4d
+        orderId:
+          type: string
+          description: Associated purchase order identifier.
+          example: ORD-1001
+        status:
+          $ref: '#/components/schemas/RefundStatus'
+        createdAt:
+          type: string
+          format: date-time
+          description: ISO-8601 creation timestamp.
+          example: "2026-09-23T14:15:30Z"
+      x-source: backend/app/schemas/refund.py:RefundCreateResponse
+
+    RefundClarificationRequest:
+      type: object
+      required:
+        - responseText
+      properties:
+        responseText:
+          type: string
+          minLength: 1
+          description: Customer-provided clarification response text.
+          example: "The package was left at the front porch in heavy rain, soaked through."
+      x-source: backend/app/schemas/refund.py:RefundClarificationRequest
+
+    RefundOverrideRequest:
+      type: object
+      required:
+        - overrideDecision
+        - overrideReason
+      properties:
+        overrideDecision:
+          $ref: '#/components/schemas/OverrideDecisionType'
+        overrideReason:
+          type: string
+          minLength: 1
+          description: Operator explanation justifying the manual decision override.
+          example: "Photographic proof confirmed package damage prior to delivery."
+          x-tentative: true
+      x-source: backend/app/schemas/refund.py:RefundOverrideRequest
+
+    MatchedPolicyRule:
+      type: object
+      description: Evaluated policy rule details matched against the purchase order.
+      x-tentative: true
+      properties:
+        category:
+          type: string
+          description: Refund category matched by classifier.
+          example: damaged
+        policyName:
+          type: string
+          description: Name or identifier of the applied policy rule.
+          example: standard_30_day_damaged
+        action:
+          type: string
+          description: Prescribed policy action (auto_approve, deny, manual_review).
+          example: auto_approve
+        returnRequired:
+          type: boolean
+          description: Whether customer must return item prior to refund disbursement.
+          example: false
+      x-source: backend/app/schemas/refund.py:RefundRecord.matched_policy_rule
+
+    RefundDetail:
+      type: object
+      required:
+        - refundId
+        - orderId
+        - customerRequestText
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        refundId:
+          type: string
+          description: Unique refund request identifier.
+          example: ref_543c86069f0f
+        orderId:
+          type: string
+          description: Associated purchase order identifier.
+          example: ORD-1007
+        customerRequestText:
+          type: string
+          description: Original customer explanation.
+          example: "The chair armrest arrived completely broken and cracked during delivery."
+        status:
+          $ref: '#/components/schemas/RefundStatus'
+        decision:
+          anyOf:
+            - $ref: '#/components/schemas/RefundDecision'
+            - type: 'null'
+          description: Automated or human-adjudicated refund decision.
+          example: auto_approve
+        reasoning:
+          type:
+            - string
+            - 'null'
+          description: Detailed explanation justifying the decision.
+          example: "Refund automatically approved. Category 'damaged' satisfied all policy rules."
+        matchedPolicyRule:
+          anyOf:
+            - $ref: '#/components/schemas/MatchedPolicyRule'
+            - type: 'null'
+          x-tentative: true
+        confidenceScore:
+          type:
+            - number
+            - 'null'
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Model confidence score (0.0 to 1.0), or null if resolved without LLM.
+          example: 0.95
+          x-tentative: true
+        createdAt:
+          type: string
+          format: date-time
+          description: ISO-8601 creation timestamp.
+          example: "2026-09-23T14:10:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          description: ISO-8601 timestamp of last modification.
+          example: "2026-09-23T14:10:05Z"
+        overrideDecision:
+          anyOf:
+            - $ref: '#/components/schemas/OverrideDecisionType'
+            - type: 'null'
+          description: Decision applied by human reviewer override, if applicable.
+          example: null
+        overrideReason:
+          type:
+            - string
+            - 'null'
+          description: Justification provided during human operator override, if applicable.
+          example: null
+        overriddenAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: ISO-8601 timestamp when manual override occurred, if applicable.
+          example: null
+        clarificationPrompt:
+          type:
+            - string
+            - 'null'
+          description: Question asked to customer for request clarification.
+          example: "Could you please provide photos of the damaged shipping box?"
+          x-tentative: true
+        clarificationResponse:
+          type:
+            - string
+            - 'null'
+          description: Customer-provided clarification response.
+          example: "The box was torn open at the bottom corner upon delivery."
+          x-tentative: true
+        clarificationCount:
+          type: integer
+          minimum: 0
+          description: Number of clarification cycles attempted.
+          example: 0
+        toolCalls:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+          description: Chronological audit log of external tool invocations, inputs, and results.
+          example: []
+          x-tentative: true
+      x-source: backend/app/schemas/refund.py:RefundRecord
+
+    ProblemDetails:
+      type: object
+      description: RFC 7807 problem details object describing an error condition.
+      required:
+        - type
+        - title
+        - status
+        - detail
+      properties:
+        type:
+          type: string
+          format: uri
+          description: URI reference identifying the problem type.
+          example: "urn:problem:not-found"
+        title:
+          type: string
+          description: Short human-readable summary of problem type.
+          example: "Resource Not Found"
+        status:
+          type: integer
+          description: HTTP status code generated by origin server.
+          example: 404
+        detail:
+          type: string
+          description: Human-readable explanation specific to this occurrence.
+          example: "Refund request 'ref_12345' not found."
+        instance:
+          type: string
+          format: uri-reference
+          description: URI reference identifying the specific occurrence of the problem.
+          example: "/v1/refunds/ref_12345"
+      x-source: backend/app/api/refunds.py:HTTPException
+
+    ValidationProblemDetails:
+      allOf:
+        - $ref: '#/components/schemas/ProblemDetails'
+        - type: object
+          properties:
+            invalidParams:
+              type: array
+              description: Specific payload or parameter validation failures.
+              items:
+                $ref: '#/components/schemas/InvalidParam'
+      x-source: backend/app/schemas/refund.py:field_validator
+
+    InvalidParam:
+      type: object
+      required:
+        - name
+        - reason
+      properties:
+        name:
+          type: string
+          description: Path or property name that failed validation.
+          example: orderId
+        reason:
+          type: string
+          description: Description of the validation failure constraint.
+          example: "Field cannot be blank or empty."
+      x-source: backend/app/schemas/refund.py:not_blank
