@@ -18,6 +18,7 @@ async def run_refund_workflow(
     checkpointer: BaseCheckpointSaver | None = None,
     repository: Any = None,
     use_dynamodb: bool | None = None,
+    callbacks: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Execute the multi-agent refund evaluation workflow asynchronously.
 
@@ -30,6 +31,7 @@ async def run_refund_workflow(
         repository: Optional repository instance for database operations.
         use_dynamodb: Optional bool indicating whether to enable DynamoDB checkpointing.
             Defaults to True in non-test environments if checkpointer is None.
+        callbacks: Optional list of callback handlers for tracing.
 
     Returns:
         Final state dictionary containing decision, reasoning, and status.
@@ -55,7 +57,14 @@ async def run_refund_workflow(
     if repository is not None:
         set_current_repository(repository)
 
-    config = {"configurable": {"thread_id": thread_id or refund_id}}
+    config: dict[str, Any] = {
+        "configurable": {"thread_id": thread_id or refund_id},
+        "metadata": {"refund_id": refund_id, "order_id": order_id},
+        "tags": ["refund-workflow"],
+    }
+    if callbacks is not None:
+        config["callbacks"] = callbacks
+
     final_state = await graph.ainvoke(initial_state, config=config)
     return final_state
 
@@ -67,6 +76,7 @@ async def resume_refund_workflow(
     checkpointer: BaseCheckpointSaver | None = None,
     repository: Any = None,
     use_dynamodb: bool | None = None,
+    callbacks: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Resume the multi-agent refund evaluation workflow upon customer clarification.
 
@@ -78,6 +88,7 @@ async def resume_refund_workflow(
         repository: Optional repository instance for database operations.
         use_dynamodb: Optional bool indicating whether to enable DynamoDB checkpointing.
             Defaults to True in non-test environments if checkpointer is None.
+        callbacks: Optional list of callback handlers for tracing.
 
     Returns:
         Final state dictionary containing decision, reasoning, and status.
@@ -97,7 +108,7 @@ async def resume_refund_workflow(
 
     graph = build_refund_graph(checkpointer=effective_checkpointer)
     target_thread_id = thread_id or refund_id
-    config = {"configurable": {"thread_id": target_thread_id}}
+    config: dict[str, Any] = {"configurable": {"thread_id": target_thread_id}}
 
     snapshot = await graph.aget_state(config)
     existing_state = dict(snapshot.values) if snapshot and snapshot.values else {}
@@ -122,6 +133,12 @@ async def resume_refund_workflow(
             "clarification_count": 1,
         }
 
+    order_id = existing_state.get("order_id", "")
+    config["metadata"] = {"refund_id": refund_id, "order_id": order_id}
+    config["tags"] = ["refund-workflow"]
+    if callbacks is not None:
+        config["callbacks"] = callbacks
+
     original_text = existing_state.get("customer_request_text", "")
     combined_text = (
         f"{original_text}\n[Clarification]: {response_text}"
@@ -142,14 +159,25 @@ async def resume_refund_workflow(
 
     if repository is not None and final_state.get("status") in ("completed", "escalated"):
         try:
-            repository.update_decision(
-                refund_id=refund_id,
-                decision=final_state.get("decision", "escalate"),
-                reasoning=final_state.get("reasoning", ""),
-                matched_policy_rule=final_state.get("matched_policy_rule"),
-                confidence_score=final_state.get("confidence_score", 0.0),
-                status=final_state.get("status", "completed"),
-            )
+            try:
+                repository.update_decision(
+                    refund_id=refund_id,
+                    decision=final_state.get("decision", "escalate"),
+                    reasoning=final_state.get("reasoning", ""),
+                    matched_policy_rule=final_state.get("matched_policy_rule"),
+                    confidence_score=final_state.get("confidence_score", 0.0),
+                    status=final_state.get("status", "completed"),
+                    tool_calls=final_state.get("tool_calls"),
+                )
+            except TypeError:
+                repository.update_decision(
+                    refund_id=refund_id,
+                    decision=final_state.get("decision", "escalate"),
+                    reasoning=final_state.get("reasoning", ""),
+                    matched_policy_rule=final_state.get("matched_policy_rule"),
+                    confidence_score=final_state.get("confidence_score", 0.0),
+                    status=final_state.get("status", "completed"),
+                )
         except Exception:
             pass
 

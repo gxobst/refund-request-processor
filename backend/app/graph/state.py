@@ -29,3 +29,4 @@ class RefundWorkflowState(TypedDict, total=False):
     clarification_response: str | None
     clarification_count: int
     needs_clarification: bool
+    tool_calls: list[dict[str, Any]]

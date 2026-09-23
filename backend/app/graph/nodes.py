@@ -185,8 +185,12 @@ def policy_checker_node(state: dict[str, Any]) -> dict[str, Any]:
             "policy_reasoning": "Missing required order data.",
             "passed_rules": [],
             "failed_rules": [],
+            "tool_calls": [],
         }
-    return agent_policy_checker_node(state)
+    res = agent_policy_checker_node(state)
+    if "tool_calls" not in res:
+        res["tool_calls"] = []
+    return res
 
 
 
@@ -211,18 +215,30 @@ def save_dynamo_node(state: dict[str, Any]) -> dict[str, Any]:
     matched_rule = state.get("matched_policy_rule")
     confidence = state.get("confidence_score", 0.0)
     status = state.get("status", "completed")
+    tool_calls = state.get("tool_calls", [])
 
     if refund_id:
         repo = get_current_repository() or state.get("_repository") or RefundRepository()
         try:
-            repo.update_decision(
-                refund_id=refund_id,
-                decision=decision,
-                reasoning=reasoning,
-                matched_policy_rule=matched_rule,
-                confidence_score=confidence,
-                status=status,
-            )
+            try:
+                repo.update_decision(
+                    refund_id=refund_id,
+                    decision=decision,
+                    reasoning=reasoning,
+                    matched_policy_rule=matched_rule,
+                    confidence_score=confidence,
+                    status=status,
+                    tool_calls=tool_calls,
+                )
+            except TypeError:
+                repo.update_decision(
+                    refund_id=refund_id,
+                    decision=decision,
+                    reasoning=reasoning,
+                    matched_policy_rule=matched_rule,
+                    confidence_score=confidence,
+                    status=status,
+                )
         except (RefundNotFoundError, KeyError):
             # In testing or standalone execution, record might not exist prior
             pass

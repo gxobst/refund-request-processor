@@ -16,14 +16,20 @@ class RefundNotFoundError(KeyError):
     pass
 
 
-def _convert_floats_to_decimal(val: Any) -> Any:
+def _convert_floats_to_decimal(val: Any, preserve_none: bool = False) -> Any:
     """Recursively convert float values to Decimal for DynamoDB storage."""
     if isinstance(val, float):
         return Decimal(str(val))
     if isinstance(val, dict):
-        return {k: _convert_floats_to_decimal(v) for k, v in val.items() if v is not None}
+        if preserve_none:
+            return {k: _convert_floats_to_decimal(v, True) for k, v in val.items()}
+        return {
+            k: _convert_floats_to_decimal(v, preserve_none=True)
+            for k, v in val.items()
+            if v is not None
+        }
     if isinstance(val, list):
-        return [_convert_floats_to_decimal(v) for v in val]
+        return [_convert_floats_to_decimal(v, True) for v in val]
     return val
 
 
@@ -93,6 +99,7 @@ class RefundRepository:
             clarification_prompt=None,
             clarification_response=None,
             clarification_count=0,
+            tool_calls=[],
         )
 
         item = _convert_floats_to_decimal(record.model_dump())
@@ -150,6 +157,7 @@ class RefundRepository:
         matched_policy_rule: dict[str, Any] | None,
         confidence_score: float,
         status: str,
+        tool_calls: list[dict[str, Any]] | None = None,
     ) -> RefundRecord:
         """Update decision metadata and workflow status for an existing refund record.
 
@@ -160,6 +168,7 @@ class RefundRepository:
             matched_policy_rule: Evaluated policy rule dict or None.
             confidence_score: Float confidence score between 0.0 and 1.0.
             status: Workflow status ('completed' or 'escalated').
+            tool_calls: Optional list of executed tool call audit dictionaries.
 
         Returns:
             Updated RefundRecord instance.
@@ -179,6 +188,10 @@ class RefundRepository:
         updated_dict["confidence_score"] = confidence_score
         updated_dict["status"] = status
         updated_dict["updated_at"] = now_iso
+        if tool_calls is not None:
+            updated_dict["tool_calls"] = tool_calls
+        else:
+            updated_dict["tool_calls"] = existing.tool_calls or []
 
         item = _convert_floats_to_decimal(updated_dict)
         self.table.put_item(Item=item)

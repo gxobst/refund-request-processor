@@ -1,5 +1,6 @@
 """Policy Checker Agent module integrating deterministic evaluation with LLM ambiguity analysis and autonomous tool calling."""
 
+from datetime import datetime, timezone
 import json
 from typing import Any
 from langchain_core.language_models import BaseChatModel
@@ -76,6 +77,7 @@ def check_policy(
             passed_rules=eval_result.passed_rules,
             failed_rules=eval_result.failed_rules,
             policy_reasoning=eval_result.details or "All policy rules passed.",
+            tool_calls=[],
         )
 
     # 2. Deterministic Fail Bypass
@@ -93,9 +95,11 @@ def check_policy(
                 failed_rules=eval_result.failed_rules,
                 policy_reasoning=eval_result.details
                 or f"Evaluation failed for rules: {', '.join(eval_result.failed_rules)}",
+                tool_calls=[],
             )
 
     # 3. LLM External Verification and Ambiguity Resolution
+    executed_tool_calls: list[dict[str, Any]] = []
     active_tools = tools if tools is not None else [query_carrier_tracking, query_payment_transaction]
     tool_map: dict[str, Any] = {}
     for t in active_tools:
@@ -135,6 +139,7 @@ Analyze the situation and provide your determination:"""
                 result = response
                 if result.matched_policy_rule is None and eval_result.matched_policy_rule is not None:
                     result.matched_policy_rule = eval_result.matched_policy_rule
+                result.tool_calls = executed_tool_calls
                 return result
 
             messages.append(response)
@@ -164,12 +169,24 @@ Analyze the situation and provide your determination:"""
                             else:
                                 raw_res = tool(args)
                             content = raw_res if isinstance(raw_res, str) else json.dumps(raw_res)
+                            tool_output = raw_res
                         except Exception as e:
-                            content = json.dumps({"error": f"Tool execution error: {str(e)}"})
+                            tool_output = {"error": f"Tool execution error: {str(e)}"}
+                            content = json.dumps(tool_output)
                     else:
-                        content = json.dumps({
+                        tool_output = {
                             "error": f"Tool '{name}' not found. Available tools: {list(tool_map.keys())}"
-                        })
+                        }
+                        content = json.dumps(tool_output)
+
+                    audit_entry = {
+                        "tool_name": name,
+                        "tool_call_id": call_id,
+                        "tool_input": args,
+                        "tool_output": tool_output,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                    executed_tool_calls.append(audit_entry)
 
                     messages.append(
                         ToolMessage(
@@ -191,6 +208,8 @@ Analyze the situation and provide your determination:"""
         else:
             result = PolicyCheckerOutput.model_validate(raw_output)
 
+        result.tool_calls = executed_tool_calls
+
     except Exception as e:
         return PolicyCheckerOutput(
             policy_status="ambiguous",
@@ -198,10 +217,14 @@ Analyze the situation and provide your determination:"""
             passed_rules=eval_result.passed_rules,
             failed_rules=eval_result.failed_rules,
             policy_reasoning=eval_result.details or f"External verification failed: {str(e)}",
+            tool_calls=executed_tool_calls,
         )
 
     if result.matched_policy_rule is None and eval_result.matched_policy_rule is not None:
         result.matched_policy_rule = eval_result.matched_policy_rule
+
+    if not result.tool_calls and executed_tool_calls:
+        result.tool_calls = executed_tool_calls
 
     return result
 
@@ -232,5 +255,6 @@ def policy_checker_node(state: dict[str, Any]) -> dict[str, Any]:
         "policy_reasoning": output.policy_reasoning,
         "passed_rules": output.passed_rules,
         "failed_rules": output.failed_rules,
+        "tool_calls": output.tool_calls,
     }
 

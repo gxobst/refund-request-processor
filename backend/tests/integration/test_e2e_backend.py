@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 from httpx import ASGITransport, AsyncClient
 from langchain_core.callbacks.base import BaseCallbackHandler
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 import pytest
 
@@ -22,6 +23,7 @@ from app.db.seed import seed_orders
 from app.graph.runner import run_refund_workflow
 from app.main import app
 from app.schemas.classifier import ClassificationOutput
+from app.schemas.policy_checker import PolicyCheckerOutput
 from app.schemas.refund import RefundRecord
 
 
@@ -125,6 +127,12 @@ def _classify_text_to_output(text: str) -> ClassificationOutput:
             category="changed_mind",
             confidence_score=0.91,
             reasoning="Customer changed mind or ordered mistakenly.",
+        )
+    elif "late" in eval_text or "delay" in eval_text:
+        return ClassificationOutput(
+            category="late_delivery",
+            confidence_score=0.95,
+            reasoning="Customer reported late or delayed delivery.",
         )
     else:
         return ClassificationOutput(
@@ -537,9 +545,114 @@ async def test_langsmith_observability_tracing(monkeypatch: pytest.MonkeyPatch):
         order_id="ORD-1001",
         customer_request_text="Damaged product request with tracing enabled.",
         thread_id="thread_trace_100",
+        callbacks=[spy_handler],
     )
 
     # Assert: result is completed and workflow ran
     assert result["status"] == "completed"
     assert result["decision"] == "auto_approve"
     assert result["refund_id"] == "ref_trace_test_100"
+
+    # Verify tracing callback captured execution and attached metadata
+    assert len(spy_handler.starts) > 0
+    root_start = spy_handler.starts[0]
+    meta = root_start.get("kwargs", {}).get("metadata", {})
+    assert meta.get("refund_id") == "ref_trace_test_100"
+    assert meta.get("order_id") == "ORD-1001"
+    tags = root_start.get("kwargs", {}).get("tags", [])
+    assert "refund-workflow" in tags
+
+
+class MockToolCallingModel:
+    """Mock LLM supporting tool binding and structured output for policy checker."""
+
+    def __init__(
+        self, responses: list[AIMessage], final_output: PolicyCheckerOutput
+    ) -> None:
+        self.responses = list(responses)
+        self.final_output = final_output
+
+    def bind_tools(self, tools: list[Any]) -> "MockToolCallingModel":
+        return self
+
+    def invoke(self, messages: list[Any], **kwargs: Any) -> AIMessage:
+        if self.responses:
+            return self.responses.pop(0)
+        return AIMessage(content="Evaluation complete.", tool_calls=[])
+
+    def with_structured_output(self, schema: Any, **kwargs: Any) -> Any:
+        return RunnableLambda(lambda _: self.final_output)
+
+
+@pytest.mark.asyncio
+async def test_e2e_tool_calling_audit_log_persisted_and_exposed(
+    mock_repo: RefundRepository, monkeypatch: pytest.MonkeyPatch
+):
+    """Verify end-to-end workflow run with tool calling records tool_calls in state, persists to DynamoDB, and exposes via GET /refunds/{id}."""
+    # Arrange: mock policy checker LLM to trigger carrier tool invocation for ORD-1005
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "query_carrier_tracking",
+            "args": {"tracking_number": "TRK-1005"},
+            "id": "call_e2e_trk_1005",
+        }],
+    )
+    expected_policy_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=[],
+        policy_reasoning="Carrier tracking confirmed shipment delayed in transit past expected delivery date.",
+    )
+    mock_policy_llm = MockToolCallingModel(
+        responses=[tool_call_msg], final_output=expected_policy_output
+    )
+    monkeypatch.setattr(
+        "app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm
+    )
+
+    payload = {
+        "order_id": "ORD-1005",
+        "customer_request_text": "My package delivery is delayed and very late. Tracking number TRK-1005.",
+    }
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Submit refund request
+        post_res = await client.post("/refunds", json=payload)
+        assert post_res.status_code == 202
+        refund_id = post_res.json()["refund_id"]
+
+        # 2. Poll status until completed
+        final_record = await poll_until_not_pending(client, refund_id)
+
+        # 3. Direct GET endpoint check
+        get_res = await client.get(f"/refunds/{refund_id}")
+        assert get_res.status_code == 200
+        record_data = get_res.json()
+
+    # Assert
+    assert final_record["status"] == "completed"
+    assert final_record["decision"] == "auto_approve"
+    assert "tool_calls" in final_record
+    assert len(final_record["tool_calls"]) == 1
+
+    audit_entry = final_record["tool_calls"][0]
+    assert audit_entry["tool_name"] == "query_carrier_tracking"
+    assert audit_entry["tool_call_id"] == "call_e2e_trk_1005"
+    assert audit_entry["tool_input"] == {"tracking_number": "TRK-1005"}
+    assert audit_entry["tool_output"]["found"] is True
+    assert audit_entry["tool_output"]["carrier"] == "FedEx"
+    assert audit_entry["tool_output"]["delivery_status"] == "in_transit"
+    assert "timestamp" in audit_entry
+
+    # Verify DynamoDB repository record
+    db_record = mock_repo.get_refund_request(refund_id)
+    assert db_record is not None
+    assert len(db_record.tool_calls) == 1
+    assert db_record.tool_calls[0]["tool_name"] == "query_carrier_tracking"
+
+    # Verify GET response exposed tool_calls
+    assert len(record_data["tool_calls"]) == 1
+    assert record_data["tool_calls"][0]["tool_name"] == "query_carrier_tracking"
+

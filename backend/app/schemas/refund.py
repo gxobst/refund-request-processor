@@ -74,6 +74,10 @@ class RefundRecord(BaseModel):
     clarification_count: int = Field(
         default=0, ge=0, description="Number of clarification cycles attempted."
     )
+    tool_calls: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Audit log of external tool invocations, arguments, and results.",
+    )
 
 
 class RefundDecisionUpdate(BaseModel):
@@ -84,6 +88,7 @@ class RefundDecisionUpdate(BaseModel):
     matched_policy_rule: dict[str, Any] | None = None
     confidence_score: float = Field(..., ge=0.0, le=1.0)
     status: RefundStatus
+    tool_calls: list[dict[str, Any]] | None = None
 
 
 class RefundOverrideUpdate(BaseModel):

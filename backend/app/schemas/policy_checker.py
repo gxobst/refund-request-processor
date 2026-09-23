@@ -31,3 +31,7 @@ class PolicyCheckerOutput(BaseModel):
         ...,
         description="Detailed explanation justifying the policy evaluation outcome.",
     )
+    tool_calls: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Chronological record of tool calls executed during policy checking.",
+    )

@@ -456,3 +456,148 @@ def test_policy_checker_node_delegates_with_only_order_id():
     # Assert
     assert node_result["policy_status"] == "pass"
 
+
+def test_check_policy_deterministic_pass_has_empty_tool_calls():
+    """Verify deterministic pass returns tool_calls == [] in PolicyCheckerOutput."""
+    order = {
+        "order_id": "ORD-AUDIT-PASS",
+        "order_amount": 100.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    result = check_policy(category="damaged", order=order)
+    assert result.policy_status == "pass"
+    assert result.tool_calls == []
+
+
+def test_check_policy_invoking_carrier_tool_records_tool_calls_audit():
+    """Verify policy check invoking query_carrier_tracking returns audit log in output.tool_calls."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+        "purchase_date": "2026-09-01",
+    }
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "query_carrier_tracking",
+            "args": {"tracking_number": "TRK-1005"},
+            "id": "call_trk_audit_1",
+        }],
+    )
+    expected_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=[],
+        policy_reasoning="Carrier tracking confirmed shipment is delayed.",
+    )
+    mock_llm = MockToolCallingLLM(responses=[tool_call_msg], final_output=expected_output)
+
+    result = check_policy(category="late_delivery", order=order, llm=mock_llm)
+
+    assert result.policy_status == "pass"
+    assert len(result.tool_calls) == 1
+    audit = result.tool_calls[0]
+    assert audit["tool_name"] == "query_carrier_tracking"
+    assert audit["tool_call_id"] == "call_trk_audit_1"
+    assert audit["tool_input"] == {"tracking_number": "TRK-1005"}
+    assert isinstance(audit["tool_output"], dict)
+    assert audit["tool_output"]["found"] is True
+    assert audit["tool_output"]["tracking_number"] == "TRK-1005"
+    assert "timestamp" in audit
+
+
+def test_check_policy_invoking_payment_tool_records_tool_calls_audit():
+    """Verify policy check invoking query_payment_transaction returns audit log in output.tool_calls."""
+    order = {
+        "order_id": "ORD-1001",
+        "order_amount": 250.0,
+    }
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "query_payment_transaction",
+            "args": {"order_id": "ORD-1001"},
+            "id": "call_pay_audit_1",
+        }],
+    )
+    expected_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["charge_status_verified"],
+        failed_rules=[],
+        policy_reasoning="Payment charge verified as succeeded and eligible.",
+    )
+    mock_llm = MockToolCallingLLM(responses=[tool_call_msg], final_output=expected_output)
+
+    result = check_policy(category="damaged", order=order, llm=mock_llm)
+
+    assert len(result.tool_calls) == 1
+    audit = result.tool_calls[0]
+    assert audit["tool_name"] == "query_payment_transaction"
+    assert audit["tool_call_id"] == "call_pay_audit_1"
+    assert audit["tool_input"] == {"order_id": "ORD-1001"}
+    assert isinstance(audit["tool_output"], dict)
+    assert audit["tool_output"]["charge_status"] == "succeeded"
+    assert audit["tool_output"]["refund_eligibility"] is True
+    assert "timestamp" in audit
+
+
+def test_check_policy_simulated_tool_exception_records_error_payload():
+    """Verify simulated tool execution exception records error payload in output.tool_calls without crashing."""
+    from langchain_core.tools import tool
+
+    @tool("crashing_tool")
+    def crashing_tool(tracking_number: str) -> str:
+        """A crashing tool."""
+        raise RuntimeError("Carrier service connection timeout")
+
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 100.0,
+    }
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "crashing_tool",
+            "args": {"tracking_number": "TRK-CRASH"},
+            "id": "call_crash_1",
+        }],
+    )
+    expected_output = PolicyCheckerOutput(
+        policy_status="ambiguous",
+        passed_rules=[],
+        failed_rules=[],
+        policy_reasoning="Tool crashed; escalating to human operator.",
+    )
+    mock_llm = MockToolCallingLLM(responses=[tool_call_msg], final_output=expected_output)
+
+    result = check_policy(category="late_delivery", order=order, llm=mock_llm, tools=[crashing_tool])
+
+    assert isinstance(result, PolicyCheckerOutput)
+    assert len(result.tool_calls) == 1
+    audit = result.tool_calls[0]
+    assert audit["tool_name"] == "crashing_tool"
+    assert audit["tool_call_id"] == "call_crash_1"
+    assert "error" in audit["tool_output"]
+    assert "Tool execution error: Carrier service connection timeout" in audit["tool_output"]["error"]
+
+
+def test_policy_checker_node_includes_tool_calls():
+    """Verify policy_checker_node includes tool_calls in the returned state dictionary."""
+    state = {
+        "refund_id": "ref_node_tool_calls_test",
+        "category": "damaged",
+        "order": {
+            "order_id": "ORD-NODE-TC",
+            "order_amount": 100.0,
+            "delivery_status": "delivered",
+            "delivery_date": date.today().isoformat(),
+        },
+    }
+    node_result = policy_checker_node(state)
+    assert "tool_calls" in node_result
+    assert isinstance(node_result["tool_calls"], list)
+    assert node_result["tool_calls"] == []
+
+

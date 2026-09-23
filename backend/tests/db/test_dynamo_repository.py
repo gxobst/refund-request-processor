@@ -731,3 +731,188 @@ def test_refund_workflow_state_clarification_fields():
     assert full_clarification_state["needs_clarification"] is True
 
 
+def test_create_refund_request_initializes_empty_tool_calls(repository: RefundRepository):
+    """Verify create_refund_request initializes and returns tool_calls == []."""
+    record = repository.create_refund_request(
+        order_id="ORD-AUDIT-01",
+        customer_request_text="Tool calls initial test",
+    )
+    assert record.tool_calls == []
+    raw = repository.table.items[record.refund_id]
+    assert raw["tool_calls"] == []
+
+
+def test_update_decision_persists_and_retrieves_multiple_tool_calls(repository: RefundRepository):
+    """Verify update_decision persists multiple tool_calls items with nested dictionaries."""
+    record = repository.create_refund_request(
+        order_id="ORD-AUDIT-02",
+        customer_request_text="Testing multiple tool calls persistence",
+    )
+
+    sample_tool_calls = [
+        {
+            "tool_name": "query_carrier_tracking",
+            "tool_call_id": "call_track_1",
+            "tool_input": {"tracking_number": "1Z9999999999999999"},
+            "tool_output": {
+                "found": True,
+                "tracking_number": "1Z9999999999999999",
+                "carrier": "FedEx",
+                "delivery_status": "delivered",
+                "delivery_date": "2026-09-15",
+                "delivery_address": "123 Main St",
+                "proof_of_delivery_photo_available": True,
+                "events": [{"timestamp": "2026-09-15T10:00:00Z", "status": "Delivered"}],
+                "error": None,
+            },
+            "timestamp": "2026-09-23T18:00:00+00:00",
+        },
+        {
+            "tool_name": "query_payment_transaction",
+            "tool_call_id": "call_pay_2",
+            "tool_input": {"order_id": "ORD-AUDIT-02"},
+            "tool_output": {
+                "found": True,
+                "order_id": "ORD-AUDIT-02",
+                "transaction_id": "ch_3Pz7Q02eZvKYlo2C01234567",
+                "charge_status": "succeeded",
+                "payment_method": "card_visa",
+                "charge_amount": 149.99,
+                "currency": "usd",
+                "dispute_status": "none",
+                "refund_eligibility": True,
+                "error": None,
+            },
+            "timestamp": "2026-09-23T18:01:00+00:00",
+        },
+    ]
+
+    updated = repository.update_decision(
+        refund_id=record.refund_id,
+        decision="auto_approve",
+        reasoning="All checks passed.",
+        matched_policy_rule={"rule": "late_delivery"},
+        confidence_score=0.95,
+        status="completed",
+        tool_calls=sample_tool_calls,
+    )
+
+    assert updated.tool_calls == sample_tool_calls
+
+    # Retrieve from DB via get_refund_request
+    fetched = repository.get_refund_request(record.refund_id)
+    assert fetched is not None
+    assert fetched.tool_calls == sample_tool_calls
+    assert len(fetched.tool_calls) == 2
+    assert fetched.tool_calls[0]["tool_name"] == "query_carrier_tracking"
+    assert fetched.tool_calls[1]["tool_name"] == "query_payment_transaction"
+    assert fetched.tool_calls[1]["tool_output"]["charge_amount"] == 149.99
+    assert isinstance(fetched.tool_calls[1]["tool_output"]["charge_amount"], float)
+
+
+def test_update_decision_none_tool_calls_preserves_existing(repository: RefundRepository):
+    """Verify update_decision with tool_calls=None preserves existing tool_calls."""
+    record = repository.create_refund_request(
+        order_id="ORD-AUDIT-03",
+        customer_request_text="Testing tool calls preservation",
+    )
+    initial_calls = [
+        {
+            "tool_name": "query_carrier_tracking",
+            "tool_call_id": "call_preserve_1",
+            "tool_input": {"tracking_number": "TRK-001"},
+            "tool_output": {"found": True, "delivery_status": "delivered"},
+            "timestamp": "2026-09-23T18:00:00+00:00",
+        }
+    ]
+    # First update with tool_calls
+    repository.update_decision(
+        refund_id=record.refund_id,
+        decision="escalate",
+        reasoning="Initial check",
+        matched_policy_rule=None,
+        confidence_score=0.5,
+        status="escalated",
+        tool_calls=initial_calls,
+    )
+
+    # Second update without tool_calls parameter (tool_calls=None)
+    updated_again = repository.update_decision(
+        refund_id=record.refund_id,
+        decision="deny",
+        reasoning="Denied after review",
+        matched_policy_rule=None,
+        confidence_score=0.9,
+        status="completed",
+        tool_calls=None,
+    )
+
+    assert updated_again.tool_calls == initial_calls
+    fetched = repository.get_refund_request(record.refund_id)
+    assert fetched is not None
+    assert fetched.tool_calls == initial_calls
+
+
+def test_persisting_tool_calls_with_floats_converts_cleanly(repository: RefundRepository):
+    """Verify persisting tool_calls containing float numbers succeeds without FloatTypeError and reloads as float."""
+    record = repository.create_refund_request(
+        order_id="ORD-AUDIT-04",
+        customer_request_text="Testing float conversion",
+    )
+    float_tool_calls = [
+        {
+            "tool_name": "query_payment_transaction",
+            "tool_call_id": "call_float_1",
+            "tool_input": {"order_id": "ORD-AUDIT-04"},
+            "tool_output": {
+                "charge_amount": 149.99,
+                "fee": 4.65,
+                "nested": {"refund_ratio": 0.85},
+            },
+            "timestamp": "2026-09-23T18:00:00+00:00",
+        }
+    ]
+
+    repository.update_decision(
+        refund_id=record.refund_id,
+        decision="auto_approve",
+        reasoning="Float test passed.",
+        matched_policy_rule=None,
+        confidence_score=0.92,
+        status="completed",
+        tool_calls=float_tool_calls,
+    )
+
+    # Check raw DynamoDB item has Decimal values
+    raw = repository.table.items[record.refund_id]
+    raw_calls = raw["tool_calls"]
+    assert isinstance(raw_calls[0]["tool_output"]["charge_amount"], Decimal)
+    assert raw_calls[0]["tool_output"]["charge_amount"] == Decimal("149.99")
+    assert isinstance(raw_calls[0]["tool_output"]["nested"]["refund_ratio"], Decimal)
+
+    # Check retrieved object has standard float values
+    fetched = repository.get_refund_request(record.refund_id)
+    assert fetched is not None
+    assert isinstance(fetched.tool_calls[0]["tool_output"]["charge_amount"], float)
+    assert fetched.tool_calls[0]["tool_output"]["charge_amount"] == 149.99
+    assert isinstance(fetched.tool_calls[0]["tool_output"]["nested"]["refund_ratio"], float)
+    assert fetched.tool_calls[0]["tool_output"]["nested"]["refund_ratio"] == 0.85
+
+
+def test_refund_record_deserializes_missing_tool_calls_to_empty_list(repository: RefundRepository):
+    """Verify deserialization of legacy DynamoDB items lacking tool_calls attribute defaults to []."""
+    legacy_item = {
+        "refund_id": "ref_legacy_audit",
+        "order_id": "ORD-LEGACY",
+        "customer_request_text": "Legacy record without tool_calls",
+        "status": "pending",
+        "created_at": "2026-09-01T00:00:00+00:00",
+        "updated_at": "2026-09-01T00:00:00+00:00",
+    }
+    repository.table.items["ref_legacy_audit"] = legacy_item
+    fetched = repository.get_refund_request("ref_legacy_audit")
+    assert fetched is not None
+    assert fetched.tool_calls == []
+
+
+
