@@ -8,6 +8,7 @@ from typing import Any
 import boto3
 
 from app.agents.classifier import classifier_node as agent_classifier_node
+from app.agents.clarification import generate_clarification_prompt
 from app.agents.decision import decision_node as agent_decision_node
 from app.agents.policy_checker import policy_checker_node as agent_policy_checker_node
 from app.core.config import get_settings
@@ -93,7 +94,7 @@ def intake_validate_node(state: dict[str, Any]) -> dict[str, Any]:
         state: Initial workflow state dictionary.
 
     Returns:
-        Dictionary update with 'order' and 'missing_order_data'.
+        Dictionary update with order details, missing order flag, and clarification fields.
     """
     order = state.get("order")
     order_id = state.get("order_id", "")
@@ -105,15 +106,74 @@ def intake_validate_node(state: dict[str, Any]) -> dict[str, Any]:
     state["order"] = order
     state["missing_order_data"] = missing_order_data
 
+    clarification_count = state.get("clarification_count")
+    if clarification_count is None:
+        clarification_count = 0
+    state["clarification_count"] = clarification_count
+
+    clarification_prompt = state.get("clarification_prompt")
+    clarification_response = state.get("clarification_response")
+    needs_clarification = state.get("needs_clarification", False)
+
     return {
         "order": order,
         "missing_order_data": missing_order_data,
+        "clarification_count": clarification_count,
+        "clarification_prompt": clarification_prompt,
+        "clarification_response": clarification_response,
+        "needs_clarification": needs_clarification,
     }
 
 
 def classifier_node(state: dict[str, Any]) -> dict[str, Any]:
     """Classify customer refund request reason."""
     return agent_classifier_node(state)
+
+
+def clarification_node(state: dict[str, Any]) -> dict[str, Any]:
+    """Generate customer clarification prompt and pause workflow awaiting response.
+
+    Args:
+        state: Workflow state dictionary.
+
+    Returns:
+        Dictionary update with clarification prompt, incremented count, and awaiting_clarification status.
+    """
+    customer_text = state.get("customer_request_text", "")
+    category = state.get("category")
+    order = state.get("order")
+
+    output = generate_clarification_prompt(
+        customer_request_text=customer_text,
+        category=category,
+        order=order,
+    )
+    prompt = output.clarification_prompt
+
+    current_count = (
+        state.get("clarification_count")
+        if state.get("clarification_count") is not None
+        else 0
+    ) + 1
+
+    refund_id = state.get("refund_id")
+    if refund_id:
+        repo = get_current_repository() or state.get("_repository")
+        if repo is not None:
+            try:
+                repo.request_clarification(
+                    refund_id=refund_id,
+                    clarification_prompt=prompt,
+                )
+            except (RefundNotFoundError, Exception):
+                pass
+
+    return {
+        "clarification_prompt": prompt,
+        "clarification_count": current_count,
+        "status": "awaiting_clarification",
+        "needs_clarification": True,
+    }
 
 
 def policy_checker_node(state: dict[str, Any]) -> dict[str, Any]:

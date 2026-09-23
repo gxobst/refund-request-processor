@@ -14,13 +14,21 @@ from app.graph.nodes import (
     intake_validate_node,
     set_current_repository,
 )
+from app.agents.clarification import ClarificationOutput
 from app.graph.runner import run_refund_workflow
-from app.graph.workflow import build_refund_graph
+from app.graph.workflow import build_refund_graph, route_classifier
 from app.schemas.classifier import ClassificationOutput
 
 
 def make_mock_llm(output: ClassificationOutput) -> MagicMock:
     """Helper creating a mocked BaseChatModel returning a structured ClassificationOutput."""
+    mock = MagicMock()
+    mock.with_structured_output.return_value = RunnableLambda(lambda _: output)
+    return mock
+
+
+def make_mock_clarification_llm(output: ClarificationOutput) -> MagicMock:
+    """Helper creating a mocked BaseChatModel returning a structured ClarificationOutput."""
     mock = MagicMock()
     mock.with_structured_output.return_value = RunnableLambda(lambda _: output)
     return mock
@@ -88,13 +96,114 @@ async def test_workflow_denied_flow():
     assert "denied" in final_state["reasoning"].lower()
 
 
+def test_route_classifier_router_logic():
+    # Low confidence (< 0.70) with count 0 -> clarification
+    assert route_classifier({"confidence_score": 0.5, "clarification_count": 0}) == "clarification"
+    # Low confidence with count 1 -> clarification
+    assert route_classifier({"confidence_score": 0.5, "clarification_count": 1}) == "clarification"
+    # Low confidence with count 2 -> decision
+    assert route_classifier({"confidence_score": 0.5, "clarification_count": 2}) == "decision"
+    # Low confidence with count 3 -> decision
+    assert route_classifier({"confidence_score": 0.5, "clarification_count": 3}) == "decision"
+    # is_low_confidence True with count 0 -> clarification
+    assert route_classifier({"is_low_confidence": True, "clarification_count": 0}) == "clarification"
+    # is_low_confidence True with count 2 -> decision
+    assert route_classifier({"is_low_confidence": True, "clarification_count": 2}) == "decision"
+    # Boundary 0.70 -> policy_checker
+    assert route_classifier({"confidence_score": 0.70, "clarification_count": 0}) == "policy_checker"
+    # High confidence 0.95 with count 2 -> policy_checker
+    assert route_classifier({"confidence_score": 0.95, "clarification_count": 2}) == "policy_checker"
+
+
 @pytest.mark.asyncio
-async def test_workflow_escalation_flow_on_low_confidence():
-    # Arrange: Low classifier confidence (< 0.70)
+async def test_workflow_low_confidence_routes_to_clarification_initial():
+    """AC 1074: Low confidence (< 0.70) and count 0 routes to clarification and pauses."""
+    # Arrange
     mock_classification = ClassificationOutput(
         category="damaged",
         confidence_score=0.45,
         reasoning="Vague request.",
+    )
+    mock_clarification = ClarificationOutput(
+        clarification_prompt="Could you please upload a photo of the damaged item?",
+        missing_aspects=["photos"],
+        reasoning="Need photo evidence.",
+    )
+    mock_llm = make_mock_llm(mock_classification)
+    mock_clarify_llm = make_mock_clarification_llm(mock_clarification)
+    checkpointer = MemorySaver()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_llm)
+        mp.setattr("app.agents.clarification.get_bedrock_llm", lambda: mock_clarify_llm)
+
+        graph = build_refund_graph(checkpointer=checkpointer)
+        initial_state = {
+            "refund_id": "ref_test_clarify_0",
+            "order_id": "ORD-1001",
+            "customer_request_text": "Not sure what happened but need refund.",
+            "status": "pending",
+            "clarification_count": 0,
+        }
+        config = {"configurable": {"thread_id": "thread_clarify_0"}}
+        final_state = await graph.ainvoke(initial_state, config=config)
+
+    # Assert: pauses at clarification node, count becomes 1
+    assert final_state["status"] == "awaiting_clarification"
+    assert final_state["clarification_count"] == 1
+    assert final_state["needs_clarification"] is True
+    assert final_state["clarification_prompt"] == "Could you please upload a photo of the damaged item?"
+    assert final_state.get("decision") is None
+
+
+@pytest.mark.asyncio
+async def test_workflow_low_confidence_routes_to_clarification_second_attempt():
+    """AC 1075: Low confidence (< 0.70) and initial count 1 routes to clarification, count becomes 2."""
+    # Arrange
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.55,
+        reasoning="Still somewhat unclear.",
+    )
+    mock_clarification = ClarificationOutput(
+        clarification_prompt="Could you confirm the serial number?",
+        missing_aspects=["serial_number"],
+        reasoning="Unclear item identity.",
+    )
+    mock_llm = make_mock_llm(mock_classification)
+    mock_clarify_llm = make_mock_clarification_llm(mock_clarification)
+    checkpointer = MemorySaver()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_llm)
+        mp.setattr("app.agents.clarification.get_bedrock_llm", lambda: mock_clarify_llm)
+
+        graph = build_refund_graph(checkpointer=checkpointer)
+        initial_state = {
+            "refund_id": "ref_test_clarify_1",
+            "order_id": "ORD-1001",
+            "customer_request_text": "Item not working right.",
+            "status": "pending",
+            "clarification_count": 1,
+        }
+        config = {"configurable": {"thread_id": "thread_clarify_1"}}
+        final_state = await graph.ainvoke(initial_state, config=config)
+
+    # Assert: pauses at clarification node, count becomes 2
+    assert final_state["status"] == "awaiting_clarification"
+    assert final_state["clarification_count"] == 2
+    assert final_state["needs_clarification"] is True
+    assert final_state["clarification_prompt"] == "Could you confirm the serial number?"
+
+
+@pytest.mark.asyncio
+async def test_workflow_low_confidence_exhausted_clarification_escalates():
+    """AC 1076: Low confidence (< 0.70) with count 2 bypasses clarification, routes to decision -> escalates."""
+    # Arrange
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.45,
+        reasoning="Repeatedly ambiguous request.",
     )
     mock_llm = make_mock_llm(mock_classification)
     checkpointer = MemorySaver()
@@ -102,19 +211,87 @@ async def test_workflow_escalation_flow_on_low_confidence():
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_llm)
 
-        # Act: run workflow
-        final_state = await run_refund_workflow(
-            refund_id="ref_test_escalate_conf",
-            order_id="ORD-1001",
-            customer_request_text="Not sure what happened but need refund.",
-            checkpointer=checkpointer,
-        )
+        graph = build_refund_graph(checkpointer=checkpointer)
+        initial_state = {
+            "refund_id": "ref_test_clarify_exhausted",
+            "order_id": "ORD-1001",
+            "customer_request_text": "Still not clear.",
+            "status": "pending",
+            "clarification_count": 2,
+        }
+        config = {"configurable": {"thread_id": "thread_clarify_exhausted"}}
+        final_state = await graph.ainvoke(initial_state, config=config)
 
-    # Assert
+    # Assert: routed to decision, escalated
     assert final_state["decision"] == "escalate"
     assert final_state["status"] == "escalated"
     assert final_state["is_low_confidence"] is True
     assert "confidence" in final_state["reasoning"].lower()
+
+
+@pytest.mark.asyncio
+async def test_workflow_boundary_confidence_routes_to_policy_checker():
+    """AC 1077: Exact boundary confidence 0.70 routes to policy_checker rather than clarification."""
+    # Arrange
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.70,
+        reasoning="Adequately described issue.",
+    )
+    mock_llm = make_mock_llm(mock_classification)
+    checkpointer = MemorySaver()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_llm)
+
+        graph = build_refund_graph(checkpointer=checkpointer)
+        initial_state = {
+            "refund_id": "ref_test_boundary_70",
+            "order_id": "ORD-1001",
+            "customer_request_text": "Armrest broke during shipping.",
+            "status": "pending",
+            "clarification_count": 0,
+        }
+        config = {"configurable": {"thread_id": "thread_boundary_70"}}
+        final_state = await graph.ainvoke(initial_state, config=config)
+
+    # Assert: passed to policy checker -> auto_approve
+    assert final_state["status"] == "completed"
+    assert final_state["decision"] == "auto_approve"
+    assert final_state["policy_status"] == "pass"
+    assert final_state.get("clarification_prompt") is None
+
+
+@pytest.mark.asyncio
+async def test_workflow_high_confidence_with_count_2_routes_to_policy_checker():
+    """AC 1078: High confidence (>= 0.70) with count 2 routes to policy_checker and reaches normal completion."""
+    # Arrange
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.95,
+        reasoning="Clear explanation with photo details.",
+    )
+    mock_llm = make_mock_llm(mock_classification)
+    checkpointer = MemorySaver()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_llm)
+
+        graph = build_refund_graph(checkpointer=checkpointer)
+        initial_state = {
+            "refund_id": "ref_test_high_conf_resumed",
+            "order_id": "ORD-1001",
+            "customer_request_text": "The armrest arrived snapped in half as seen in attached photos.",
+            "status": "pending",
+            "clarification_count": 2,
+        }
+        config = {"configurable": {"thread_id": "thread_high_conf_resumed"}}
+        final_state = await graph.ainvoke(initial_state, config=config)
+
+    # Assert: routes to policy_checker and auto-approves
+    assert final_state["status"] == "completed"
+    assert final_state["decision"] == "auto_approve"
+    assert final_state["policy_status"] == "pass"
 
 
 @pytest.mark.asyncio
