@@ -18,6 +18,11 @@ from app.agents.clarification import ClarificationOutput
 from app.graph.runner import run_refund_workflow
 from app.graph.workflow import build_refund_graph, route_classifier
 from app.schemas.classifier import ClassificationOutput
+from app.schemas.policy_checker import PolicyCheckerOutput
+from langchain_core.messages import AIMessage, ToolMessage
+from tests.agents.test_policy_checker import MockToolCallingLLM
+
+
 
 
 def make_mock_llm(output: ClassificationOutput) -> MagicMock:
@@ -303,10 +308,20 @@ async def test_workflow_escalation_flow_on_missing_order():
         reasoning="Damaged item.",
     )
     mock_llm = make_mock_llm(mock_classification)
+    mock_policy_llm = MagicMock()
+    mock_policy_llm.with_structured_output.return_value = RunnableLambda(
+        lambda _: PolicyCheckerOutput(
+            policy_status="ambiguous",
+            passed_rules=[],
+            failed_rules=[],
+            policy_reasoning="Missing required order data.",
+        )
+    )
     checkpointer = MemorySaver()
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_llm)
+        mp.setattr("app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm)
 
         # Act
         final_state = await run_refund_workflow(
@@ -315,6 +330,7 @@ async def test_workflow_escalation_flow_on_missing_order():
             customer_request_text="Item broke.",
             checkpointer=checkpointer,
         )
+
 
     # Assert
     assert final_state["decision"] == "escalate"
@@ -727,4 +743,88 @@ async def test_workflow_with_dynamodb_order_lookup():
     assert final_state["order"]["order_amount"] == 120
     assert final_state["decision"] == "auto_approve"
     assert final_state["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_workflow_late_delivery_tool_calling_auto_approve():
+    """AC 1276: End-to-end LangGraph workflow routes through policy_checker_node with simulated tool calling for late delivery, completing with status=='completed' and decision=='auto_approve'."""
+    # Arrange: customer reporting late delivery for in-transit order ORD-1005 ($199.99 <= $300 limit)
+    mock_classification = ClassificationOutput(
+        category="late_delivery",
+        confidence_score=0.94,
+        reasoning="Customer reporting late delivery of in-transit item.",
+    )
+    mock_classifier_llm = make_mock_llm(mock_classification)
+
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "query_carrier_tracking",
+            "args": {"tracking_number": "TRK-1005"},
+            "id": "call_trk_flow_1005",
+        }],
+    )
+    policy_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=[],
+        policy_reasoning="Carrier tracking confirmed shipment is delayed in transit past expected delivery.",
+    )
+    mock_policy_llm = MockToolCallingLLM(responses=[tool_call_msg], final_output=policy_output)
+    checkpointer = MemorySaver()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm)
+        mp.setattr("app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm)
+
+        final_state = await run_refund_workflow(
+            refund_id="ref_test_late_flow",
+            order_id="ORD-1005",
+            customer_request_text="My order has been delayed for over a week and hasn't arrived.",
+            checkpointer=checkpointer,
+        )
+
+    # Assert: completes auto_approve with late_delivery category
+    assert final_state["status"] == "completed"
+    assert final_state["decision"] == "auto_approve"
+    assert final_state["category"] == "late_delivery"
+    assert final_state["policy_status"] == "pass"
+    assert len(mock_policy_llm.invocations) >= 2
+    # Verify carrier tool was called and result received
+    tool_messages = [m for m in mock_policy_llm.invocations[1] if isinstance(m, ToolMessage)]
+    assert len(tool_messages) == 1
+    assert "TRK-1005" in tool_messages[0].content
+
+
+@pytest.mark.asyncio
+async def test_workflow_clear_cut_pass_bypasses_tools():
+    """AC 1277: Clear-cut passing request completes workflow without invoking LLM or tools."""
+    # Arrange: ORD-1001 is damaged, delivered recently, $250 <= $500
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.95,
+        reasoning="Clear damage reported.",
+    )
+    mock_classifier_llm = make_mock_llm(mock_classification)
+    mock_policy_llm = MagicMock()
+    checkpointer = MemorySaver()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm)
+        mp.setattr("app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm)
+
+        final_state = await run_refund_workflow(
+            refund_id="ref_test_bypass_tools",
+            order_id="ORD-1001",
+            customer_request_text="The armrest on the chair broke during transit.",
+            checkpointer=checkpointer,
+        )
+
+    # Assert: completes auto_approve
+    assert final_state["status"] == "completed"
+    assert final_state["decision"] == "auto_approve"
+    assert final_state["policy_status"] == "pass"
+    # Verify policy checker LLM was never called because deterministic pass bypassed it
+    mock_policy_llm.assert_not_called()
+
 

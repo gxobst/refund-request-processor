@@ -178,7 +178,7 @@ def clarification_node(state: dict[str, Any]) -> dict[str, Any]:
 
 def policy_checker_node(state: dict[str, Any]) -> dict[str, Any]:
     """Evaluate order against refund policy rules."""
-    if state.get("missing_order_data") or not state.get("order"):
+    if not state.get("order") and not state.get("order_id"):
         return {
             "policy_status": "ambiguous",
             "matched_policy_rule": None,
@@ -187,6 +187,7 @@ def policy_checker_node(state: dict[str, Any]) -> dict[str, Any]:
             "failed_rules": [],
         }
     return agent_policy_checker_node(state)
+
 
 
 
