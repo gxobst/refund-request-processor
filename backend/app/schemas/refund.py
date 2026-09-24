@@ -78,6 +78,10 @@ class RefundRecord(BaseModel):
         default_factory=list,
         description="Audit log of external tool invocations, arguments, and results.",
     )
+    approval_email_text: str | None = Field(
+        default=None,
+        description="Confirmation and return instructions email text generated for approved refunds.",
+    )
 
 
 class RefundDecisionUpdate(BaseModel):
@@ -89,6 +93,7 @@ class RefundDecisionUpdate(BaseModel):
     confidence_score: float = Field(..., ge=0.0, le=1.0)
     status: RefundStatus
     tool_calls: list[dict[str, Any]] | None = None
+    approval_email_text: str | None = None
 
 
 class RefundOverrideUpdate(BaseModel):

@@ -158,6 +158,7 @@ class RefundRepository:
         confidence_score: float,
         status: str,
         tool_calls: list[dict[str, Any]] | None = None,
+        approval_email_text: str | None = None,
     ) -> RefundRecord:
         """Update decision metadata and workflow status for an existing refund record.
 
@@ -169,6 +170,7 @@ class RefundRepository:
             confidence_score: Float confidence score between 0.0 and 1.0.
             status: Workflow status ('completed' or 'escalated').
             tool_calls: Optional list of executed tool call audit dictionaries.
+            approval_email_text: Optional generated confirmation and return instructions email text.
 
         Returns:
             Updated RefundRecord instance.
@@ -193,6 +195,13 @@ class RefundRepository:
         else:
             updated_dict["tool_calls"] = existing.tool_calls or []
 
+        if approval_email_text is not None:
+            updated_dict["approval_email_text"] = approval_email_text
+        elif decision != "auto_approve":
+            updated_dict["approval_email_text"] = None
+        else:
+            updated_dict["approval_email_text"] = existing.approval_email_text
+
         item = _convert_floats_to_decimal(updated_dict)
         self.table.put_item(Item=item)
         return RefundRecord.model_validate(updated_dict)
@@ -202,6 +211,7 @@ class RefundRepository:
         refund_id: str,
         override_decision: str,
         override_reason: str,
+        approval_email_text: str | None = None,
     ) -> RefundRecord:
         """Record a human manual override and update final decision.
 
@@ -209,6 +219,7 @@ class RefundRepository:
             refund_id: Target refund request ID.
             override_decision: Human override decision ('approve' or 'deny').
             override_reason: Justification for the override.
+            approval_email_text: Optional custom or pre-generated approval email text.
 
         Returns:
             Updated RefundRecord instance.
@@ -228,6 +239,14 @@ class RefundRepository:
         updated_dict["updated_at"] = now_iso
         updated_dict["decision"] = override_decision
         updated_dict["status"] = "completed"
+
+        if override_decision in ("approve", "auto_approve"):
+            if approval_email_text is None:
+                from app.agents.approval_notifier import generate_approval_email
+                approval_email_text = generate_approval_email(order_id=existing.order_id, refund_id=refund_id)
+            updated_dict["approval_email_text"] = approval_email_text
+        else:
+            updated_dict["approval_email_text"] = None
 
         item = _convert_floats_to_decimal(updated_dict)
         self.table.put_item(Item=item)

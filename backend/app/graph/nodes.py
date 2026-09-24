@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 import boto3
 
+from app.agents.approval_notifier import generate_approval_email
 from app.agents.classifier import classifier_node as agent_classifier_node
 from app.agents.clarification import generate_clarification_prompt
 from app.agents.decision import decision_node as agent_decision_node
@@ -197,7 +198,16 @@ def policy_checker_node(state: dict[str, Any]) -> dict[str, Any]:
 
 def decision_node(state: dict[str, Any]) -> dict[str, Any]:
     """Synthesize findings into final approval, denial, or escalation decision."""
-    return agent_decision_node(state)
+    res = agent_decision_node(state)
+    decision = res.get("decision")
+    if decision == "auto_approve":
+        order_id = state.get("order_id", "")
+        refund_id = state.get("refund_id")
+        approval_email = generate_approval_email(order_id=order_id, refund_id=refund_id)
+        res["approval_email_text"] = approval_email
+    else:
+        res["approval_email_text"] = None
+    return res
 
 
 def save_dynamo_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -216,6 +226,7 @@ def save_dynamo_node(state: dict[str, Any]) -> dict[str, Any]:
     confidence = state.get("confidence_score", 0.0)
     status = state.get("status", "completed")
     tool_calls = state.get("tool_calls", [])
+    approval_email_text = state.get("approval_email_text")
 
     if refund_id:
         repo = get_current_repository() or state.get("_repository") or RefundRepository()
@@ -229,6 +240,7 @@ def save_dynamo_node(state: dict[str, Any]) -> dict[str, Any]:
                     confidence_score=confidence,
                     status=status,
                     tool_calls=tool_calls,
+                    approval_email_text=approval_email_text,
                 )
             except TypeError:
                 repo.update_decision(
@@ -245,4 +257,4 @@ def save_dynamo_node(state: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             pass
 
-    return {"status": status}
+    return {"status": status, "approval_email_text": approval_email_text}

@@ -915,4 +915,100 @@ def test_refund_record_deserializes_missing_tool_calls_to_empty_list(repository:
     assert fetched.tool_calls == []
 
 
+def test_update_decision_persists_and_retrieves_approval_email_text(repository: RefundRepository):
+    """Verify update_decision persists approval_email_text for auto_approve and retrieves cleanly."""
+    record = repository.create_refund_request(
+        order_id="ORD-1001",
+        customer_request_text="Need refund for chair",
+    )
+    email_text = "Dear Customer,\nYour refund for order ORD-1001 is approved.\nRMA-1001-AUTH\nSincerely,\nSupport"
+
+    updated = repository.update_decision(
+        refund_id=record.refund_id,
+        decision="auto_approve",
+        reasoning="Policy met.",
+        matched_policy_rule={"rule": "damaged"},
+        confidence_score=0.95,
+        status="completed",
+        approval_email_text=email_text,
+    )
+    assert updated.approval_email_text == email_text
+
+    fetched = repository.get_refund_request(record.refund_id)
+    assert fetched is not None
+    assert fetched.approval_email_text == email_text
+
+    # Updating to deny clears or sets approval_email_text to None
+    denied = repository.update_decision(
+        refund_id=record.refund_id,
+        decision="deny",
+        reasoning="Ineligible.",
+        matched_policy_rule=None,
+        confidence_score=0.99,
+        status="completed",
+    )
+    assert denied.approval_email_text is None
+    fetched_denied = repository.get_refund_request(record.refund_id)
+    assert fetched_denied is not None
+    assert fetched_denied.approval_email_text is None
+
+
+def test_apply_override_persists_and_retrieves_approval_email_text(repository: RefundRepository):
+    """Verify apply_override generates and persists approval_email_text on approve, and None on deny."""
+    # 1. Approve override
+    rec_approve = repository.create_refund_request(
+        order_id="ORD-1002",
+        customer_request_text="Damaged headphones",
+    )
+    overridden_approve = repository.apply_override(
+        refund_id=rec_approve.refund_id,
+        override_decision="approve",
+        override_reason="Supervisor approved replacement/refund.",
+    )
+    assert overridden_approve.decision == "approve"
+    assert overridden_approve.approval_email_text is not None
+    assert "Dear Customer," in overridden_approve.approval_email_text
+    assert "ORD-1002" in overridden_approve.approval_email_text
+    assert "RMA" in overridden_approve.approval_email_text
+
+    fetched_approve = repository.get_refund_request(rec_approve.refund_id)
+    assert fetched_approve is not None
+    assert fetched_approve.approval_email_text == overridden_approve.approval_email_text
+
+    # 2. Deny override
+    rec_deny = repository.create_refund_request(
+        order_id="ORD-1003",
+        customer_request_text="Monitor issue",
+    )
+    overridden_deny = repository.apply_override(
+        refund_id=rec_deny.refund_id,
+        override_decision="deny",
+        override_reason="User damage confirmed.",
+    )
+    assert overridden_deny.decision == "deny"
+    assert overridden_deny.approval_email_text is None
+
+    fetched_deny = repository.get_refund_request(rec_deny.refund_id)
+    assert fetched_deny is not None
+    assert fetched_deny.approval_email_text is None
+
+
+def test_refund_record_deserializes_missing_approval_email_text_to_none(repository: RefundRepository):
+    """Verify that legacy DynamoDB items lacking approval_email_text attribute deserialize cleanly with None."""
+    legacy_item = {
+        "refund_id": "ref_legacy_no_email",
+        "order_id": "ORD-LEGACY-001",
+        "customer_request_text": "Legacy record without approval_email_text",
+        "status": "completed",
+        "decision": "auto_approve",
+        "created_at": "2026-09-01T00:00:00+00:00",
+        "updated_at": "2026-09-01T00:00:00+00:00",
+    }
+    repository.table.items["ref_legacy_no_email"] = legacy_item
+    fetched = repository.get_refund_request("ref_legacy_no_email")
+    assert fetched is not None
+    assert fetched.approval_email_text is None
+
+
+
 

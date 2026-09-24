@@ -828,3 +828,50 @@ async def test_workflow_clear_cut_pass_bypasses_tools():
     mock_policy_llm.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_workflow_auto_approve_generates_and_persists_approval_email_text():
+    """AC 1951: Verify that an auto-approved workflow run outputs approval_email_text in final state and persists it to DynamoDB."""
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.95,
+        reasoning="Customer reported damaged item with clear evidence.",
+    )
+    mock_llm = make_mock_llm(mock_classification)
+    checkpointer = MemorySaver()
+
+    # Mock DynamoDB repository to verify persistence
+    mock_repo = MagicMock(spec=["update_decision"])
+    set_current_repository(mock_repo)
+
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_llm)
+
+            final_state = await run_refund_workflow(
+                refund_id="ref_test_email_persistence",
+                order_id="ORD-1001",
+                customer_request_text="Chair arrived damaged.",
+                checkpointer=checkpointer,
+            )
+
+        # Assert final workflow state
+        assert final_state["decision"] == "auto_approve"
+        assert final_state["status"] == "completed"
+        assert "approval_email_text" in final_state
+        assert final_state["approval_email_text"] is not None
+        assert "Dear Customer," in final_state["approval_email_text"]
+        assert "ORD-1001" in final_state["approval_email_text"]
+        assert "RMA" in final_state["approval_email_text"]
+        assert "14-day" in final_state["approval_email_text"]
+
+        # Assert repository persistence
+        mock_repo.update_decision.assert_called_once()
+        kwargs = mock_repo.update_decision.call_args[1]
+        assert kwargs["refund_id"] == "ref_test_email_persistence"
+        assert kwargs["decision"] == "auto_approve"
+        assert kwargs["approval_email_text"] == final_state["approval_email_text"]
+    finally:
+        set_current_repository(None)
+
+
+
