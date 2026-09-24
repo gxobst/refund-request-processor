@@ -328,12 +328,14 @@ Analyze the situation and provide your determination:"""
             )
 
     except Exception as e:
+        err_msg = str(e).strip()
+        error_detail = err_msg if err_msg else type(e).__name__
         return PolicyCheckerOutput(
             policy_status="ambiguous",
             matched_policy_rule=eval_result.matched_policy_rule,
             passed_rules=eval_result.passed_rules,
             failed_rules=eval_result.failed_rules,
-            policy_reasoning=eval_result.details or f"External verification failed: {str(e)}",
+            policy_reasoning=f"External verification failed: {error_detail}",
             tool_calls=executed_tool_calls,
         )
 

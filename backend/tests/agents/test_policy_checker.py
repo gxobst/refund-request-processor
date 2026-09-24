@@ -811,3 +811,141 @@ def test_policy_checker_node_produces_expected_output_with_reasoning_extraction(
     assert "tool_calls" in node_result
 
 
+def test_check_policy_exception_on_late_delivery_returns_unmasked_reasoning():
+    """Verify that an exception on late delivery returns unmasked error reasoning and does not mask with pass string."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+    }
+    mock_llm = MagicMock()
+    bound_mock = MagicMock()
+    bound_mock.invoke.side_effect = RuntimeError("Bedrock connection timeout")
+    mock_llm.bind_tools.return_value = bound_mock
+
+    result = check_policy(category="late_delivery", order=order, llm=mock_llm)
+
+    assert isinstance(result, PolicyCheckerOutput)
+    assert result.policy_status == "ambiguous"
+    assert "External verification failed: Bedrock connection timeout" in result.policy_reasoning
+    assert "All policy rules passed" not in result.policy_reasoning
+    assert result.matched_policy_rule is not None
+    assert result.tool_calls == []
+
+
+def test_check_policy_exception_on_ambiguous_order_reports_error_details():
+    """Verify that an exception on ambiguous deterministic findings reports external verification failure."""
+    order = {
+        "order_id": "ORD-AMB-1",
+        "order_amount": 100.0,
+    }
+    mock_llm = MagicMock()
+    bound_mock = MagicMock()
+    bound_mock.invoke.side_effect = RuntimeError("Bedrock model unavailable")
+    mock_llm.bind_tools.return_value = bound_mock
+
+    result = check_policy(category="damaged", order=order, llm=mock_llm)
+
+    assert isinstance(result, PolicyCheckerOutput)
+    assert result.policy_status == "ambiguous"
+    assert "External verification failed: Bedrock model unavailable" in result.policy_reasoning
+
+
+def test_check_policy_exception_after_partial_tool_execution_preserves_tool_calls():
+    """Verify that when an exception occurs after tool execution, tool_calls are preserved."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+    }
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "query_carrier_tracking",
+            "args": {"tracking_number": "TRK-1005"},
+            "id": "call_trk_err",
+        }],
+    )
+    mock_llm = MagicMock()
+    bound_mock = MagicMock()
+    bound_mock.invoke.side_effect = [
+        tool_call_msg,
+        RuntimeError("Bedrock gateway timeout during tool response turn"),
+    ]
+    mock_llm.bind_tools.return_value = bound_mock
+
+    result = check_policy(category="late_delivery", order=order, llm=mock_llm)
+
+    assert isinstance(result, PolicyCheckerOutput)
+    assert result.policy_status == "ambiguous"
+    assert "External verification failed: Bedrock gateway timeout during tool response turn" in result.policy_reasoning
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0]["tool_name"] == "query_carrier_tracking"
+
+
+def test_check_policy_exception_with_empty_message_formats_exception_name():
+    """Verify that an exception with an empty message formats as External verification failed: <ExceptionName>."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+    }
+    mock_llm = MagicMock()
+    bound_mock = MagicMock()
+    bound_mock.invoke.side_effect = Exception("")
+    mock_llm.bind_tools.return_value = bound_mock
+
+    result = check_policy(category="late_delivery", order=order, llm=mock_llm)
+
+    assert isinstance(result, PolicyCheckerOutput)
+    assert result.policy_status == "ambiguous"
+    assert result.policy_reasoning == "External verification failed: Exception"
+
+
+def test_policy_checker_node_propagates_unmasked_exception_reasoning():
+    """Verify policy_checker_node produces output state with unmasked exception reasoning and preserved tool_calls."""
+    state = {
+        "refund_id": "ref_err_test",
+        "category": "late_delivery",
+        "order": {
+            "order_id": "ORD-1005",
+            "order_amount": 200.0,
+            "delivery_status": "in_transit",
+        },
+    }
+    mock_llm = MagicMock()
+    bound_mock = MagicMock()
+    bound_mock.invoke.side_effect = RuntimeError("Bedrock throttled")
+    mock_llm.bind_tools.return_value = bound_mock
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.policy_checker.get_bedrock_llm", lambda: mock_llm)
+        node_result = policy_checker_node(state)
+
+    assert node_result["policy_status"] == "ambiguous"
+    assert "External verification failed: Bedrock throttled" in node_result["policy_reasoning"]
+    assert "tool_calls" in node_result
+
+
+def test_downstream_decision_node_escalates_on_policy_verification_failure():
+    """Verify downstream decision_node evaluates ambiguous verification failure state to escalate."""
+    from app.agents.decision import decision_node
+
+    state = {
+        "category": "late_delivery",
+        "classification_confidence": 0.95,
+        "policy_status": "ambiguous",
+        "policy_reasoning": "External verification failed: Bedrock connection timeout",
+        "matched_policy_rule": {"refund_window_days": 30},
+        "failed_rules": [],
+        "tool_calls": [],
+    }
+
+    decision_state = decision_node(state)
+
+    assert decision_state["decision"] == "escalate"
+    assert decision_state["status"] == "escalated"
+    assert "External verification failed" in decision_state["reasoning"]
+
+
+
