@@ -17,6 +17,9 @@ def test_settings_default_values(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("DYNAMODB_TABLE_ORDERS", raising=False)
     monkeypatch.delenv("DYNAMODB_TABLE_CHECKPOINTS", raising=False)
     monkeypatch.delenv("DYNAMODB_ENDPOINT_URL", raising=False)
+    monkeypatch.delenv("S3_BUCKET_EVIDENCE", raising=False)
+    monkeypatch.delenv("S3_ENDPOINT_URL", raising=False)
+    monkeypatch.delenv("LOCAL_STORAGE_DIR", raising=False)
     monkeypatch.delenv("APP_ENV", raising=False)
 
     # Arrange & Act: construct settings without env overrides
@@ -35,6 +38,9 @@ def test_settings_default_values(monkeypatch: pytest.MonkeyPatch):
     assert settings.langsmith_tracing is False
     assert settings.langsmith_endpoint == "https://eu.api.smith.langchain.com"
     assert settings.langsmith_project == "refund-request-processor"
+    assert settings.s3_bucket_evidence == "refund-request-evidence"
+    assert settings.s3_endpoint_url is None
+    assert settings.local_storage_dir == "uploads"
     assert settings.app_env == "development"
 
 
@@ -46,6 +52,9 @@ def test_settings_custom_environment_variables(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DYNAMODB_TABLE_REFUNDS", "custom-refunds-table")
     monkeypatch.setenv("LANGSMITH_TRACING", "true")
     monkeypatch.setenv("LANGSMITH_API_KEY", "test-api-key-12345")
+    monkeypatch.setenv("S3_BUCKET_EVIDENCE", "custom-evidence-bucket")
+    monkeypatch.setenv("S3_ENDPOINT_URL", "http://localhost:9000")
+    monkeypatch.setenv("LOCAL_STORAGE_DIR", "custom_uploads")
     monkeypatch.setenv("APP_ENV", "production")
 
     # Act
@@ -58,6 +67,9 @@ def test_settings_custom_environment_variables(monkeypatch: pytest.MonkeyPatch):
     assert settings.dynamodb_table_refunds == "custom-refunds-table"
     assert settings.langsmith_tracing is True
     assert settings.langsmith_api_key == "test-api-key-12345"
+    assert settings.s3_bucket_evidence == "custom-evidence-bucket"
+    assert settings.s3_endpoint_url == "http://localhost:9000"
+    assert settings.local_storage_dir == "custom_uploads"
     assert settings.app_env == "production"
 
 

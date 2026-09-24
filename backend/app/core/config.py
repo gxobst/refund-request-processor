@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     langsmith_api_key: str | None = None
     langsmith_project: str = "refund-request-processor"
 
+    # AWS S3 & Evidence Storage
+    s3_bucket_evidence: str = "refund-request-evidence"
+    s3_endpoint_url: str | None = None
+    local_storage_dir: str = "uploads"
+
     # Environment
     app_env: str = "development"
 
