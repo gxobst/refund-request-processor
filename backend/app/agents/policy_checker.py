@@ -297,7 +297,7 @@ Analyze the situation and provide your determination:"""
 
         # Produce final structured output via reasoning-safe extraction
         messages.append(HumanMessage(content=FINAL_SYNTHESIS_PROMPT))
-        final_response = model.invoke(messages)
+        final_response = bound_model.invoke(messages)
 
         if isinstance(final_response, PolicyCheckerOutput):
             result = final_response
@@ -311,10 +311,11 @@ Analyze the situation and provide your determination:"""
             final_text, eval_result, executed_tool_calls
         )
 
+        mock_final_output = getattr(bound_model, "final_output", None) or getattr(model, "final_output", None)
         if parsed_result is not None:
             result = parsed_result
-        elif hasattr(model, "final_output") and isinstance(getattr(model, "final_output"), PolicyCheckerOutput):
-            result = getattr(model, "final_output").model_copy(deep=True)
+        elif isinstance(mock_final_output, PolicyCheckerOutput):
+            result = mock_final_output.model_copy(deep=True)
             if result.matched_policy_rule is None and eval_result.matched_policy_rule is not None:
                 result.matched_policy_rule = eval_result.matched_policy_rule
             result.tool_calls = executed_tool_calls

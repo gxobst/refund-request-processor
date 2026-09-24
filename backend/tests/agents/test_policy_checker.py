@@ -1051,4 +1051,300 @@ def test_check_policy_ord_1010_payment_dispute_evaluates_to_ambiguous():
     assert "dispute" in result.policy_reasoning.lower()
 
 
+def test_check_policy_synthesis_calls_bound_model_invoke_not_unbound_model():
+    """AC 1800: Verify that bound_model.invoke is called for synthesis and unbound model.invoke is not called."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+        "purchase_date": "2026-09-01",
+    }
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "query_carrier_tracking",
+            "args": {"tracking_number": "TRK-1005"},
+            "id": "call_trk_bound_test",
+        }],
+    )
+    synthesis_msg = AIMessage(
+        content=json.dumps({
+            "policy_status": "pass",
+            "passed_rules": ["refund_window_days", "eligible_delivery_statuses"],
+            "failed_rules": [],
+            "policy_reasoning": "Tracking confirms in transit delay past window.",
+        })
+    )
+    mock_model = MagicMock()
+    bound_mock = MagicMock()
+    bound_mock.invoke.side_effect = [tool_call_msg, synthesis_msg]
+    mock_model.bind_tools.return_value = bound_mock
+
+    result = check_policy(category="late_delivery", order=order, llm=mock_model)
+
+    assert result.policy_status == "pass"
+    # Verify bound_model.invoke was called for both tool calling and synthesis
+    assert bound_mock.invoke.call_count == 2
+    # Verify unbound model.invoke was never called directly for synthesis
+    mock_model.invoke.assert_not_called()
+
+
+def test_check_policy_no_toolconfig_runtime_warning_emitted():
+    """AC 1801: Verify that no RuntimeWarning matching 'Tool messages were passed without toolConfig' is emitted."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+        "purchase_date": "2026-09-01",
+    }
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "query_carrier_tracking",
+            "args": {"tracking_number": "TRK-1005"},
+            "id": "call_trk_warn_test",
+        }],
+    )
+    synthesis_msg = AIMessage(
+        content=json.dumps({
+            "policy_status": "pass",
+            "passed_rules": ["refund_window_days"],
+            "failed_rules": [],
+            "policy_reasoning": "Carrier delay confirmed without warnings.",
+        })
+    )
+
+    class MockConverseWarningModel:
+        """Mock LLM that warns if ToolMessage is passed to an unbound instance."""
+        def __init__(self, is_bound: bool = False):
+            self.is_bound = is_bound
+            self.call_count = 0
+
+        def bind_tools(self, tools: list[Any]) -> "MockConverseWarningModel":
+            return MockConverseWarningModel(is_bound=True)
+
+        def invoke(self, messages: list[Any], **kwargs: Any) -> AIMessage:
+            self.call_count += 1
+            has_tool_message = any(isinstance(m, ToolMessage) for m in messages)
+            if has_tool_message and not self.is_bound:
+                import warnings
+                warnings.warn(
+                    "Tool messages were passed without toolConfig, converting to text format",
+                    RuntimeWarning,
+                )
+            if self.call_count == 1:
+                return tool_call_msg
+            return synthesis_msg
+
+    model = MockConverseWarningModel(is_bound=False)
+
+    import warnings
+    with warnings.catch_warnings(record=True) as recorded_warnings:
+        warnings.simplefilter("always")
+        result = check_policy(category="late_delivery", order=order, llm=model)
+
+    assert result.policy_status == "pass"
+    tool_warnings = [
+        w for w in recorded_warnings
+        if issubclass(w.category, RuntimeWarning)
+        and "Tool messages were passed without toolConfig" in str(w.message)
+    ]
+    assert len(tool_warnings) == 0, f"Expected 0 toolConfig warnings, got: {tool_warnings}"
+
+
+def test_check_policy_synthesis_does_not_inject_tool_choice_with_reasoning_config():
+    """AC 1802: Verify that bound_model.invoke during synthesis does NOT inject toolChoice='tool' or 'any'."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+        "purchase_date": "2026-09-01",
+    }
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "query_carrier_tracking",
+            "args": {"tracking_number": "TRK-1005"},
+            "id": "call_trk_rc_test",
+        }],
+    )
+    synthesis_msg = AIMessage(
+        content=json.dumps({
+            "policy_status": "pass",
+            "passed_rules": ["refund_window_days"],
+            "failed_rules": [],
+            "policy_reasoning": "Reasoning config compliant synthesis.",
+        })
+    )
+    mock_model = MagicMock()
+    mock_model.additional_model_request_fields = {
+        "reasoningConfig": {"type": "enabled", "maxReasoningEffort": "high"}
+    }
+    bound_mock = MagicMock()
+    invoked_kwargs_list: list[dict[str, Any]] = []
+
+    def mock_invoke(messages: list[Any], **kwargs: Any) -> AIMessage:
+        invoked_kwargs_list.append(kwargs)
+        if len(invoked_kwargs_list) == 1:
+            return tool_call_msg
+        return synthesis_msg
+
+    bound_mock.invoke.side_effect = mock_invoke
+    mock_model.bind_tools.return_value = bound_mock
+
+    result = check_policy(category="late_delivery", order=order, llm=mock_model)
+
+    assert result.policy_status == "pass"
+    assert bound_mock.invoke.call_count == 2
+    for kw in invoked_kwargs_list:
+        assert kw.get("tool_choice") not in ("tool", "any")
+        assert kw.get("toolChoice") not in ("tool", "any")
+        if isinstance(kw.get("tool_choice"), dict):
+            assert "tool" not in kw["tool_choice"]
+
+
+def test_check_policy_synthesis_structured_output_from_bound_model_direct_and_fenced():
+    """AC 1803: Verify check_policy extracts valid PolicyCheckerOutput if bound_model returns PolicyCheckerOutput directly or fenced JSON."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+    }
+    # 1. Direct PolicyCheckerOutput from bound_model.invoke
+    direct_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days"],
+        failed_rules=[],
+        policy_reasoning="Direct structured output from bound model.",
+    )
+    mock_model_1 = MagicMock()
+    bound_mock_1 = MagicMock()
+    bound_mock_1.invoke.side_effect = [
+        AIMessage(content="Evaluating..."),
+        direct_output,
+    ]
+    mock_model_1.bind_tools.return_value = bound_mock_1
+
+    result_1 = check_policy(category="late_delivery", order=order, llm=mock_model_1)
+    assert result_1.policy_status == "pass"
+    assert result_1.policy_reasoning == "Direct structured output from bound model."
+
+    # 2. Markdown fenced JSON from bound_model.invoke
+    fenced_content = "```json\n" + json.dumps({
+        "policy_status": "fail",
+        "passed_rules": [],
+        "failed_rules": ["refund_window_days"],
+        "policy_reasoning": "Fenced JSON from bound model synthesis.",
+    }) + "\n```"
+    mock_model_2 = MagicMock()
+    bound_mock_2 = MagicMock()
+    bound_mock_2.invoke.side_effect = [
+        AIMessage(content="Evaluating..."),
+        AIMessage(content=fenced_content),
+    ]
+    mock_model_2.bind_tools.return_value = bound_mock_2
+
+    result_2 = check_policy(category="late_delivery", order=order, llm=mock_model_2)
+    assert result_2.policy_status == "fail"
+    assert result_2.policy_reasoning == "Fenced JSON from bound model synthesis."
+
+
+def test_check_policy_synthesis_exception_handled_gracefully():
+    """AC 1804: Verify exception during bound_model synthesis is caught, preserving tool_calls and reporting ambiguous."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+    }
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "query_carrier_tracking",
+            "args": {"tracking_number": "TRK-1005"},
+            "id": "call_trk_synth_fail",
+        }],
+    )
+    mock_model = MagicMock()
+    bound_mock = MagicMock()
+    bound_mock.invoke.side_effect = [
+        tool_call_msg,
+        RuntimeError("Bedrock service unavailable during synthesis"),
+    ]
+    mock_model.bind_tools.return_value = bound_mock
+
+    result = check_policy(category="late_delivery", order=order, llm=mock_model)
+
+    assert result.policy_status == "ambiguous"
+    assert "External verification failed: Bedrock service unavailable during synthesis" in result.policy_reasoning
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0]["tool_name"] == "query_carrier_tracking"
+
+
+def test_check_policy_fallback_when_model_lacks_bind_tools():
+    """AC 1799: Verify clean fallback to model when model does not implement bind_tools or active_tools is empty."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+    }
+    synthesis_msg = AIMessage(
+        content=json.dumps({
+            "policy_status": "pass",
+            "passed_rules": ["refund_window_days"],
+            "failed_rules": [],
+            "policy_reasoning": "Fallback model without bind_tools succeeded.",
+        })
+    )
+
+    class ModelWithoutBindTools:
+        """Model without bind_tools method."""
+        def invoke(self, messages: list[Any], **kwargs: Any) -> AIMessage:
+            return synthesis_msg
+
+    model = ModelWithoutBindTools()
+    assert not hasattr(model, "bind_tools")
+
+    result = check_policy(category="late_delivery", order=order, llm=model)
+    assert result.policy_status == "pass"
+    assert "Fallback model without bind_tools succeeded" in result.policy_reasoning
+
+
+def test_check_policy_fallback_final_output_inspection_on_bound_and_unbound_model():
+    """AC 1798: Verify fallback attribute inspection checks both bound_model and model for final_output."""
+    order = {
+        "order_id": "ORD-1005",
+        "order_amount": 200.0,
+        "delivery_status": "in_transit",
+    }
+    expected_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days"],
+        failed_rules=[],
+        policy_reasoning="Extracted from mock final_output attribute.",
+    )
+
+    # 1. final_output attribute on bound_model
+    mock_model_1 = MagicMock(spec=["bind_tools"])
+    bound_mock_1 = MagicMock()
+    bound_mock_1.final_output = expected_output
+    bound_mock_1.invoke.return_value = AIMessage(content="Non-JSON raw text determination.")
+    mock_model_1.bind_tools.return_value = bound_mock_1
+
+    result_1 = check_policy(category="late_delivery", order=order, llm=mock_model_1)
+    assert result_1.policy_status == "pass"
+    assert result_1.policy_reasoning == "Extracted from mock final_output attribute."
+
+    # 2. final_output attribute on model (unbound)
+    mock_model_2 = MagicMock()
+    mock_model_2.final_output = expected_output
+    bound_mock_2 = MagicMock(spec=["invoke"])  # no final_output on bound_mock
+    bound_mock_2.invoke.return_value = AIMessage(content="Non-JSON raw text determination.")
+    mock_model_2.bind_tools.return_value = bound_mock_2
+
+    result_2 = check_policy(category="late_delivery", order=order, llm=mock_model_2)
+    assert result_2.policy_status == "pass"
+    assert result_2.policy_reasoning == "Extracted from mock final_output attribute."
+
+
+
 
