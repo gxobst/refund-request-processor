@@ -201,10 +201,10 @@ def test_seed_orders_data_verification(mock_dynamo_resource: MockDynamoResource)
         table_name="mock-orders", dynamodb_resource=mock_dynamo_resource
     )
 
-    # Assert: verify count matches mock_orders.json (7 orders)
-    assert seeded_count == 7
+    # Assert: verify count matches mock_orders.json (9 orders)
+    assert seeded_count == 9
     table = mock_dynamo_resource.Table("mock-orders")
-    assert len(table.items) == 7
+    assert len(table.items) == 9
 
     # Verify retrieval and structure of key records
     ord_1001 = table.items.get("ORD-1001")
@@ -224,6 +224,22 @@ def test_seed_orders_data_verification(mock_dynamo_resource: MockDynamoResource)
     assert ord_1005 is not None
     assert ord_1005["delivery_status"] == "in_transit"
     assert "delivery_date" not in ord_1005  # null delivery date excluded from dynamo item
+
+    ord_1008 = table.items.get("ORD-1008")
+    assert ord_1008 is not None
+    assert ord_1008["order_id"] == "ORD-1008"
+    assert ord_1008["item"] == "Smart Fitness Watch"
+    assert ord_1008["order_amount"] == Decimal("99.0")
+    assert ord_1008["delivery_status"] == "delivered"
+    assert ord_1008["delivery_date"] == "2026-09-14"
+
+    ord_1009 = table.items.get("ORD-1009")
+    assert ord_1009 is not None
+    assert ord_1009["order_id"] == "ORD-1009"
+    assert ord_1009["item"] == "Wireless Earbuds"
+    assert ord_1009["order_amount"] == Decimal("60.0")
+    assert ord_1009["delivery_status"] == "delivered"
+    assert ord_1009["delivery_date"] == "2026-09-13"
 
 
 @pytest.mark.asyncio
@@ -393,6 +409,136 @@ async def test_e2e_clarification_lifecycle(mock_repo: RefundRepository):
     assert final_record["confidence_score"] >= 0.70
     assert final_record["clarification_response"] == clarify_payload["response_text"]
     assert "damaged" in final_record["reasoning"].lower() or "approved" in final_record["reasoning"].lower()
+
+
+@pytest.mark.asyncio
+async def test_e2e_clarification_lifecycle_ord_1008(mock_repo: RefundRepository):
+    """AC 1650 & 1651: Verify end-to-end customer clarification lifecycle for ORD-1008 from pause to auto-approval."""
+    payload = {
+        "order_id": "ORD-1008",
+        "customer_request_text": "I am unsure what happened, low confidence description of problem with fitness watch.",
+    }
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Step 1: Initial intake evaluates to confidence < 0.70 and pauses at awaiting_clarification
+        post_response = await client.post("/refunds", json=payload)
+        assert post_response.status_code == 202
+        refund_id = post_response.json()["refund_id"]
+
+        paused_record = await poll_until_not_pending(client, refund_id)
+        assert paused_record["status"] == "awaiting_clarification"
+        assert paused_record["clarification_count"] == 1
+        assert paused_record["clarification_prompt"] is not None
+
+        # Step 2: Customer submits high-confidence clarifying response via POST /refunds/{refund_id}/clarify
+        clarify_payload = {
+            "response_text": "The smart fitness watch screen is cracked and damaged during shipping.",
+        }
+        clarify_response = await client.post(
+            f"/refunds/{refund_id}/clarify", json=clarify_payload
+        )
+        assert clarify_response.status_code == 200
+        clarify_data = clarify_response.json()
+        assert clarify_data["status"] == "pending"
+        assert clarify_data["clarification_response"] == clarify_payload["response_text"]
+
+        # Step 3: Background workflow resumes, re-evaluates with confidence >= 0.70, and completes
+        final_record = await poll_until_not_pending(client, refund_id)
+
+    assert final_record["status"] == "completed"
+    assert final_record["decision"] == "auto_approve"
+    assert final_record["confidence_score"] >= 0.70
+    assert final_record["clarification_response"] == clarify_payload["response_text"]
+    assert "damaged" in final_record["reasoning"].lower() or "approved" in final_record["reasoning"].lower()
+
+
+@pytest.mark.asyncio
+async def test_e2e_clarification_exhaustion_escalates_ord_1009(mock_repo: RefundRepository):
+    """AC 1652: Verify that repeated ambiguous clarification responses for ORD-1009 exhaust cycles and escalate."""
+    payload = {
+        "order_id": "ORD-1009",
+        "customer_request_text": "I am unsure what happened, low confidence description of wireless earbuds.",
+    }
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Cycle 1: initial submission pauses at awaiting_clarification
+        post_response = await client.post("/refunds", json=payload)
+        assert post_response.status_code == 202
+        refund_id = post_response.json()["refund_id"]
+
+        clarify_1 = await poll_until_not_pending(client, refund_id)
+        assert clarify_1["status"] == "awaiting_clarification"
+        assert clarify_1["clarification_count"] == 1
+        assert clarify_1["clarification_prompt"] is not None
+
+        # Cycle 2: first ambiguous clarification response
+        res1 = await client.post(
+            f"/refunds/{refund_id}/clarify",
+            json={"response_text": "Still unsure about what happened, low confidence details."},
+        )
+        assert res1.status_code == 200
+
+        clarify_2 = await poll_until_not_pending(client, refund_id)
+        assert clarify_2["status"] == "awaiting_clarification"
+        assert clarify_2["clarification_count"] == 2
+
+        # Cycle 3: second ambiguous clarification response (exhausts max cycles >= 2)
+        res2 = await client.post(
+            f"/refunds/{refund_id}/clarify",
+            json={"response_text": "Still unsure and low confidence description."},
+        )
+        assert res2.status_code == 200
+
+        final_record = await poll_until_not_pending(client, refund_id)
+
+    assert final_record["status"] == "escalated"
+    assert final_record["decision"] == "escalate"
+    assert "confidence" in final_record["reasoning"].lower() or "clarification" in final_record["reasoning"].lower()
+
+
+@pytest.mark.asyncio
+async def test_e2e_high_confidence_requests_bypass_clarification(mock_repo: RefundRepository):
+    """AC 1653: Verify high-confidence refund requests for ORD-1001 and ORD-1003 bypass clarification."""
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. ORD-1001 with high confidence request text
+        res_1001 = await client.post(
+            "/refunds",
+            json={
+                "order_id": "ORD-1001",
+                "customer_request_text": "The chair arrived with a broken armrest during shipping.",
+            },
+        )
+        assert res_1001.status_code == 202
+        ref_id_1001 = res_1001.json()["refund_id"]
+
+        record_1001 = await poll_until_not_pending(client, ref_id_1001)
+        assert record_1001["status"] == "completed"
+        assert record_1001["decision"] == "auto_approve"
+        assert record_1001["confidence_score"] >= 0.70
+        assert record_1001["clarification_count"] == 0
+        assert record_1001["clarification_prompt"] is None
+
+        # 2. ORD-1003 with high confidence request text
+        res_1003 = await client.post(
+            "/refunds",
+            json={
+                "order_id": "ORD-1003",
+                "customer_request_text": "The monitor screen arrived shattered and damaged.",
+            },
+        )
+        assert res_1003.status_code == 202
+        ref_id_1003 = res_1003.json()["refund_id"]
+
+        record_1003 = await poll_until_not_pending(client, ref_id_1003)
+        assert record_1003["status"] == "completed"
+        assert record_1003["decision"] == "deny"
+        assert record_1003["confidence_score"] >= 0.70
+        assert record_1003["clarification_count"] == 0
+        assert record_1003["clarification_prompt"] is None
 
 
 @pytest.mark.asyncio

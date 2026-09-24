@@ -54,5 +54,21 @@
     "delivery_date": "2026-09-16",
     "order_amount": 200.0,
     "delivery_status": "delivered"
+  },
+  {
+    "order_id": "ORD-1008",
+    "item": "Smart Fitness Watch",
+    "purchase_date": "2026-09-12",
+    "delivery_date": "2026-09-14",
+    "order_amount": 99.0,
+    "delivery_status": "delivered"
+  },
+  {
+    "order_id": "ORD-1009",
+    "item": "Wireless Earbuds",
+    "purchase_date": "2026-09-11",
+    "delivery_date": "2026-09-13",
+    "order_amount": 60.0,
+    "delivery_status": "delivered"
   }
 ]
