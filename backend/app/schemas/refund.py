@@ -2,10 +2,29 @@
 
 from datetime import datetime, timezone
 from typing import Any, Literal
+import uuid
 from pydantic import BaseModel, Field, field_validator
 
 RefundStatus = Literal["pending", "completed", "escalated", "awaiting_clarification"]
 RefundDecision = Literal["auto_approve", "deny", "escalate"]
+
+
+class EvidenceItem(BaseModel):
+    """Metadata item representing an uploaded customer proof photo or video."""
+
+    evidence_id: str = Field(
+        default_factory=lambda: f"evi_{uuid.uuid4().hex[:8]}",
+        description="Unique identifier for the evidence item.",
+    )
+    storage_key: str = Field(..., description="Unique S3 or local storage key path.")
+    filename: str = Field(..., description="Sanitized original file name.")
+    content_type: str = Field(..., description="MIME content type (image or video).")
+    size_bytes: int = Field(..., ge=0, description="Size of the file in bytes.")
+    url: str = Field(..., description="Accessible URL for viewing or downloading the file.")
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="ISO-8601 creation timestamp.",
+    )
 
 
 class RefundCreateRequest(BaseModel):
@@ -81,6 +100,10 @@ class RefundRecord(BaseModel):
     approval_email_text: str | None = Field(
         default=None,
         description="Confirmation and return instructions email text generated for approved refunds.",
+    )
+    evidence: list[EvidenceItem] = Field(
+        default_factory=list,
+        description="Customer-uploaded proof attachments (images and videos).",
     )
 
 

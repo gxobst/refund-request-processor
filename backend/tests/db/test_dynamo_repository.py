@@ -6,7 +6,7 @@ import pytest
 
 from app.core.config import Settings
 from app.db.repository import RefundNotFoundError, RefundRepository
-from app.schemas.refund import RefundRecord
+from app.schemas.refund import EvidenceItem, RefundRecord
 
 
 class MockDynamoTable:
@@ -1008,6 +1008,84 @@ def test_refund_record_deserializes_missing_approval_email_text_to_none(reposito
     fetched = repository.get_refund_request("ref_legacy_no_email")
     assert fetched is not None
     assert fetched.approval_email_text is None
+
+
+def test_add_evidence_persists_and_retrieves_single_and_multiple_items(repository: RefundRepository):
+    """Verify add_evidence persists single and multiple evidence items with both model and dict inputs."""
+    record = repository.create_refund_request(
+        order_id="ORD-EVI-001",
+        customer_request_text="Crushed box with shattered glass",
+    )
+    assert record.evidence == []
+
+    # 1. Add first item via EvidenceItem instance
+    item1 = EvidenceItem(
+        storage_key="evidence/ORD-EVI-001/uuid1_box.jpg",
+        filename="box.jpg",
+        content_type="image/jpeg",
+        size_bytes=102400,
+        url="https://bucket.s3.amazonaws.com/evidence/ORD-EVI-001/uuid1_box.jpg",
+    )
+    updated1 = repository.add_evidence(refund_id=record.refund_id, evidence_item=item1)
+    assert len(updated1.evidence) == 1
+    assert updated1.evidence[0].filename == "box.jpg"
+    assert updated1.evidence[0].storage_key == item1.storage_key
+    assert updated1.evidence[0].size_bytes == 102400
+
+    fetched1 = repository.get_refund_request(record.refund_id)
+    assert fetched1 is not None
+    assert len(fetched1.evidence) == 1
+    assert fetched1.evidence[0].filename == "box.jpg"
+
+    # 2. Add second item via dict
+    dict_item = {
+        "storage_key": "evidence/ORD-EVI-001/uuid2_glass.png",
+        "filename": "glass.png",
+        "content_type": "image/png",
+        "size_bytes": 204800,
+        "url": "/static/uploads/evidence/ORD-EVI-001/uuid2_glass.png",
+    }
+    updated2 = repository.add_evidence(refund_id=record.refund_id, evidence_item=dict_item)
+    assert len(updated2.evidence) == 2
+    assert updated2.evidence[0].filename == "box.jpg"
+    assert updated2.evidence[1].filename == "glass.png"
+    assert updated2.evidence[1].content_type == "image/png"
+    assert updated2.evidence[1].size_bytes == 204800
+
+    fetched2 = repository.get_refund_request(record.refund_id)
+    assert fetched2 is not None
+    assert len(fetched2.evidence) == 2
+    assert fetched2.evidence[0].filename == "box.jpg"
+    assert fetched2.evidence[1].filename == "glass.png"
+
+
+def test_add_evidence_not_found_raises_refund_not_found_error(repository: RefundRepository):
+    """Verify add_evidence raises RefundNotFoundError when refund_id does not exist."""
+    item = EvidenceItem(
+        storage_key="evidence/UNKNOWN/test.jpg",
+        filename="test.jpg",
+        content_type="image/jpeg",
+        size_bytes=100,
+        url="/static/uploads/evidence/UNKNOWN/test.jpg",
+    )
+    with pytest.raises(RefundNotFoundError, match="Refund request with id 'nonexistent' not found"):
+        repository.add_evidence(refund_id="nonexistent", evidence_item=item)
+
+
+def test_refund_record_deserializes_missing_evidence_to_empty_list(repository: RefundRepository):
+    """Verify that legacy DynamoDB items lacking an evidence attribute deserialize cleanly with evidence=[]."""
+    legacy_item = {
+        "refund_id": "ref_legacy_no_evidence",
+        "order_id": "ORD-LEGACY-002",
+        "customer_request_text": "Legacy record before evidence feature",
+        "status": "pending",
+        "created_at": "2026-09-01T00:00:00+00:00",
+        "updated_at": "2026-09-01T00:00:00+00:00",
+    }
+    repository.table.items["ref_legacy_no_evidence"] = legacy_item
+    fetched = repository.get_refund_request("ref_legacy_no_evidence")
+    assert fetched is not None
+    assert fetched.evidence == []
 
 
 

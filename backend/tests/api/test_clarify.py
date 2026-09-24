@@ -13,7 +13,7 @@ from app.db.repository import RefundNotFoundError
 from app.graph.runner import resume_refund_workflow, run_refund_workflow
 from app.main import app
 from app.schemas.classifier import ClassificationOutput
-from app.schemas.refund import RefundRecord
+from app.schemas.refund import EvidenceItem, RefundRecord
 
 
 class MockRefundRepository:
@@ -93,6 +93,32 @@ class MockRefundRepository:
         self.records[refund_id] = updated
         return updated
 
+    def add_evidence(
+        self, refund_id: str, evidence_item: Any
+    ) -> RefundRecord:
+        record = self.records.get(refund_id)
+        if record is None:
+            raise RefundNotFoundError(f"Refund request '{refund_id}' not found.")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if isinstance(evidence_item, dict):
+            item = EvidenceItem.model_validate(evidence_item)
+        else:
+            item = evidence_item
+        evidence_list = list(record.evidence)
+        evidence_list.append(item)
+        updated = record.model_copy(
+            update={
+                "evidence": evidence_list,
+                "updated_at": now_iso,
+            }
+        )
+        self.records[refund_id] = updated
+        return updated
+
+
+from pathlib import Path
+from app.services.storage import EvidenceStorageService, get_evidence_storage_service
+
 
 @pytest.fixture
 def mock_repo() -> MockRefundRepository:
@@ -100,6 +126,14 @@ def mock_repo() -> MockRefundRepository:
     app.dependency_overrides[get_repository] = lambda: repo
     yield repo
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def mock_storage(tmp_path: Path):
+    service = EvidenceStorageService(local_dir=tmp_path, storage_backend="local")
+    app.dependency_overrides[get_evidence_storage_service] = lambda: service
+    yield service
+    app.dependency_overrides.pop(get_evidence_storage_service, None)
 
 
 @pytest.mark.asyncio
@@ -297,3 +331,119 @@ async def test_resume_refund_workflow_fallback_to_repository(monkeypatch: pytest
     assert updated_rec is not None
     assert updated_rec.status == "completed"
     assert updated_rec.decision == "auto_approve"
+
+
+@pytest.mark.asyncio
+async def test_clarify_multipart_form_without_file(mock_repo: MockRefundRepository):
+    """Test POST /refunds/{refund_id}/clarify accepts multipart form without attached file."""
+    refund_id = "ref-clarify-multipart-1"
+    mock_repo.seed_record(refund_id=refund_id, status="awaiting_clarification")
+    transport = ASGITransport(app=app)
+
+    with patch("app.api.refunds.resume_refund_workflow", new_callable=AsyncMock) as mock_resume:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                f"/refunds/{refund_id}/clarify",
+                data={"response_text": "Clarification provided via form."},
+            )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["refund_id"] == refund_id
+    assert data["status"] == "pending"
+    assert data["clarification_response"] == "Clarification provided via form."
+    assert data["evidence"] == []
+
+
+@pytest.mark.asyncio
+async def test_clarify_multipart_form_with_evidence_file(mock_repo: MockRefundRepository, tmp_path):
+    """Test POST /refunds/{refund_id}/clarify accepts multipart form with attached evidence file."""
+    refund_id = "ref-clarify-multipart-2"
+    mock_repo.seed_record(refund_id=refund_id, order_id="ORD-1002", status="awaiting_clarification")
+    transport = ASGITransport(app=app)
+
+    file_bytes = b"fake-jpeg-photo-damage-proof"
+    with patch("app.api.refunds.resume_refund_workflow", new_callable=AsyncMock):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                f"/refunds/{refund_id}/clarify",
+                data={"response_text": "Attached photo of crushed box and broken screen."},
+                files={"file": ("box_damage.jpg", file_bytes, "image/jpeg")},
+            )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "pending"
+    assert len(data["evidence"]) == 1
+    evidence = data["evidence"][0]
+    assert evidence["filename"] == "box_damage.jpg"
+    assert evidence["content_type"] == "image/jpeg"
+    assert evidence["size_bytes"] == len(file_bytes)
+    assert evidence["storage_key"].startswith("evidence/ORD-1002/")
+
+
+@pytest.mark.asyncio
+async def test_clarify_multipart_form_blank_response_text_422(mock_repo: MockRefundRepository):
+    """Test POST /refunds/{refund_id}/clarify returns 422 when response_text is blank in form data."""
+    refund_id = "ref-clarify-multipart-blank"
+    mock_repo.seed_record(refund_id=refund_id, status="awaiting_clarification")
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/refunds/{refund_id}/clarify",
+            data={"response_text": "   "},
+        )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_clarify_multipart_form_disallowed_extension_400(mock_repo: MockRefundRepository):
+    """Test POST /refunds/{refund_id}/clarify returns 400 when attached file has disallowed extension."""
+    refund_id = "ref-clarify-disallowed-ext"
+    mock_repo.seed_record(refund_id=refund_id, status="awaiting_clarification")
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/refunds/{refund_id}/clarify",
+            data={"response_text": "Exploit script attached."},
+            files={"file": ("malware.exe", b"MZ...", "image/jpeg")},
+        )
+    assert response.status_code == 400
+    assert "disallowed file extension" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_clarify_multipart_form_disallowed_mime_400(mock_repo: MockRefundRepository):
+    """Test POST /refunds/{refund_id}/clarify returns 400 when attached file has disallowed MIME type."""
+    refund_id = "ref-clarify-disallowed-mime"
+    mock_repo.seed_record(refund_id=refund_id, status="awaiting_clarification")
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/refunds/{refund_id}/clarify",
+            data={"response_text": "PDF invoice attached."},
+            files={"file": ("invoice.jpg", b"%PDF-1.4", "application/pdf")},
+        )
+    assert response.status_code == 400
+    assert "unsupported content type" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_clarify_multipart_form_oversized_file_413(mock_repo: MockRefundRepository):
+    """Test POST /refunds/{refund_id}/clarify returns 413 when attached file exceeds size limits."""
+    refund_id = "ref-clarify-oversized"
+    mock_repo.seed_record(refund_id=refund_id, status="awaiting_clarification")
+    transport = ASGITransport(app=app)
+
+    oversized_data = b"0" * (10 * 1024 * 1024 + 1)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/refunds/{refund_id}/clarify",
+            data={"response_text": "Oversized photo."},
+            files={"file": ("huge.jpg", oversized_data, "image/jpeg")},
+        )
+    assert response.status_code == 413
+    assert "exceeds maximum allowed limit" in response.json()["detail"].lower()

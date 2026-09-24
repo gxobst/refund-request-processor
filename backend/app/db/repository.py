@@ -7,7 +7,7 @@ import uuid
 import boto3
 
 from app.core.config import get_settings
-from app.schemas.refund import RefundRecord
+from app.schemas.refund import EvidenceItem, RefundRecord
 
 
 class RefundNotFoundError(KeyError):
@@ -317,6 +317,45 @@ class RefundRepository:
         updated_dict = existing.model_dump()
         updated_dict["status"] = "pending"
         updated_dict["clarification_response"] = clarification_response.strip()
+        updated_dict["updated_at"] = now_iso
+
+        item = _convert_floats_to_decimal(updated_dict)
+        self.table.put_item(Item=item)
+        return RefundRecord.model_validate(updated_dict)
+
+    def add_evidence(
+        self,
+        refund_id: str,
+        evidence_item: EvidenceItem | dict[str, Any],
+    ) -> RefundRecord:
+        """Append an evidence attachment item to an existing refund record.
+
+        Args:
+            refund_id: Target refund request ID.
+            evidence_item: EvidenceItem instance or equivalent dict.
+
+        Returns:
+            Updated RefundRecord instance.
+
+        Raises:
+            RefundNotFoundError: If the refund request does not exist.
+        """
+        existing = self.get_refund_request(refund_id)
+        if existing is None:
+            raise RefundNotFoundError(f"Refund request with id '{refund_id}' not found.")
+
+        if isinstance(evidence_item, EvidenceItem):
+            item_dict = evidence_item.model_dump()
+        elif isinstance(evidence_item, dict):
+            item_dict = EvidenceItem.model_validate(evidence_item).model_dump()
+        else:
+            raise TypeError("evidence_item must be an EvidenceItem or dict.")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        updated_dict = existing.model_dump()
+        current_evidence = list(updated_dict.get("evidence") or [])
+        current_evidence.append(item_dict)
+        updated_dict["evidence"] = current_evidence
         updated_dict["updated_at"] = now_iso
 
         item = _convert_floats_to_decimal(updated_dict)

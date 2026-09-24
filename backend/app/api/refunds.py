@@ -1,19 +1,59 @@
-"""FastAPI router for refund request operations, queue listing, and manual overrides."""
-
-from typing import Literal
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from email.parser import BytesParser
+from email.policy import default
+import io
+from pathlib import Path
+from typing import Any, Literal
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from starlette.datastructures import UploadFile
 
 from app.db.repository import RefundNotFoundError, RefundRepository
 from app.graph.runner import resume_refund_workflow, run_refund_workflow
 from app.schemas.refund import (
+    EvidenceItem,
     RefundClarificationRequest,
     RefundCreateRequest,
     RefundCreateResponse,
     RefundOverrideRequest,
     RefundRecord,
 )
+from app.services.storage import EvidenceStorageService, get_evidence_storage_service
 
 router = APIRouter(prefix="/refunds", tags=["refunds"])
+
+HTTP_413_STATUS = 413
+HTTP_422_STATUS = 422
+
+
+def _parse_multipart_request(
+    content_type_header: str, body_bytes: bytes
+) -> tuple[dict[str, str], list[UploadFile]]:
+    """Parse multipart/form-data body using standard library email parser."""
+    fields: dict[str, str] = {}
+    files: list[UploadFile] = []
+
+    msg_bytes = f"Content-Type: {content_type_header}\r\n\r\n".encode("latin1") + body_bytes
+    msg = BytesParser(policy=default).parsebytes(msg_bytes)
+
+    for part in msg.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        filename = part.get_filename()
+        content_type = part.get_content_type()
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            payload = b""
+
+        if filename is not None:
+            uf = UploadFile(
+                file=io.BytesIO(payload),
+                size=len(payload),
+                filename=filename,
+                headers={"content-type": content_type},
+            )
+            files.append(uf)
+        elif name:
+            fields[name] = payload.decode("utf-8", errors="replace")
+
+    return fields, files
 
 
 def get_repository() -> RefundRepository:
@@ -119,6 +159,84 @@ async def get_refund_request_by_id(
 
 
 @router.post(
+    "/{refund_id}/evidence",
+    response_model=RefundRecord,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload photo or video evidence for a refund request",
+)
+async def upload_refund_evidence(
+    refund_id: str,
+    request: Request,
+    file: Any = None,
+    repo: RefundRepository = Depends(get_repository),
+    storage_service: EvidenceStorageService = Depends(get_evidence_storage_service),
+) -> RefundRecord:
+    """Accept multipart file upload, validate, store, and append evidence metadata."""
+    record = repo.get_refund_request(refund_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Refund request '{refund_id}' not found",
+        )
+
+    if file is None:
+        content_type_header = request.headers.get("content-type", "").lower()
+        if "multipart/form-data" not in content_type_header:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Request content-type must be multipart/form-data.",
+            )
+        body = await request.body()
+        _, uploaded_files = _parse_multipart_request(content_type_header, body)
+        if not uploaded_files:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No file uploaded in multipart request.",
+            )
+        file = uploaded_files[0]
+
+    filename = file.filename or "evidence_file"
+    ext = Path(filename).suffix.lower()
+    allowed_extensions = {".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov"}
+    if ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Disallowed file extension '{ext}'. Allowed extensions are: {sorted(allowed_extensions)}",
+        )
+
+    content_type = file.content_type or ""
+    file_bytes = await file.read()
+
+    try:
+        storage_service.validate_file(file_bytes=file_bytes, content_type=content_type)
+    except ValueError as e:
+        msg = str(e)
+        if "exceeds maximum allowed limit" in msg:
+            raise HTTPException(
+                status_code=HTTP_413_STATUS,
+                detail=msg,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=msg,
+        )
+
+    saved_meta = storage_service.save_file(
+        file_bytes=file_bytes,
+        filename=filename,
+        content_type=content_type,
+        refund_id=refund_id,
+        order_id=record.order_id,
+    )
+
+    updated = repo.add_evidence(
+        refund_id=refund_id,
+        evidence_item=saved_meta,
+    )
+    return updated
+
+
+@router.post(
     "/{refund_id}/clarify",
     response_model=RefundRecord,
     status_code=status.HTTP_200_OK,
@@ -126,11 +244,57 @@ async def get_refund_request_by_id(
 )
 async def clarify_refund_request(
     refund_id: str,
-    payload: RefundClarificationRequest,
+    request: Request,
     background_tasks: BackgroundTasks,
     repo: RefundRepository = Depends(get_repository),
+    storage_service: EvidenceStorageService = Depends(get_evidence_storage_service),
 ) -> RefundRecord:
     """Submit customer clarification response to resume paused evaluation."""
+    content_type_header = request.headers.get("content-type", "").lower()
+    response_text: str | None = None
+    evidence_file: UploadFile | None = None
+
+    if "multipart/form-data" in content_type_header:
+        body = await request.body()
+        form_fields, form_files = _parse_multipart_request(content_type_header, body)
+        raw_text = form_fields.get("response_text")
+        if raw_text is None or not str(raw_text).strip():
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail="Field 'response_text' cannot be blank or empty.",
+            )
+        response_text = str(raw_text).strip()
+        if form_files:
+            evidence_file = form_files[0]
+    elif "application/x-www-form-urlencoded" in content_type_header:
+        from urllib.parse import parse_qs
+        body = await request.body()
+        parsed = parse_qs(body.decode("utf-8", errors="replace"))
+        raw_text_list = parsed.get("response_text", [])
+        raw_text = raw_text_list[0] if raw_text_list else None
+        if raw_text is None or not str(raw_text).strip():
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail="Field 'response_text' cannot be blank or empty.",
+            )
+        response_text = str(raw_text).strip()
+    else:
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail="Invalid or missing request body.",
+            )
+        try:
+            payload = RefundClarificationRequest.model_validate(body)
+            response_text = payload.response_text
+        except Exception as err:
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail=str(err),
+            )
+
     record = repo.get_refund_request(refund_id)
     if record is None:
         raise HTTPException(
@@ -142,14 +306,48 @@ async def clarify_refund_request(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Refund request '{refund_id}' is not awaiting clarification (current status: '{record.status}')",
         )
+
+    if evidence_file is not None:
+        filename = evidence_file.filename or "evidence_file"
+        ext = Path(filename).suffix.lower()
+        allowed_extensions = {".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov"}
+        if ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Disallowed file extension '{ext}'. Allowed extensions are: {sorted(allowed_extensions)}",
+            )
+        file_bytes = await evidence_file.read()
+        file_content_type = evidence_file.content_type or ""
+        try:
+            storage_service.validate_file(file_bytes=file_bytes, content_type=file_content_type)
+        except ValueError as e:
+            msg = str(e)
+            if "exceeds maximum allowed limit" in msg:
+                raise HTTPException(
+                    status_code=HTTP_413_STATUS,
+                    detail=msg,
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=msg,
+            )
+        saved_meta = storage_service.save_file(
+            file_bytes=file_bytes,
+            filename=filename,
+            content_type=file_content_type,
+            refund_id=refund_id,
+            order_id=record.order_id,
+        )
+        repo.add_evidence(refund_id=refund_id, evidence_item=saved_meta)
+
     updated = repo.submit_clarification_response(
         refund_id=refund_id,
-        clarification_response=payload.response_text,
+        clarification_response=response_text,
     )
     background_tasks.add_task(
         resume_refund_workflow,
         refund_id=record.refund_id,
-        response_text=payload.response_text,
+        response_text=response_text,
         repository=repo,
     )
     return updated
