@@ -99,6 +99,12 @@ async def test_workflow_denied_flow():
     assert final_state["policy_status"] == "fail"
     assert "refund_window_days" in final_state["failed_rules"]
     assert "denied" in final_state["reasoning"].lower()
+    assert final_state["denial_email_text"] is not None
+    assert "Dear Customer," in final_state["denial_email_text"]
+    assert "ORD-1004" in final_state["denial_email_text"]
+    assert "Return Window Expired:" in final_state["denial_email_text"]
+    assert "RMA" not in final_state["denial_email_text"]
+    assert final_state.get("approval_email_text") is None
 
 
 def test_route_classifier_router_logic():
@@ -915,6 +921,55 @@ async def test_workflow_order_amount_exceeded_escalates():
         assert kwargs["status"] == "escalated"
     finally:
         set_current_repository(None)
+
+
+@pytest.mark.asyncio
+async def test_workflow_deny_generates_and_persists_denial_email_text():
+    """AC 2405: Unit test verifies that a denied workflow run populates denial_email_text in final state and persists it to DynamoDB."""
+    # ORD-1004 has expired delivery date (> 30 days) -> denied
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.92,
+        reasoning="Customer reported broken keyboard switch after return window.",
+    )
+    mock_llm = make_mock_llm(mock_classification)
+    checkpointer = MemorySaver()
+
+    mock_repo = MagicMock(spec=["update_decision"])
+    set_current_repository(mock_repo)
+
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_llm)
+
+            final_state = await run_refund_workflow(
+                refund_id="ref_test_deny_email_persistence",
+                order_id="ORD-1004",
+                customer_request_text="The keyboard switch broke.",
+                checkpointer=checkpointer,
+            )
+
+        # Assert final workflow state
+        assert final_state["decision"] == "deny"
+        assert final_state["status"] == "completed"
+        assert final_state["approval_email_text"] is None
+        assert "denial_email_text" in final_state
+        assert final_state["denial_email_text"] is not None
+        assert "Dear Customer," in final_state["denial_email_text"]
+        assert "ORD-1004" in final_state["denial_email_text"]
+        assert "Return Window Expired:" in final_state["denial_email_text"]
+        assert "RMA" not in final_state["denial_email_text"]
+
+        # Assert repository persistence
+        mock_repo.update_decision.assert_called_once()
+        kwargs = mock_repo.update_decision.call_args[1]
+        assert kwargs["refund_id"] == "ref_test_deny_email_persistence"
+        assert kwargs["decision"] == "deny"
+        assert kwargs["approval_email_text"] is None
+        assert kwargs["denial_email_text"] == final_state["denial_email_text"]
+    finally:
+        set_current_repository(None)
+
 
 
 

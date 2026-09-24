@@ -987,10 +987,58 @@ def test_apply_override_persists_and_retrieves_approval_email_text(repository: R
     )
     assert overridden_deny.decision == "deny"
     assert overridden_deny.approval_email_text is None
+    assert overridden_deny.denial_email_text is not None
+    assert "Dear Customer," in overridden_deny.denial_email_text
+    assert "ORD-1003" in overridden_deny.denial_email_text
+    assert "RMA" not in overridden_deny.denial_email_text
 
     fetched_deny = repository.get_refund_request(rec_deny.refund_id)
     assert fetched_deny is not None
     assert fetched_deny.approval_email_text is None
+    assert fetched_deny.denial_email_text == overridden_deny.denial_email_text
+
+
+def test_update_decision_persists_and_retrieves_denial_email_text(repository: RefundRepository):
+    """Verify update_decision persists denial_email_text for deny decision and retrieves cleanly."""
+    record = repository.create_refund_request(
+        order_id="ORD-1004",
+        customer_request_text="Need refund for expired order",
+    )
+    denial_text = "Dear Customer,\nYour refund request for order ORD-1004 has been denied.\nSincerely,\nCustomer Support Team"
+
+    updated = repository.update_decision(
+        refund_id=record.refund_id,
+        decision="deny",
+        reasoning="Return window expired.",
+        matched_policy_rule=None,
+        confidence_score=0.95,
+        status="completed",
+        denial_email_text=denial_text,
+    )
+    assert updated.denial_email_text == denial_text
+    assert updated.approval_email_text is None
+
+    fetched = repository.get_refund_request(record.refund_id)
+    assert fetched is not None
+    assert fetched.denial_email_text == denial_text
+    assert fetched.approval_email_text is None
+
+    # Updating to auto_approve clears denial_email_text
+    approved = repository.update_decision(
+        refund_id=record.refund_id,
+        decision="auto_approve",
+        reasoning="Policy met.",
+        matched_policy_rule={"rule": "damaged"},
+        confidence_score=0.99,
+        status="completed",
+        approval_email_text="Dear Customer,\nApproved.",
+    )
+    assert approved.denial_email_text is None
+    assert approved.approval_email_text == "Dear Customer,\nApproved."
+
+    fetched_approved = repository.get_refund_request(record.refund_id)
+    assert fetched_approved is not None
+    assert fetched_approved.denial_email_text is None
 
 
 def test_refund_record_deserializes_missing_approval_email_text_to_none(repository: RefundRepository):
@@ -1008,6 +1056,24 @@ def test_refund_record_deserializes_missing_approval_email_text_to_none(reposito
     fetched = repository.get_refund_request("ref_legacy_no_email")
     assert fetched is not None
     assert fetched.approval_email_text is None
+    assert fetched.denial_email_text is None
+
+
+def test_refund_record_deserializes_missing_denial_email_text_to_none(repository: RefundRepository):
+    """Verify that legacy DynamoDB items lacking denial_email_text attribute deserialize cleanly with None."""
+    legacy_item = {
+        "refund_id": "ref_legacy_no_denial_email",
+        "order_id": "ORD-LEGACY-002",
+        "customer_request_text": "Legacy record without denial_email_text",
+        "status": "completed",
+        "decision": "deny",
+        "created_at": "2026-09-01T00:00:00+00:00",
+        "updated_at": "2026-09-01T00:00:00+00:00",
+    }
+    repository.table.items["ref_legacy_no_denial_email"] = legacy_item
+    fetched = repository.get_refund_request("ref_legacy_no_denial_email")
+    assert fetched is not None
+    assert fetched.denial_email_text is None
 
 
 def test_add_evidence_persists_and_retrieves_single_and_multiple_items(repository: RefundRepository):

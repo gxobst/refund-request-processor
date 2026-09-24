@@ -101,6 +101,10 @@ class RefundRecord(BaseModel):
         default=None,
         description="Confirmation and return instructions email text generated for approved refunds.",
     )
+    denial_email_text: str | None = Field(
+        default=None,
+        description="Generated customer notification email text explaining denial reasons.",
+    )
     evidence: list[EvidenceItem] = Field(
         default_factory=list,
         description="Customer-uploaded proof attachments (images and videos).",
@@ -117,6 +121,7 @@ class RefundDecisionUpdate(BaseModel):
     status: RefundStatus
     tool_calls: list[dict[str, Any]] | None = None
     approval_email_text: str | None = None
+    denial_email_text: str | None = None
 
 
 class RefundOverrideUpdate(BaseModel):
@@ -124,6 +129,7 @@ class RefundOverrideUpdate(BaseModel):
 
     override_decision: str
     override_reason: str = Field(..., min_length=1)
+    denial_email_text: str | None = None
 
 
 OverrideDecisionType = Literal["approve", "deny"]

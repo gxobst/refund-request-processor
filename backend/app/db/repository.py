@@ -159,6 +159,7 @@ class RefundRepository:
         status: str,
         tool_calls: list[dict[str, Any]] | None = None,
         approval_email_text: str | None = None,
+        denial_email_text: str | None = None,
     ) -> RefundRecord:
         """Update decision metadata and workflow status for an existing refund record.
 
@@ -171,6 +172,7 @@ class RefundRepository:
             status: Workflow status ('completed' or 'escalated').
             tool_calls: Optional list of executed tool call audit dictionaries.
             approval_email_text: Optional generated confirmation and return instructions email text.
+            denial_email_text: Optional generated denial notification email text.
 
         Returns:
             Updated RefundRecord instance.
@@ -202,6 +204,13 @@ class RefundRepository:
         else:
             updated_dict["approval_email_text"] = existing.approval_email_text
 
+        if denial_email_text is not None:
+            updated_dict["denial_email_text"] = denial_email_text
+        elif decision != "deny":
+            updated_dict["denial_email_text"] = None
+        else:
+            updated_dict["denial_email_text"] = existing.denial_email_text
+
         item = _convert_floats_to_decimal(updated_dict)
         self.table.put_item(Item=item)
         return RefundRecord.model_validate(updated_dict)
@@ -212,6 +221,7 @@ class RefundRepository:
         override_decision: str,
         override_reason: str,
         approval_email_text: str | None = None,
+        denial_email_text: str | None = None,
     ) -> RefundRecord:
         """Record a human manual override and update final decision.
 
@@ -220,6 +230,7 @@ class RefundRepository:
             override_decision: Human override decision ('approve' or 'deny').
             override_reason: Justification for the override.
             approval_email_text: Optional custom or pre-generated approval email text.
+            denial_email_text: Optional custom or pre-generated denial email text.
 
         Returns:
             Updated RefundRecord instance.
@@ -245,8 +256,20 @@ class RefundRepository:
                 from app.agents.approval_notifier import generate_approval_email
                 approval_email_text = generate_approval_email(order_id=existing.order_id, refund_id=refund_id)
             updated_dict["approval_email_text"] = approval_email_text
+            updated_dict["denial_email_text"] = None
+        elif override_decision == "deny":
+            if denial_email_text is None:
+                from app.agents.denial_notifier import generate_denial_email
+                denial_email_text = generate_denial_email(
+                    order_id=existing.order_id,
+                    refund_id=refund_id,
+                    policy_reasoning=override_reason,
+                )
+            updated_dict["denial_email_text"] = denial_email_text
+            updated_dict["approval_email_text"] = None
         else:
             updated_dict["approval_email_text"] = None
+            updated_dict["denial_email_text"] = None
 
         item = _convert_floats_to_decimal(updated_dict)
         self.table.put_item(Item=item)

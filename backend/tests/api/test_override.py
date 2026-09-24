@@ -57,6 +57,7 @@ class MockRefundRepository:
         override_decision: str,
         override_reason: str,
         approval_email_text: str | None = None,
+        denial_email_text: str | None = None,
     ) -> RefundRecord:
         record = self.records.get(refund_id)
         if record is None:
@@ -67,8 +68,19 @@ class MockRefundRepository:
             if approval_email_text is None:
                 from app.agents.approval_notifier import generate_approval_email
                 approval_email_text = generate_approval_email(order_id=record.order_id, refund_id=refund_id)
+            denial_email_text = None
+        elif override_decision == "deny":
+            if denial_email_text is None:
+                from app.agents.denial_notifier import generate_denial_email
+                denial_email_text = generate_denial_email(
+                    order_id=record.order_id,
+                    refund_id=refund_id,
+                    policy_reasoning=override_reason,
+                )
+            approval_email_text = None
         else:
             approval_email_text = None
+            denial_email_text = None
 
         updated = record.model_copy(
             update={
@@ -79,6 +91,7 @@ class MockRefundRepository:
                 "decision": override_decision,
                 "status": "completed",
                 "approval_email_text": approval_email_text,
+                "denial_email_text": denial_email_text,
             }
         )
         self.records[refund_id] = updated
@@ -216,6 +229,7 @@ async def test_override_refund_decision_approve(mock_repo: MockRefundRepository)
     assert "Dear Customer," in data["approval_email_text"]
     assert "ORD-3001" in data["approval_email_text"]
     assert "RMA" in data["approval_email_text"]
+    assert data["denial_email_text"] is None
 
     # Verify repository state
     stored = mock_repo.get_refund_request("ref-esc-1")
@@ -225,6 +239,7 @@ async def test_override_refund_decision_approve(mock_repo: MockRefundRepository)
     assert stored.override_decision == "approve"
     assert stored.override_reason == "Customer is a high-value VIP account. Exception granted."
     assert stored.approval_email_text is not None
+    assert stored.denial_email_text is None
 
 
 @pytest.mark.asyncio
@@ -257,6 +272,10 @@ async def test_override_refund_decision_deny(mock_repo: MockRefundRepository):
     assert data["override_reason"] == "Item was inspected and shows clear signs of customer damage."
     assert data["overridden_at"] is not None
     assert data["approval_email_text"] is None
+    assert data["denial_email_text"] is not None
+    assert "Dear Customer," in data["denial_email_text"]
+    assert "ORD-3002" in data["denial_email_text"]
+    assert "RMA" not in data["denial_email_text"]
 
     # Verify repository state
     stored = mock_repo.get_refund_request("ref-esc-2")
@@ -264,6 +283,7 @@ async def test_override_refund_decision_deny(mock_repo: MockRefundRepository):
     assert stored.decision == "deny"
     assert stored.status == "completed"
     assert stored.approval_email_text is None
+    assert stored.denial_email_text is not None
 
 
 @pytest.mark.parametrize(
