@@ -542,3 +542,23 @@ def test_cli_module_execution(capsys: pytest.CaptureFixture):
         captured = capsys.readouterr()
         assert "Successfully seeded 7 orders into DynamoDB." in captured.out
 
+
+def test_numerical_parity_between_seeded_orders_and_payment_registry():
+    """Verify numerical parity between seeded DynamoDB orders and MOCK_PAYMENT_REGISTRY across ORD-1001 through ORD-1007."""
+    mock_dynamo = MockDynamoResource()
+    with patch("app.db.seed.boto3.resource", return_value=mock_dynamo):
+        count = seed_orders()
+    assert count == 7
+    table = mock_dynamo.tables[DEFAULT_ORDERS_TABLE_NAME]
+
+    from app.tools.payment import MOCK_PAYMENT_REGISTRY
+
+    overlapping_orders = [f"ORD-100{i}" for i in range(1, 8)]
+    for order_id in overlapping_orders:
+        assert order_id in table.items
+        assert order_id in MOCK_PAYMENT_REGISTRY
+        seeded_amount = float(table.items[order_id]["order_amount"])
+        payment_amount = float(MOCK_PAYMENT_REGISTRY[order_id]["charge_amount"])
+        assert seeded_amount == payment_amount
+
+

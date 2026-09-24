@@ -1,8 +1,11 @@
 """Unit tests for payment transaction lookup tool."""
 
+import json
+from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from app.db.seed import DEFAULT_MOCK_ORDERS_PATH
 from app.tools.payment import (
     PaymentLookupInput,
     query_payment_transaction,
@@ -40,11 +43,39 @@ def test_query_payment_transaction_eligible_order():
     assert result["transaction_id"] == "ch_3N8xYz1001001"
     assert result["charge_status"] == "succeeded"
     assert result["payment_method"] == "credit_card"
-    assert result["charge_amount"] == 149.99
+    assert result["charge_amount"] == 250.0
     assert result["currency"] == "usd"
     assert result["dispute_status"] == "none"
     assert result["refund_eligibility"] is True
     assert result["error"] is None
+
+
+with open(DEFAULT_MOCK_ORDERS_PATH, encoding="utf-8") as f:
+    _MOCK_ORDERS_DATA = json.load(f)
+
+
+@pytest.mark.parametrize(
+    "order_data",
+    _MOCK_ORDERS_DATA,
+    ids=[o["order_id"] for o in _MOCK_ORDERS_DATA],
+)
+def test_query_payment_transaction_matches_mock_orders(order_data: dict[str, Any]):
+    """Verify that calling query_payment_transaction(order_id)['charge_amount'] strictly equals order_amount in mock_orders.json."""
+    order_id = order_data["order_id"]
+    expected_amount = order_data["order_amount"]
+    result = query_payment_transaction(order_id)
+    assert result["found"] is True
+    assert result["charge_amount"] == expected_amount
+
+
+def test_query_payment_transaction_ord_1007():
+    """Verify querying ORD-1007 returns charge_amount == 200.0, charge_status == 'succeeded', and refund_eligibility is True."""
+    result = query_payment_transaction("ORD-1007")
+    assert result["found"] is True
+    assert result["order_id"] == "ORD-1007"
+    assert result["charge_amount"] == 200.0
+    assert result["charge_status"] == "succeeded"
+    assert result["refund_eligibility"] is True
 
 
 def test_query_payment_transaction_disputed_order():
