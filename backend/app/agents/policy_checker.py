@@ -22,7 +22,7 @@ You have access to the following verification tools:
 - query_carrier_tracking: Use this tool to look up carrier delivery status, delivery dates, and proof-of-delivery photos (useful for late delivery claims or lost packages). If a tracking number is not explicitly given in the order details, use 'TRK-' followed by the order ID number (for example, 'TRK-1005' for order 'ORD-1005').
 - query_payment_transaction: Use this tool to look up Stripe charge status, dispute state, and refund eligibility for an order.
 
-When evaluating requests requiring external verification (such as late deliveries or missing order data) or resolving ambiguities, call the appropriate tools to gather evidence before making a final determination.
+When evaluating requests requiring external verification (such as late deliveries, missing order data, high-value orders, or ambiguous claims), call the appropriate tools to gather evidence before making a final determination. For high-value orders or ambiguous claims, verify both carrier delivery status (via query_carrier_tracking) and payment transaction status (via query_payment_transaction) to ensure delivery proof and charge eligibility before concluding.
 
 Return a structured output with:
 - policy_status: 'pass' (eligible), 'fail' (clearly ineligible), or 'ambiguous' (requires human review).
@@ -158,7 +158,9 @@ def check_policy(
 
     # 1. Deterministic Pass Bypass
     # Clear-cut pass bypasses LLM except for late_delivery which requires external carrier verification
-    if eval_result.status == "pass" and category != "late_delivery":
+    # or high-value orders (order_amount >= 400.0) which require dual external verification
+    is_high_value = float(order.get("order_amount", 0.0) or 0.0) >= 400.0
+    if eval_result.status == "pass" and category != "late_delivery" and not is_high_value:
         return PolicyCheckerOutput(
             policy_status="pass",
             matched_policy_rule=eval_result.matched_policy_rule,

@@ -78,6 +78,15 @@ def test_query_payment_transaction_ord_1007():
     assert result["refund_eligibility"] is True
 
 
+def test_query_payment_transaction_ord_1010():
+    """Verify querying ORD-1010 returns found=True, charge_amount == 450.00, and refund_eligibility is True."""
+    result = query_payment_transaction("ORD-1010")
+    assert result["found"] is True
+    assert result["order_id"] == "ORD-1010"
+    assert result["charge_amount"] == 450.00
+    assert result["refund_eligibility"] is True
+
+
 def test_query_payment_transaction_disputed_order():
     """AC 1207: Verify query_payment_transaction returns refund_eligibility=False and dispute_status=under_review for disputed order."""
     # Arrange

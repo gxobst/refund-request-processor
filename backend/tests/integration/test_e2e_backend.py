@@ -201,10 +201,10 @@ def test_seed_orders_data_verification(mock_dynamo_resource: MockDynamoResource)
         table_name="mock-orders", dynamodb_resource=mock_dynamo_resource
     )
 
-    # Assert: verify count matches mock_orders.json (9 orders)
-    assert seeded_count == 9
+    # Assert: verify count matches mock_orders.json (10 orders)
+    assert seeded_count == 10
     table = mock_dynamo_resource.Table("mock-orders")
-    assert len(table.items) == 9
+    assert len(table.items) == 10
 
     # Verify retrieval and structure of key records
     ord_1001 = table.items.get("ORD-1001")
@@ -240,6 +240,14 @@ def test_seed_orders_data_verification(mock_dynamo_resource: MockDynamoResource)
     assert ord_1009["order_amount"] == Decimal("60.0")
     assert ord_1009["delivery_status"] == "delivered"
     assert ord_1009["delivery_date"] == "2026-09-13"
+
+    ord_1010 = table.items.get("ORD-1010")
+    assert ord_1010 is not None
+    assert ord_1010["order_id"] == "ORD-1010"
+    assert ord_1010["item"] == "Professional Mirrorless Camera"
+    assert ord_1010["order_amount"] == Decimal("450.0")
+    assert ord_1010["delivery_status"] == "delivered"
+    assert ord_1010["delivery_date"] == "2026-09-18"
 
 
 @pytest.mark.asyncio
@@ -801,4 +809,90 @@ async def test_e2e_tool_calling_audit_log_persisted_and_exposed(
     # Verify GET response exposed tool_calls
     assert len(record_data["tool_calls"]) == 1
     assert record_data["tool_calls"][0]["tool_name"] == "query_carrier_tracking"
+
+
+@pytest.mark.asyncio
+async def test_e2e_dual_tool_verification_flow_ord_1010(
+    mock_repo: RefundRepository, monkeypatch: pytest.MonkeyPatch
+):
+    """Verify end-to-end workflow run for high-value order ORD-1010 executing both carrier and payment tools, storing both audit records in DynamoDB."""
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "query_carrier_tracking",
+                "args": {"tracking_number": "TRK-1010"},
+                "id": "call_e2e_trk_1010",
+            },
+            {
+                "name": "query_payment_transaction",
+                "args": {"order_id": "ORD-1010"},
+                "id": "call_e2e_pay_1010",
+            },
+        ],
+    )
+    expected_policy_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=[],
+        policy_reasoning="Carrier delivery confirmed with proof photo and Stripe transaction succeeded with refund eligibility.",
+    )
+    mock_policy_llm = MockToolCallingModel(
+        responses=[tool_call_msg], final_output=expected_policy_output
+    )
+    monkeypatch.setattr(
+        "app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm
+    )
+
+    payload = {
+        "order_id": "ORD-1010",
+        "customer_request_text": "High value mirrorless camera arrived with damaged packaging and broken lens.",
+    }
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Submit refund request
+        post_res = await client.post("/refunds", json=payload)
+        assert post_res.status_code == 202
+        refund_id = post_res.json()["refund_id"]
+
+        # 2. Poll status until completed
+        final_record = await poll_until_not_pending(client, refund_id)
+
+        # 3. Direct GET endpoint check
+        get_res = await client.get(f"/refunds/{refund_id}")
+        assert get_res.status_code == 200
+        record_data = get_res.json()
+
+    # Assert: workflow state and response
+    assert final_record["status"] == "completed"
+    assert final_record["decision"] == "auto_approve"
+    assert "tool_calls" in final_record
+    assert len(final_record["tool_calls"]) == 2
+
+    tool_names = [t["tool_name"] for t in final_record["tool_calls"]]
+    assert "query_carrier_tracking" in tool_names
+    assert "query_payment_transaction" in tool_names
+
+    carrier_call = next(t for t in final_record["tool_calls"] if t["tool_name"] == "query_carrier_tracking")
+    assert carrier_call["tool_output"]["found"] is True
+    assert carrier_call["tool_output"]["carrier"] == "FedEx"
+    assert carrier_call["tool_output"]["proof_of_delivery_photo_available"] is True
+
+    payment_call = next(t for t in final_record["tool_calls"] if t["tool_name"] == "query_payment_transaction")
+    assert payment_call["tool_output"]["found"] is True
+    assert payment_call["tool_output"]["charge_amount"] == 450.0
+    assert payment_call["tool_output"]["refund_eligibility"] is True
+
+    # Verify DynamoDB persistence storing both tool call audit records
+    db_record = mock_repo.get_refund_request(refund_id)
+    assert db_record is not None
+    assert len(db_record.tool_calls) == 2
+    db_tool_names = [t["tool_name"] for t in db_record.tool_calls]
+    assert "query_carrier_tracking" in db_tool_names
+    assert "query_payment_transaction" in db_tool_names
+
+    # Verify GET response exposed tool_calls
+    assert len(record_data["tool_calls"]) == 2
+
 

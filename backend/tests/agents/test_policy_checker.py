@@ -948,4 +948,107 @@ def test_downstream_decision_node_escalates_on_policy_verification_failure():
     assert "External verification failed" in decision_state["reasoning"]
 
 
+def test_check_policy_ord_1010_dual_tool_verification():
+    """Verify that policy evaluation for ORD-1010 executes both carrier and payment tools, recording both in tool_calls."""
+    order = {
+        "order_id": "ORD-1010",
+        "item": "Professional Mirrorless Camera",
+        "order_amount": 450.0,
+        "delivery_status": "delivered",
+        "purchase_date": "2026-09-15",
+    }
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "query_carrier_tracking",
+                "args": {"tracking_number": "TRK-1010"},
+                "id": "call_trk_1010",
+            },
+            {
+                "name": "query_payment_transaction",
+                "args": {"order_id": "ORD-1010"},
+                "id": "call_pay_1010",
+            },
+        ],
+    )
+    synthesis_msg = AIMessage(
+        content=json.dumps({
+            "policy_status": "pass",
+            "passed_rules": ["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+            "failed_rules": [],
+            "policy_reasoning": "Carrier delivery confirmed and payment transaction is eligible for refund.",
+        })
+    )
+    mock_llm = MagicMock()
+    bound_mock = MagicMock()
+    bound_mock.invoke.side_effect = [tool_call_msg, synthesis_msg]
+    mock_llm.bind_tools.return_value = bound_mock
+    result = check_policy(category="damaged", order=order, llm=mock_llm)
+
+    assert isinstance(result, PolicyCheckerOutput)
+    assert result.policy_status == "pass"
+    assert len(result.tool_calls) == 2
+    tool_names = {t["tool_name"] for t in result.tool_calls}
+    assert tool_names == {"query_carrier_tracking", "query_payment_transaction"}
+
+    carrier_call = next(t for t in result.tool_calls if t["tool_name"] == "query_carrier_tracking")
+    assert carrier_call["tool_output"]["found"] is True
+    assert carrier_call["tool_output"]["carrier"] == "FedEx"
+    assert carrier_call["tool_output"]["proof_of_delivery_photo_available"] is True
+
+    payment_call = next(t for t in result.tool_calls if t["tool_name"] == "query_payment_transaction")
+    assert payment_call["tool_output"]["found"] is True
+    assert payment_call["tool_output"]["charge_amount"] == 450.0
+    assert payment_call["tool_output"]["refund_eligibility"] is True
+
+
+def test_check_policy_ord_1010_payment_dispute_evaluates_to_ambiguous():
+    """Verify that if carrier succeeds but payment reveals dispute, both tool calls are preserved and status is ambiguous."""
+    order = {
+        "order_id": "ORD-1010",
+        "item": "Professional Mirrorless Camera",
+        "order_amount": 450.0,
+    }
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "query_carrier_tracking",
+                "args": {"tracking_number": "TRK-1010"},
+                "id": "call_trk_1010_disp",
+            },
+            {
+                "name": "query_payment_transaction",
+                "args": {"order_id": "ORD-1006"},  # disputed order in payment registry
+                "id": "call_pay_1010_disp",
+            },
+        ],
+    )
+    synthesis_msg = AIMessage(
+        content=json.dumps({
+            "policy_status": "ambiguous",
+            "passed_rules": ["eligible_delivery_statuses"],
+            "failed_rules": [],
+            "policy_reasoning": "Carrier delivery confirmed but Stripe charge dispute is currently under review.",
+        })
+    )
+    mock_llm = MagicMock()
+    bound_mock = MagicMock()
+    bound_mock.invoke.side_effect = [tool_call_msg, synthesis_msg]
+    mock_llm.bind_tools.return_value = bound_mock
+    result = check_policy(category="damaged", order=order, llm=mock_llm)
+
+    assert isinstance(result, PolicyCheckerOutput)
+    assert result.policy_status == "ambiguous"
+    assert len(result.tool_calls) == 2
+    tool_names = {t["tool_name"] for t in result.tool_calls}
+    assert tool_names == {"query_carrier_tracking", "query_payment_transaction"}
+
+    payment_call = next(t for t in result.tool_calls if t["tool_name"] == "query_payment_transaction")
+    assert payment_call["tool_output"]["dispute_status"] == "under_review"
+    assert payment_call["tool_output"]["refund_eligibility"] is False
+    assert "dispute" in result.policy_reasoning.lower()
+
+
 

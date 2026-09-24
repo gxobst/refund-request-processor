@@ -166,3 +166,13 @@ def test_query_carrier_tracking_langchain_metadata_and_invoke():
     assert invoke_ws["found"] is False
     assert invoke_ws["delivery_status"] == "invalid"
     assert invoke_ws["error"] == "Tracking number must not be empty or blank."
+
+
+def test_query_carrier_tracking_trk_1010():
+    """Verify query_carrier_tracking('TRK-1010') returns found=True, carrier='FedEx', and proof_of_delivery_photo_available=True."""
+    result = query_carrier_tracking("TRK-1010")
+    assert result["found"] is True
+    assert result["tracking_number"] == "TRK-1010"
+    assert result["carrier"] == "FedEx"
+    assert result["delivery_status"] == "delivered"
+    assert result["proof_of_delivery_photo_available"] is True

@@ -70,5 +70,13 @@
     "delivery_date": "2026-09-13",
     "order_amount": 60.0,
     "delivery_status": "delivered"
+  },
+  {
+    "order_id": "ORD-1010",
+    "item": "Professional Mirrorless Camera",
+    "purchase_date": "2026-09-15",
+    "delivery_date": "2026-09-18",
+    "order_amount": 450.0,
+    "delivery_status": "delivered"
   }
 ]

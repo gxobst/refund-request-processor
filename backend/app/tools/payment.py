@@ -129,6 +129,16 @@ MOCK_PAYMENT_REGISTRY: dict[str, dict[str, Any]] = {
         "dispute_status": "none",
         "refund_eligibility": False,
     },
+    "ORD-1010": {
+        "order_id": "ORD-1010",
+        "transaction_id": "ch_3N8xYz1010010",
+        "charge_status": "succeeded",
+        "payment_method": "credit_card",
+        "charge_amount": 450.00,
+        "currency": "usd",
+        "dispute_status": "none",
+        "refund_eligibility": True,
+    },
 }
 
 

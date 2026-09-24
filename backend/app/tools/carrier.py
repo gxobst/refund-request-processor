@@ -252,6 +252,28 @@ MOCK_CARRIER_REGISTRY: dict[str, dict[str, Any]] = {
             },
         ],
     },
+    "TRK-1010": {
+        "tracking_number": "TRK-1010",
+        "carrier": "FedEx",
+        "delivery_status": "delivered",
+        "delivery_date": "2026-09-18 15:30:00",
+        "delivery_address": "777 Sunset Blvd, Los Angeles, CA 90028",
+        "proof_of_delivery_photo_available": True,
+        "events": [
+            {
+                "timestamp": "2026-09-15 11:00:00",
+                "location": "Los Angeles, CA",
+                "status": "picked_up",
+                "description": "Package received by carrier.",
+            },
+            {
+                "timestamp": "2026-09-18 15:30:00",
+                "location": "Los Angeles, CA",
+                "status": "delivered",
+                "description": "Delivered to recipient front desk with photo proof.",
+            },
+        ],
+    },
 }
 
 
