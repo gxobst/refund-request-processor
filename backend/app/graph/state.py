@@ -31,3 +31,4 @@ class RefundWorkflowState(TypedDict, total=False):
     needs_clarification: bool
     tool_calls: list[dict[str, Any]]
     approval_email_text: str | None
+    evidence: list[dict[str, Any]] | list[Any]

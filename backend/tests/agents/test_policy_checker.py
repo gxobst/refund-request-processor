@@ -1346,5 +1346,355 @@ def test_check_policy_fallback_final_output_inspection_on_bound_and_unbound_mode
     assert result_2.policy_reasoning == "Extracted from mock final_output attribute."
 
 
+def test_check_policy_damaged_with_image_evidence_bypasses_deterministic_pass_and_invokes_multimodal_llm():
+    """AC 2212: category='damaged' with attached image evidence bypasses deterministic pass and invokes multimodal model."""
+    order = {
+        "order_id": "ORD-DMG-001",
+        "order_amount": 120.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    expected_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=[],
+        policy_reasoning="Multimodal model verified physical damage: cracked glass surface.",
+    )
+    mock_llm = make_mock_llm(expected_output)
+
+    mock_storage = MagicMock()
+    mock_storage.get_file.return_value = b"\xff\xd8\xff\xe0dummy_jpeg_data"
+
+    evidence = [
+        {
+            "evidence_id": "evi_01",
+            "storage_key": "evidence/ORD-DMG-001/crack.jpg",
+            "filename": "crack.jpg",
+            "content_type": "image/jpeg",
+        }
+    ]
+
+    result = check_policy(
+        category="damaged",
+        order=order,
+        llm=mock_llm,
+        evidence=evidence,
+        storage_service=mock_storage,
+        customer_request_text="Screen arrived cracked.",
+    )
+
+    assert result.policy_status == "pass"
+    assert "cracked glass" in result.policy_reasoning
+
+    # Verify LLM was invoked with multimodal message content containing image block
+    bound_model = mock_llm.bind_tools.return_value
+    assert bound_model.invoke.called
+    invoke_messages = bound_model.invoke.call_args[0][0]
+    human_msg = next(m for m in invoke_messages if isinstance(m, HumanMessage))
+    assert isinstance(human_msg.content, list)
+    assert any(
+        isinstance(b, dict) and b.get("type") == "text" and "Screen arrived cracked." in b.get("text", "")
+        for b in human_msg.content
+    )
+    assert any(
+        isinstance(b, dict) and b.get("type") == "image" and b.get("source", {}).get("media_type") == "image/jpeg"
+        for b in human_msg.content
+    )
+
+
+def test_check_policy_multimodal_damage_verified_returns_pass():
+    """AC 2213: Multimodal model verifying visible physical damage returns pass with verified damage reasoning."""
+    order = {
+        "order_id": "ORD-DMG-002",
+        "order_amount": 85.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    expected_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=[],
+        policy_reasoning="Physical damage was verified: shattered casing matching customer claim.",
+    )
+    mock_llm = make_mock_llm(expected_output)
+
+    evidence = [
+        {
+            "raw_bytes": b"\x89PNG\r\n\x1a\ndummy_png_data",
+            "content_type": "image/png",
+            "filename": "broken.png",
+        }
+    ]
+
+    result = check_policy(
+        category="damaged",
+        order=order,
+        llm=mock_llm,
+        evidence=evidence,
+        customer_request_text="Product arrived completely shattered in box.",
+    )
+
+    assert result.policy_status == "pass"
+    assert "physical damage was verified" in result.policy_reasoning.lower()
+
+
+def test_check_policy_multimodal_item_intact_no_damage_returns_fail_or_ambiguous():
+    """AC 2214: Multimodal model detecting intact item returns fail (or ambiguous) with no damage detected reasoning."""
+    order = {
+        "order_id": "ORD-DMG-003",
+        "order_amount": 95.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    expected_output = PolicyCheckerOutput(
+        policy_status="fail",
+        passed_rules=["refund_window_days"],
+        failed_rules=["physical_damage_verification"],
+        policy_reasoning="No damage detected. The item appears completely intact with no visible scratches or defects.",
+    )
+    mock_llm = make_mock_llm(expected_output)
+
+    evidence = [
+        {
+            "base64": "data:image/jpeg;base64,/9j/4AAQSkZJRg==",
+            "content_type": "image/jpeg",
+            "filename": "photo.jpg",
+        }
+    ]
+
+    result = check_policy(
+        category="damaged",
+        order=order,
+        llm=mock_llm,
+        evidence=evidence,
+        customer_request_text="Claiming damaged headphone",
+    )
+
+    assert result.policy_status == "fail"
+    assert "no damage detected" in result.policy_reasoning.lower()
+
+
+def test_check_policy_multimodal_blurry_or_product_mismatch_returns_ambiguous():
+    """AC 2215: Multimodal model determining blurry, inconclusive, or mismatched product returns ambiguous."""
+    order = {
+        "order_id": "ORD-DMG-004",
+        "order_amount": 150.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    expected_output = PolicyCheckerOutput(
+        policy_status="ambiguous",
+        passed_rules=["refund_window_days"],
+        failed_rules=[],
+        policy_reasoning="Image is too blurry to confirm physical damage and depicted item does not match ordered model.",
+    )
+    mock_llm = make_mock_llm(expected_output)
+
+    evidence = [
+        {
+            "raw_bytes": b"\xff\xd8\xff\xe0blurry_pixels",
+            "content_type": "image/jpeg",
+            "filename": "blurry.jpg",
+        }
+    ]
+
+    result = check_policy(
+        category="damaged",
+        order=order,
+        llm=mock_llm,
+        evidence=evidence,
+        customer_request_text="Camera is broken",
+    )
+
+    assert result.policy_status == "ambiguous"
+    assert "blurry" in result.policy_reasoning.lower()
+
+
+def test_check_policy_only_video_evidence_returns_ambiguous_without_calling_llm():
+    """AC 2216: Evidence containing only video files returns ambiguous without invoking LLM."""
+    order = {
+        "order_id": "ORD-DMG-005",
+        "order_amount": 110.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    mock_llm = MagicMock()
+
+    evidence = [
+        {
+            "evidence_id": "evi_vid_1",
+            "filename": "unboxing_video.mp4",
+            "content_type": "video/mp4",
+            "storage_key": "evidence/ORD-DMG-005/unboxing_video.mp4",
+        },
+        {
+            "evidence_id": "evi_vid_2",
+            "filename": "inspect.mov",
+            "content_type": "video/quicktime",
+            "storage_key": "evidence/ORD-DMG-005/inspect.mov",
+        },
+    ]
+
+    result = check_policy(
+        category="damaged",
+        order=order,
+        llm=mock_llm,
+        evidence=evidence,
+    )
+
+    assert result.policy_status == "ambiguous"
+    assert result.policy_reasoning == "Video evidence requires manual reviewer inspection."
+    mock_llm.invoke.assert_not_called()
+    mock_llm.bind_tools.assert_not_called()
+
+
+def test_check_policy_image_retrieval_file_not_found_returns_ambiguous():
+    """AC 2217: Image retrieval raising FileNotFoundError returns ambiguous with error details in policy_reasoning."""
+    order = {
+        "order_id": "ORD-DMG-006",
+        "order_amount": 130.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    mock_storage = MagicMock()
+    mock_storage.get_file.side_effect = FileNotFoundError("Evidence file not found in S3 bucket")
+
+    mock_llm = MagicMock()
+
+    evidence = [
+        {
+            "storage_key": "evidence/ORD-DMG-006/missing.jpg",
+            "content_type": "image/jpeg",
+            "filename": "missing.jpg",
+        }
+    ]
+
+    result = check_policy(
+        category="damaged",
+        order=order,
+        llm=mock_llm,
+        evidence=evidence,
+        storage_service=mock_storage,
+    )
+
+    assert result.policy_status == "ambiguous"
+    assert "Failed to retrieve evidence file" in result.policy_reasoning
+    assert "Evidence file not found in S3 bucket" in result.policy_reasoning
+    mock_llm.invoke.assert_not_called()
+
+
+def test_check_policy_damaged_without_evidence_preserves_deterministic_pass():
+    """AC 2218: check_policy without evidence arguments preserves deterministic pass behavior."""
+    order = {
+        "order_id": "ORD-DMG-007",
+        "order_amount": 100.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    mock_llm = MagicMock()
+
+    # Call with evidence=None
+    result_none = check_policy(category="damaged", order=order, llm=mock_llm, evidence=None)
+    assert result_none.policy_status == "pass"
+    mock_llm.invoke.assert_not_called()
+
+    # Call with evidence=[]
+    result_empty = check_policy(category="damaged", order=order, llm=mock_llm, evidence=[])
+    assert result_empty.policy_status == "pass"
+    mock_llm.invoke.assert_not_called()
+
+    # Call without evidence parameter
+    result_omitted = check_policy(category="damaged", order=order, llm=mock_llm)
+    assert result_omitted.policy_status == "pass"
+    mock_llm.invoke.assert_not_called()
+
+
+def test_check_policy_mixed_video_and_image_evidence_processes_image():
+    """Verify that when both video and image evidence are attached, video is ignored and image is processed."""
+    order = {
+        "order_id": "ORD-DMG-008",
+        "order_amount": 150.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    expected_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=[],
+        policy_reasoning="Damage confirmed via photo.",
+    )
+    mock_llm = make_mock_llm(expected_output)
+
+    evidence = [
+        {
+            "filename": "recording.mp4",
+            "content_type": "video/mp4",
+            "storage_key": "vid.mp4",
+        },
+        {
+            "filename": "photo.jpg",
+            "content_type": "image/jpeg",
+            "raw_bytes": b"\xff\xd8\xff\xe0photodata",
+        },
+    ]
+
+    result = check_policy(
+        category="damaged",
+        order=order,
+        llm=mock_llm,
+        evidence=evidence,
+    )
+
+    assert result.policy_status == "pass"
+    bound_model = mock_llm.bind_tools.return_value
+    assert bound_model.invoke.called
+    invoke_messages = bound_model.invoke.call_args[0][0]
+    human_msg = next(m for m in invoke_messages if isinstance(m, HumanMessage))
+    # Exactly one image block (the photo), video was ignored
+    image_blocks = [b for b in human_msg.content if isinstance(b, dict) and b.get("type") == "image"]
+    assert len(image_blocks) == 1
+
+
+def test_policy_checker_node_forwards_customer_text_and_evidence():
+    """Verify policy_checker_node extracts customer_request_text and evidence from workflow state."""
+    from unittest.mock import patch
+
+    state = {
+        "category": "damaged",
+        "order": {
+            "order_id": "ORD-DMG-NODE",
+            "order_amount": 80.0,
+        },
+        "customer_request_text": "I received broken merchandise.",
+        "evidence": [
+            {
+                "storage_key": "key123",
+                "filename": "pic.jpg",
+                "content_type": "image/jpeg",
+            }
+        ],
+    }
+
+    dummy_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days"],
+        failed_rules=[],
+        policy_reasoning="Verified via multimodal model.",
+    )
+
+    with patch("app.agents.policy_checker.check_policy", return_value=dummy_output) as mock_check:
+        res = policy_checker_node(state)
+
+        assert res["policy_status"] == "pass"
+        assert res["policy_reasoning"] == "Verified via multimodal model."
+        mock_check.assert_called_once_with(
+            category="damaged",
+            order=state["order"],
+            customer_request_text="I received broken merchandise.",
+            evidence=state["evidence"],
+        )
+
+
+
 
 

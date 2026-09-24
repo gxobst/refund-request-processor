@@ -1,7 +1,7 @@
-"""Policy Checker Agent module integrating deterministic evaluation with LLM ambiguity analysis and autonomous tool calling."""
-
+import base64
 from datetime import datetime, timezone
 import json
+from pathlib import Path
 import re
 from typing import Any
 from langchain_core.language_models import BaseChatModel
@@ -23,6 +23,13 @@ You have access to the following verification tools:
 - query_payment_transaction: Use this tool to look up Stripe charge status, dispute state, and refund eligibility for an order.
 
 When evaluating requests requiring external verification (such as late deliveries, missing order data, high-value orders, or ambiguous claims), call the appropriate tools to gather evidence before making a final determination. For high-value orders or ambiguous claims, verify both carrier delivery status (via query_carrier_tracking) and payment transaction status (via query_payment_transaction) to ensure delivery proof and charge eligibility before concluding.
+
+When evaluating damage claims (category: 'damaged') with attached photos, inspect the images to verify whether:
+1. The image depicts the ordered product (product match).
+2. The image exhibits visible physical damage consistent with the customer's claim.
+- If physical damage matching the claim is clearly visible on the ordered product, conclude policy_status: 'pass' with reasoning confirming physical damage was verified.
+- If the item appears intact with no visible damage, conclude policy_status: 'fail' (or 'ambiguous') with reasoning stating no damage was detected.
+- If the image is blurry, inconclusive, corrupted, or depicts a mismatched product, conclude policy_status: 'ambiguous' requiring human reviewer inspection.
 
 Return a structured output with:
 - policy_status: 'pass' (eligible), 'fail' (clearly ineligible), or 'ambiguous' (requires human review).
@@ -132,6 +139,83 @@ def _parse_policy_checker_output(
     return None
 
 
+def _extract_image_block(item: Any, storage_service: Any = None) -> dict[str, Any] | None:
+    """Convert an evidence item into a multimodal Bedrock Converse image content block."""
+    if hasattr(item, "model_dump"):
+        item_dict = item.model_dump()
+    elif isinstance(item, dict):
+        item_dict = item
+    else:
+        item_dict = {}
+
+    content_type = item_dict.get("content_type") or getattr(item, "content_type", "")
+    filename = item_dict.get("filename") or getattr(item, "filename", "")
+    storage_key = item_dict.get("storage_key") or getattr(item, "storage_key", None)
+
+    # Ignore video or non-image files
+    if content_type.startswith("video/") or any(
+        filename.lower().endswith(ext) for ext in (".mp4", ".mov", ".avi", ".mkv")
+    ):
+        return None
+
+    file_bytes: bytes | None = None
+    if "bytes" in item_dict and isinstance(item_dict["bytes"], (bytes, bytearray)):
+        file_bytes = bytes(item_dict["bytes"])
+    elif "raw_bytes" in item_dict and isinstance(item_dict["raw_bytes"], (bytes, bytearray)):
+        file_bytes = bytes(item_dict["raw_bytes"])
+    elif isinstance(item, (bytes, bytearray)):
+        file_bytes = bytes(item)
+    elif "base64" in item_dict and isinstance(item_dict["base64"], str):
+        b64_str = item_dict["base64"]
+        if "," in b64_str:
+            b64_str = b64_str.split(",", 1)[1]
+        file_bytes = base64.b64decode(b64_str)
+    elif "data" in item_dict and isinstance(item_dict["data"], str):
+        b64_str = item_dict["data"]
+        if "," in b64_str:
+            b64_str = b64_str.split(",", 1)[1]
+        file_bytes = base64.b64decode(b64_str)
+    elif storage_key:
+        if storage_service is None:
+            from app.services.storage import get_evidence_storage_service
+            storage_service = get_evidence_storage_service()
+        file_bytes = storage_service.get_file(storage_key)
+
+    if not file_bytes:
+        return None
+
+    # Determine format/content_type
+    if not content_type or not content_type.startswith("image/"):
+        ext = Path(filename).suffix.lower() if filename else ""
+        if ext in (".jpg", ".jpeg"):
+            content_type = "image/jpeg"
+        elif ext == ".png":
+            content_type = "image/png"
+        elif ext == ".webp":
+            content_type = "image/webp"
+        elif file_bytes.startswith(b"\xff\xd8\xff"):
+            content_type = "image/jpeg"
+        elif file_bytes.startswith(b"\x89PNG"):
+            content_type = "image/png"
+        elif file_bytes.startswith(b"RIFF") and b"WEBP" in file_bytes[:16]:
+            content_type = "image/webp"
+        else:
+            content_type = "image/jpeg"
+
+    b64_encoded = base64.b64encode(file_bytes).decode("utf-8")
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": content_type,
+            "data": b64_encoded,
+        },
+        "image_url": {
+            "url": f"data:{content_type};base64,{b64_encoded}",
+        },
+    }
+
+
 def check_policy(
     category: str,
     order: dict[str, Any],
@@ -139,6 +223,9 @@ def check_policy(
     llm: BaseChatModel | None = None,
     tools: list[Any] | None = None,
     max_tool_iterations: int = 5,
+    customer_request_text: str | None = None,
+    evidence: list[dict[str, Any]] | list[Any] | None = None,
+    storage_service: Any | None = None,
 ) -> PolicyCheckerOutput:
     """Evaluate a refund request against policies, bypassing LLM on clear-cut cases.
 
@@ -149,6 +236,9 @@ def check_policy(
         llm: Optional BaseChatModel instance for ambiguity resolution and tool calling.
         tools: Optional list of tools to bind to the model. Defaults to carrier and payment tools.
         max_tool_iterations: Maximum number of tool calling turns (default 5).
+        customer_request_text: Optional customer-provided explanation text.
+        evidence: Optional list of customer evidence metadata items.
+        storage_service: Optional EvidenceStorageService instance for loading evidence files.
 
     Returns:
         PolicyCheckerOutput instance.
@@ -156,11 +246,62 @@ def check_policy(
     active_policies = policies if policies is not None else load_policies()
     eval_result = evaluate_policy(category=category, order=order, policy=active_policies)
 
+    # Process evidence items
+    image_blocks: list[dict[str, Any]] = []
+    has_video_evidence = False
+    has_image_evidence = False
+
+    if evidence:
+        for ev in evidence:
+            ev_dict = ev.model_dump() if hasattr(ev, "model_dump") else (ev if isinstance(ev, dict) else {})
+            c_type = ev_dict.get("content_type") or getattr(ev, "content_type", "")
+            f_name = ev_dict.get("filename") or getattr(ev, "filename", "")
+            is_video = c_type.startswith("video/") or any(
+                f_name.lower().endswith(ext) for ext in (".mp4", ".mov", ".avi", ".mkv")
+            )
+            if is_video:
+                has_video_evidence = True
+                continue
+
+            has_image_evidence = True
+            try:
+                block = _extract_image_block(ev, storage_service)
+                if block is not None:
+                    image_blocks.append(block)
+            except Exception as e:
+                err_detail = str(e) or type(e).__name__
+                return PolicyCheckerOutput(
+                    policy_status="ambiguous",
+                    matched_policy_rule=eval_result.matched_policy_rule,
+                    passed_rules=eval_result.passed_rules,
+                    failed_rules=eval_result.failed_rules,
+                    policy_reasoning=f"Failed to retrieve evidence file: {err_detail}",
+                    tool_calls=[],
+                )
+
+        if has_video_evidence and not has_image_evidence:
+            return PolicyCheckerOutput(
+                policy_status="ambiguous",
+                matched_policy_rule=eval_result.matched_policy_rule,
+                passed_rules=eval_result.passed_rules,
+                failed_rules=eval_result.failed_rules,
+                policy_reasoning="Video evidence requires manual reviewer inspection.",
+                tool_calls=[],
+            )
+
     # 1. Deterministic Pass Bypass
-    # Clear-cut pass bypasses LLM except for late_delivery which requires external carrier verification
-    # or high-value orders (order_amount >= 400.0) which require dual external verification
+    # Clear-cut pass bypasses LLM except for:
+    # - late_delivery (requires external carrier verification)
+    # - high-value orders (order_amount >= 400.0, requires dual external verification)
+    # - damaged category when valid image evidence is provided (requires multimodal LLM inspection)
     is_high_value = float(order.get("order_amount", 0.0) or 0.0) >= 400.0
-    if eval_result.status == "pass" and category != "late_delivery" and not is_high_value:
+    has_active_image_evidence = bool(image_blocks)
+    should_bypass_pass = (
+        category == "late_delivery"
+        or is_high_value
+        or (category == "damaged" and has_active_image_evidence)
+    )
+    if eval_result.status == "pass" and not should_bypass_pass:
         return PolicyCheckerOutput(
             policy_status="pass",
             matched_policy_rule=eval_result.matched_policy_rule,
@@ -209,12 +350,22 @@ def check_policy(
         else eval_result.matched_policy_rule
     )
 
-    human_content = f"""Category: {category}
-Order Details: {order}
+    customer_line = (
+        f"\nCustomer Explanation: {customer_request_text.strip()}"
+        if customer_request_text and customer_request_text.strip()
+        else ""
+    )
+    human_text = f"""Category: {category}
+Order Details: {order}{customer_line}
 Deterministic Findings: {eval_result.details}
 Policy Rule: {rule_repr}
 
 Analyze the situation and provide your determination:"""
+
+    if image_blocks:
+        human_content: list[Any] = [{"type": "text", "text": human_text}] + image_blocks
+    else:
+        human_content = human_text
 
     messages: list[Any] = [
         SystemMessage(content=POLICY_CHECKER_SYSTEM_PROMPT),
@@ -364,8 +515,15 @@ def policy_checker_node(state: dict[str, Any]) -> dict[str, Any]:
     order = state.get("order")
     if not order:
         order = {"order_id": state.get("order_id", "")}
+    customer_request_text = state.get("customer_request_text")
+    evidence = state.get("evidence")
 
-    output = check_policy(category=category, order=order)
+    output = check_policy(
+        category=category,
+        order=order,
+        customer_request_text=customer_request_text,
+        evidence=evidence,
+    )
 
     matched_rule = output.matched_policy_rule
     if hasattr(matched_rule, "model_dump"):
