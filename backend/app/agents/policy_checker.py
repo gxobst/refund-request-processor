@@ -311,8 +311,20 @@ def check_policy(
             tool_calls=[],
         )
 
-    # 2. Deterministic Fail Bypass
-    # Clear-cut fail on hard constraints (e.g. max_order_amount exceeded or non-late_delivery expired window)
+    # 2. Deterministic Supervisor Escalation for Order Amount Violations
+    if eval_result.status == "ambiguous" and eval_result.failed_rules == ["max_order_amount"]:
+        return PolicyCheckerOutput(
+            policy_status="ambiguous",
+            matched_policy_rule=eval_result.matched_policy_rule,
+            passed_rules=eval_result.passed_rules,
+            failed_rules=eval_result.failed_rules,
+            policy_reasoning=eval_result.details
+            or "Order amount exceeds maximum policy threshold; requires supervisor review.",
+            tool_calls=[],
+        )
+
+    # 3. Deterministic Fail Bypass
+    # Clear-cut fail on hard constraints (e.g. expired refund window, ineligible delivery status)
     if eval_result.status == "fail":
         is_hard_constraint = (
             "max_order_amount" in eval_result.failed_rules

@@ -54,7 +54,8 @@ def test_check_policy_deterministic_pass_bypasses_llm():
 
 
 def test_check_policy_deterministic_fail_bypasses_llm():
-    # Arrange: order exceeding maximum amount limit ($500 for damaged)
+    """AC 2309: order exceeding maximum amount limit returns policy_status='ambiguous' with supervisor escalation reasoning and failed_rules=['max_order_amount']."""
+    # Arrange: order exceeding maximum amount limit ($500 for damaged) but passing other rules
     order = {
         "order_id": "ORD-FAIL-1",
         "order_amount": 950.0,
@@ -68,11 +69,34 @@ def test_check_policy_deterministic_fail_bypasses_llm():
 
     # Assert
     assert isinstance(result, PolicyCheckerOutput)
+    assert result.policy_status == "ambiguous"
+    assert result.failed_rules == ["max_order_amount"]
+    assert "supervisor" in result.policy_reasoning.lower()
+
+    # Verify LLM was NOT called
+    mock_llm.with_structured_output.assert_not_called()
+    mock_llm.invoke.assert_not_called()
+    mock_llm.bind_tools.assert_not_called()
+
+
+def test_check_policy_order_failing_window_and_amount_deterministically_fails_bypassing_llm():
+    """AC 2310: order failing both return window and max order amount returns policy_status='fail' deterministically without calling LLM."""
+    order = {
+        "order_id": "ORD-FAIL-2",
+        "order_amount": 950.0,
+        "delivery_status": "delivered",
+        "delivery_date": "2020-01-01",  # Expired window
+    }
+    mock_llm = MagicMock()
+
+    result = check_policy(category="damaged", order=order, llm=mock_llm)
+
+    assert isinstance(result, PolicyCheckerOutput)
     assert result.policy_status == "fail"
+    assert "refund_window_days" in result.failed_rules
     assert "max_order_amount" in result.failed_rules
     assert "fail" in result.policy_reasoning.lower()
 
-    # Verify LLM was NOT called
     mock_llm.with_structured_output.assert_not_called()
     mock_llm.invoke.assert_not_called()
     mock_llm.bind_tools.assert_not_called()

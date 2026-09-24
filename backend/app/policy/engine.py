@@ -190,8 +190,14 @@ def evaluate_policy(
         failed_rules.append("max_order_amount")
 
     # 6. Determine final result status
-    if failed_rules:
-        status: Literal["pass", "fail", "ambiguous"] = "fail"
+    if failed_rules == ["max_order_amount"]:
+        status = "ambiguous"
+        details = (
+            f"Order amount (${amount:.2f}) exceeds maximum threshold "
+            f"(${max_amount:.2f}); requires supervisor escalation."
+        )
+    elif failed_rules:
+        status = "fail"
         details = f"Evaluation failed for rules: {', '.join(failed_rules)}"
     else:
         status = "pass"

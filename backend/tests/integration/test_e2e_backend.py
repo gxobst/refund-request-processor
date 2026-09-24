@@ -285,10 +285,10 @@ async def test_e2e_auto_approve_flow(mock_repo: RefundRepository):
 @pytest.mark.asyncio
 async def test_e2e_deny_flow(mock_repo: RefundRepository):
     """AC 3: Verify full lifecycle for denied refund request violating policy limits."""
-    # Arrange: ORD-1003 has order_amount $750, exceeding the $500 damaged limit
+    # Arrange: ORD-1004 has an expired delivery date (August 2026, > 30 days)
     payload = {
-        "order_id": "ORD-1003",
-        "customer_request_text": "The monitor screen arrived shattered and damaged.",
+        "order_id": "ORD-1004",
+        "customer_request_text": "The keyboard switch broke.",
     }
     transport = ASGITransport(app=app)
 
@@ -542,8 +542,8 @@ async def test_e2e_high_confidence_requests_bypass_clarification(mock_repo: Refu
         ref_id_1003 = res_1003.json()["refund_id"]
 
         record_1003 = await poll_until_not_pending(client, ref_id_1003)
-        assert record_1003["status"] == "completed"
-        assert record_1003["decision"] == "deny"
+        assert record_1003["status"] == "escalated"
+        assert record_1003["decision"] == "escalate"
         assert record_1003["confidence_score"] >= 0.70
         assert record_1003["clarification_count"] == 0
         assert record_1003["clarification_prompt"] is None
@@ -613,7 +613,7 @@ async def test_e2e_queue_listing_and_filtering(mock_repo: RefundRepository):
         # Submit 1 denied request
         r2 = await client.post(
             "/refunds",
-            json={"order_id": "ORD-1003", "customer_request_text": "Damaged monitor."},
+            json={"order_id": "ORD-1004", "customer_request_text": "Keyboard broken."},
         )
         # Submit 1 escalated request
         r3 = await client.post(

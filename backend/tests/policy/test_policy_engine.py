@@ -160,8 +160,8 @@ def test_amount_exact_boundary_passes(damaged_policy: CategoryPolicy):
     assert "max_order_amount" in result.passed_rules
 
 
-def test_amount_exceeded_fails(damaged_policy: CategoryPolicy):
-    # Arrange: order_amount 500.01 exceeds 500.0 limit
+def test_order_amount_exceeded_returns_ambiguous_for_escalation(damaged_policy: CategoryPolicy):
+    """AC 2306: evaluate_policy returns status='ambiguous' with failed_rules=['max_order_amount'] when order amount exceeds threshold but all other rules pass."""
     eval_date = date(2026, 9, 10)
     order = {
         "order_id": "ORD-006",
@@ -179,8 +179,59 @@ def test_amount_exceeded_fails(damaged_policy: CategoryPolicy):
     )
 
     # Assert
+    assert result.status == "ambiguous"
+    assert result.failed_rules == ["max_order_amount"]
+    assert "supervisor escalation" in result.details.lower()
+    assert "500.01" in result.details
+    assert "500.00" in result.details
+
+
+def test_order_amount_exceeded_and_expired_window_returns_fail(damaged_policy: CategoryPolicy):
+    """AC 2307: evaluate_policy returns status='fail' when order amount exceeds threshold and return window is expired."""
+    eval_date = date(2026, 10, 20)  # > 30 days after 2026-09-05 (45 days)
+    order = {
+        "order_id": "ORD-006B",
+        "order_amount": 600.0,
+        "delivery_status": "delivered",
+        "delivery_date": "2026-09-05",
+    }
+
+    # Act
+    result = evaluate_policy(
+        category="damaged",
+        order=order,
+        policy=damaged_policy,
+        evaluation_date=eval_date,
+    )
+
+    # Assert
     assert result.status == "fail"
     assert "max_order_amount" in result.failed_rules
+    assert "refund_window_days" in result.failed_rules
+
+
+def test_order_amount_exactly_equals_max_amount_passes(damaged_policy: CategoryPolicy):
+    """AC 2308: evaluate_policy returns status='pass' when order amount is exactly equal to max_order_amount."""
+    eval_date = date(2026, 9, 10)
+    order = {
+        "order_id": "ORD-005B",
+        "order_amount": 500.0,
+        "delivery_status": "delivered",
+        "delivery_date": "2026-09-05",
+    }
+
+    # Act
+    result = evaluate_policy(
+        category="damaged",
+        order=order,
+        policy=damaged_policy,
+        evaluation_date=eval_date,
+    )
+
+    # Assert
+    assert result.status == "pass"
+    assert "max_order_amount" in result.passed_rules
+    assert result.failed_rules == []
 
 
 def test_delivery_status_ineligible_fails(damaged_policy: CategoryPolicy):
@@ -457,5 +508,6 @@ def test_evaluate_policy_with_dict_policy():
     )
 
     # Assert
-    assert result.status == "fail"
+    assert result.status == "ambiguous"
     assert "max_order_amount" in result.failed_rules
+    assert "supervisor escalation" in result.details.lower()

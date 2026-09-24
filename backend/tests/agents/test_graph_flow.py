@@ -874,4 +874,48 @@ async def test_workflow_auto_approve_generates_and_persists_approval_email_text(
         set_current_repository(None)
 
 
+@pytest.mark.asyncio
+async def test_workflow_order_amount_exceeded_escalates():
+    """AC 2311: Integration test asserts end-to-end workflow execution for an order exceeding max_order_amount produces decision='escalate' and status='escalated'."""
+    # ORD-1003 has order_amount: 750.0 (exceeds $500 limit for damaged), delivered recently
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.95,
+        reasoning="Customer reported broken screen on monitor.",
+    )
+    mock_llm = make_mock_llm(mock_classification)
+    checkpointer = MemorySaver()
+
+    mock_repo = MagicMock(spec=["update_decision"])
+    set_current_repository(mock_repo)
+
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_llm)
+
+            final_state = await run_refund_workflow(
+                refund_id="ref_test_amount_escalate",
+                order_id="ORD-1003",
+                customer_request_text="The gaming monitor screen is cracked.",
+                checkpointer=checkpointer,
+            )
+
+        # Assert final workflow state
+        assert final_state["decision"] == "escalate"
+        assert final_state["status"] == "escalated"
+        assert final_state["policy_status"] == "ambiguous"
+        assert final_state["failed_rules"] == ["max_order_amount"]
+        assert "supervisor" in final_state["policy_reasoning"].lower()
+
+        # Assert persistence to DynamoDB
+        mock_repo.update_decision.assert_called_once()
+        kwargs = mock_repo.update_decision.call_args[1]
+        assert kwargs["refund_id"] == "ref_test_amount_escalate"
+        assert kwargs["decision"] == "escalate"
+        assert kwargs["status"] == "escalated"
+    finally:
+        set_current_repository(None)
+
+
+
 
