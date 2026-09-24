@@ -259,3 +259,163 @@ def test_clarification_node_handles_none_clarification_count():
     assert update["clarification_count"] == 1
     assert update["status"] == "awaiting_clarification"
     assert update["needs_clarification"] is True
+
+
+def test_clarification_system_prompt_structure_and_rules():
+    """Verify that CLARIFICATION_SYSTEM_PROMPT instructs complete customer email and mandatory damage evidence."""
+    from app.agents.clarification import CLARIFICATION_SYSTEM_PROMPT
+
+    prompt_lower = CLARIFICATION_SYSTEM_PROMPT.lower()
+    assert "formal greeting" in prompt_lower or "greeting" in prompt_lower
+    assert "statement of missing information" in prompt_lower or "missing details" in prompt_lower
+    assert "specific questions" in prompt_lower
+    assert "mandatory damage evidence rule" in prompt_lower or "damage evidence" in prompt_lower
+    assert "shipping box" in prompt_lower
+    assert "packaging condition" in prompt_lower
+    assert "photo or video proof" in prompt_lower
+    assert "professional sign-off" in prompt_lower or "sign-off" in prompt_lower
+
+
+def test_generate_clarification_prompt_damage_claim_requires_photo_and_packaging_proof():
+    """AC 1875: Verify when category='damaged' or text describes damage, email contains greeting, sign-off, and mandates item & packaging proof."""
+    damage_email = (
+        "Dear Customer,\n\n"
+        "Thank you for contacting support regarding your refund request for order ORD-1010.\n\n"
+        "We are sorry to hear that your item arrived damaged. To process your refund under our policy, "
+        "we require clear photo or video proof of both the damaged item and the shipping box/packaging condition upon delivery.\n\n"
+        "Could you please also specify if the packaging was torn upon arrival?\n\n"
+        "Sincerely,\n"
+        "Customer Support Team"
+    )
+    expected_output = ClarificationOutput(
+        clarification_prompt=damage_email,
+        missing_aspects=["photo_or_video_proof_of_damage", "packaging_condition_proof"],
+        reasoning="Physical damage claims require photo or video proof of both the damaged item and packaging.",
+    )
+    mock_llm = make_mock_clarification_llm(expected_output)
+
+    result = generate_clarification_prompt(
+        customer_request_text="The camera arrived with a cracked lens and crushed box.",
+        category="damaged",
+        order={"order_id": "ORD-1010", "item": "Professional Mirrorless Camera"},
+        llm=mock_llm,
+    )
+
+    assert isinstance(result, ClarificationOutput)
+    # 1. Email greeting
+    assert "dear customer" in result.clarification_prompt.lower()
+    # 2. Email sign-off
+    assert "sincerely" in result.clarification_prompt.lower() or "customer support" in result.clarification_prompt.lower()
+    # 3. Explicit requirement for photo or video proof of both item and packaging
+    assert "photo or video proof" in result.clarification_prompt.lower()
+    assert "damaged item" in result.clarification_prompt.lower()
+    assert "packaging" in result.clarification_prompt.lower() or "shipping box" in result.clarification_prompt.lower()
+    # 4. Missing aspects includes damage and packaging proof
+    assert any("damage" in aspect.lower() for aspect in result.missing_aspects)
+    assert any("packaging" in aspect.lower() for aspect in result.missing_aspects)
+
+
+def test_generate_clarification_prompt_non_damage_claim_does_not_demand_damage_photos():
+    """AC 1876: Verify for non-damage claims (e.g. wrong item), email asks for missing details without demanding damage photos."""
+    wrong_item_email = (
+        "Dear Customer,\n\n"
+        "Thank you for reaching out regarding your recent order ORD-1002.\n\n"
+        "You mentioned receiving the wrong item. Could you please specify the exact product or model name "
+        "you received instead of your ordered headphones, and confirm whether the original tags are attached?\n\n"
+        "Sincerely,\n"
+        "Customer Support Team"
+    )
+    expected_output = ClarificationOutput(
+        clarification_prompt=wrong_item_email,
+        missing_aspects=["received_item_details", "tag_condition"],
+        reasoning="Wrong item claim requires description of the incorrect product received.",
+    )
+    mock_llm = make_mock_clarification_llm(expected_output)
+
+    result = generate_clarification_prompt(
+        customer_request_text="I did not get what I ordered, please refund.",
+        category="wrong_item",
+        order={"order_id": "ORD-1002", "item": "Noise-Cancelling Headphones"},
+        llm=mock_llm,
+    )
+
+    assert isinstance(result, ClarificationOutput)
+    # Greeting and closing present
+    assert "dear customer" in result.clarification_prompt.lower()
+    assert "sincerely" in result.clarification_prompt.lower()
+    # Asks for specific missing details
+    assert "wrong item" in result.clarification_prompt.lower() or "received" in result.clarification_prompt.lower()
+    # Does NOT demand damage photos
+    assert "damage photo" not in result.clarification_prompt.lower()
+    assert "damaged item" not in result.clarification_prompt.lower()
+    assert not any("damage" in aspect.lower() for aspect in result.missing_aspects)
+
+
+def test_generate_clarification_prompt_fallback_structured_email_on_blank():
+    """AC 1877: Verify empty or whitespace customer text produces fallback email with greeting, details request, and sign-off."""
+    mock_llm = MagicMock()
+
+    result = generate_clarification_prompt(customer_request_text="   \n  \t", llm=mock_llm)
+
+    mock_llm.with_structured_output.assert_not_called()
+    assert isinstance(result, ClarificationOutput)
+    # Formal greeting
+    assert "dear customer" in result.clarification_prompt.lower()
+    # Request for specific refund reason / details
+    assert "specific explanation" in result.clarification_prompt.lower() or "details" in result.clarification_prompt.lower()
+    assert "items" in result.clarification_prompt.lower()
+    # Evidence instructions
+    assert "photo or video proof" in result.clarification_prompt.lower()
+    assert "packaging" in result.clarification_prompt.lower()
+    # Professional sign-off
+    assert "sincerely" in result.clarification_prompt.lower()
+    assert "customer support team" in result.clarification_prompt.lower()
+
+
+def test_clarification_node_stores_full_email_in_state_and_invokes_repo():
+    """AC 1878: Verify clarification_node correctly stores full clarification email text in workflow state and invokes repo."""
+    mock_repo = MagicMock()
+    set_current_repository(mock_repo)
+
+    clarification_email = (
+        "Dear Customer,\n\n"
+        "Thank you for contacting customer support. We noticed your request regarding order ORD-1008 lacks detail. "
+        "Could you please clarify whether the fitness watch is unresponsive or if parts are missing?\n\n"
+        "Sincerely,\n"
+        "Customer Support Team"
+    )
+    expected_output = ClarificationOutput(
+        clarification_prompt=clarification_email,
+        missing_aspects=["symptom_description"],
+        reasoning="Insufficient details provided to categorize or evaluate refund claim.",
+    )
+    mock_llm = make_mock_clarification_llm(expected_output)
+
+    state = {
+        "refund_id": "ref_email_node_test",
+        "customer_request_text": "Watch has issues.",
+        "category": "unclassified",
+        "clarification_count": 0,
+    }
+
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("app.agents.clarification.get_bedrock_llm", lambda: mock_llm)
+            update = clarification_node(state)
+
+        # Verify state storage of full email
+        assert update["clarification_prompt"] == clarification_email
+        assert "Dear Customer," in update["clarification_prompt"]
+        assert "Sincerely," in update["clarification_prompt"]
+        assert update["status"] == "awaiting_clarification"
+        assert update["needs_clarification"] is True
+        assert update["clarification_count"] == 1
+
+        # Verify repo invocation with exact full email
+        mock_repo.request_clarification.assert_called_once_with(
+            refund_id="ref_email_node_test",
+            clarification_prompt=clarification_email,
+        )
+    finally:
+        set_current_repository(None)
+
