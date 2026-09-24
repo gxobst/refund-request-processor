@@ -1719,6 +1719,192 @@ def test_policy_checker_node_forwards_customer_text_and_evidence():
         )
 
 
+def test_check_policy_high_value_prompt_mandate_assembly():
+    """AC 2497: Unit test verifies that high-value orders (>= $400) assemble human prompt text containing the explicit high-value dual tool mandate."""
+    high_value_order = {
+        "order_id": "ORD-1010",
+        "item": "Professional Mirrorless Camera",
+        "order_amount": 450.0,
+        "delivery_status": "delivered",
+        "purchase_date": "2026-09-15",
+    }
+    mock_llm = MagicMock()
+    bound_mock = MagicMock()
+    mock_llm.bind_tools.return_value = bound_mock
+
+    # Return ambiguous to terminate
+    bound_mock.invoke.return_value = AIMessage(
+        content=json.dumps({
+            "policy_status": "ambiguous",
+            "passed_rules": [],
+            "failed_rules": [],
+            "policy_reasoning": "Under evaluation.",
+        })
+    )
+
+    check_policy(category="damaged", order=high_value_order, llm=mock_llm)
+
+    assert bound_mock.invoke.called
+    invoke_messages = bound_mock.invoke.call_args[0][0]
+    human_msg = next(m for m in invoke_messages if isinstance(m, HumanMessage))
+    human_text = human_msg.content if isinstance(human_msg.content, str) else str(human_msg.content)
+    assert "High-Value Order Mandate" in human_text
+    assert "query_carrier_tracking" in human_text
+    assert "query_payment_transaction" in human_text
+    assert "order_amount >= 400.0" in human_text
+
+
+def test_check_policy_high_value_intercepts_premature_pass_and_injects_reminder():
+    """AC 2498: Unit test verifies that if the model attempts an immediate pass response on a high-value order without calling tools, the tool loop intercepts the response, injects a reminder, and requires execution of both tools."""
+    high_value_order = {
+        "order_id": "ORD-1010",
+        "item": "Professional Mirrorless Camera",
+        "order_amount": 450.0,
+        "delivery_status": "delivered",
+        "purchase_date": "2026-09-15",
+    }
+    # Turn 1: Model prematurely attempts pass without tools
+    premature_pass_msg = AIMessage(
+        content=json.dumps({
+            "policy_status": "pass",
+            "passed_rules": ["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+            "failed_rules": [],
+            "policy_reasoning": "Everything looks good, approved without tools.",
+        })
+    )
+    # Turn 2: After reminder, model invokes both tools
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "query_carrier_tracking",
+                "args": {"tracking_number": "TRK-1010"},
+                "id": "call_trk_intercept",
+            },
+            {
+                "name": "query_payment_transaction",
+                "args": {"order_id": "ORD-1010"},
+                "id": "call_pay_intercept",
+            },
+        ],
+    )
+    # Turn 3: Model outputs final pass with evidence
+    final_pass_msg = AIMessage(
+        content=json.dumps({
+            "policy_status": "pass",
+            "passed_rules": ["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+            "failed_rules": [],
+            "policy_reasoning": "Carrier and payment verified successfully.",
+        })
+    )
+
+    mock_llm = MagicMock()
+    bound_mock = MagicMock()
+    bound_mock.invoke.side_effect = [premature_pass_msg, tool_call_msg, final_pass_msg]
+    mock_llm.bind_tools.return_value = bound_mock
+
+    result = check_policy(category="damaged", order=high_value_order, llm=mock_llm)
+
+    assert result.policy_status == "pass"
+    assert len(result.tool_calls) == 2
+    tool_names = {t["tool_name"] for t in result.tool_calls}
+    assert tool_names == {"query_carrier_tracking", "query_payment_transaction"}
+
+    # Verify reminder injected into messages for turn 2
+    turn2_messages = bound_mock.invoke.call_args_list[1][0][0]
+    reminder_msg = next(
+        m for m in turn2_messages
+        if isinstance(m, HumanMessage) and "MANDATORY VERIFICATION INCOMPLETE" in (m.content if isinstance(m.content, str) else "")
+    )
+    assert "query_carrier_tracking" in reminder_msg.content
+    assert "query_payment_transaction" in reminder_msg.content
+
+
+def test_check_policy_high_value_exhausted_iterations_defaults_to_ambiguous():
+    """AC 2500: Unit test verifies that if a high-value order tool loop exhausts iterations without executing both tools, the result defaults to policy_status='ambiguous' with dual verification deficiency reasoning."""
+    high_value_order = {
+        "order_id": "ORD-1010",
+        "item": "Professional Mirrorless Camera",
+        "order_amount": 450.0,
+        "delivery_status": "delivered",
+        "purchase_date": "2026-09-15",
+    }
+    # Model persistently returns premature pass without calling tools
+    persistent_pass_msg = AIMessage(
+        content=json.dumps({
+            "policy_status": "pass",
+            "passed_rules": ["refund_window_days"],
+            "failed_rules": [],
+            "policy_reasoning": "Immediate pass without tools.",
+        })
+    )
+
+    mock_llm = MagicMock()
+    bound_mock = MagicMock()
+    bound_mock.invoke.return_value = persistent_pass_msg
+    mock_llm.bind_tools.return_value = bound_mock
+
+    result = check_policy(category="damaged", order=high_value_order, llm=mock_llm, max_tool_iterations=3)
+
+    assert result.policy_status == "ambiguous"
+    assert "Mandatory dual external verification was incomplete for high-value order" in result.policy_reasoning
+    assert "query_carrier_tracking" in result.policy_reasoning
+    assert "query_payment_transaction" in result.policy_reasoning
+    assert result.tool_calls == []
+
+
+def test_check_policy_low_value_does_not_require_dual_tools():
+    """AC 2501: Unit test verifies that an order with order_amount < 400.0 does not require dual tool calls and bypasses or completes normally."""
+    # Subcase A: Clear-cut pass bypasses LLM entirely
+    low_value_order = {
+        "order_id": "ORD-1008",
+        "item": "Smart Fitness Watch",
+        "order_amount": 99.0,
+        "delivery_status": "delivered",
+        "purchase_date": date.today().isoformat(),
+        "delivery_date": date.today().isoformat(),
+    }
+    mock_llm = MagicMock()
+    result_bypassed = check_policy(category="damaged", order=low_value_order, llm=mock_llm)
+    assert result_bypassed.policy_status == "pass"
+    assert result_bypassed.tool_calls == []
+    mock_llm.invoke.assert_not_called()
+
+    # Subcase B: Category requiring single tool (late_delivery) succeeds with only carrier tool
+    late_order = {
+        "order_id": "ORD-1005",
+        "item": "Standing Desk Converter",
+        "order_amount": 199.99,
+        "delivery_status": "in_transit",
+        "purchase_date": "2026-09-01",
+    }
+    carrier_tool_msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "query_carrier_tracking",
+            "args": {"tracking_number": "TRK-1005"},
+            "id": "call_trk_low",
+        }],
+    )
+    synthesis_msg = AIMessage(
+        content=json.dumps({
+            "policy_status": "pass",
+            "passed_rules": ["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+            "failed_rules": [],
+            "policy_reasoning": "Carrier confirmed delay.",
+        })
+    )
+    bound_mock = MagicMock()
+    bound_mock.invoke.side_effect = [carrier_tool_msg, synthesis_msg]
+    mock_llm.bind_tools.return_value = bound_mock
+
+    result_late = check_policy(category="late_delivery", order=late_order, llm=mock_llm)
+    assert result_late.policy_status == "pass"
+    assert len(result_late.tool_calls) == 1
+    assert result_late.tool_calls[0]["tool_name"] == "query_carrier_tracking"
+
+
+
 
 
 

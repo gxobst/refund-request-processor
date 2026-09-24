@@ -22,7 +22,10 @@ You have access to the following verification tools:
 - query_carrier_tracking: Use this tool to look up carrier delivery status, delivery dates, and proof-of-delivery photos (useful for late delivery claims or lost packages). If a tracking number is not explicitly given in the order details, use 'TRK-' followed by the order ID number (for example, 'TRK-1005' for order 'ORD-1005').
 - query_payment_transaction: Use this tool to look up Stripe charge status, dispute state, and refund eligibility for an order.
 
-When evaluating requests requiring external verification (such as late deliveries, missing order data, high-value orders, or ambiguous claims), call the appropriate tools to gather evidence before making a final determination. For high-value orders or ambiguous claims, verify both carrier delivery status (via query_carrier_tracking) and payment transaction status (via query_payment_transaction) to ensure delivery proof and charge eligibility before concluding.
+When evaluating requests requiring external verification (such as late deliveries, missing order data, or ambiguous claims), call the appropriate tools to gather evidence before making a final determination.
+
+MANDATORY DUAL TOOL VERIFICATION FOR HIGH-VALUE ORDERS:
+For any high-value order (order_amount >= 400.0) or orders flagged as high-value, you MUST invoke BOTH query_carrier_tracking and query_payment_transaction before concluding with policy_status: "pass". You are strictly forbidden from approving or returning policy_status: "pass" for high-value orders without executing both verification tools.
 
 When evaluating damage claims (category: 'damaged') with attached photos, inspect the images to verify whether:
 1. The image depicts the ordered product (product match).
@@ -59,6 +62,9 @@ FINAL_SYNTHESIS_PROMPT = """Provide your final policy determination formatted as
 - "policy_reasoning": detailed explanation of your determination and evidence
 
 Respond with ONLY the JSON object, with no additional conversational text or markdown code fences."""
+
+HIGH_VALUE_THRESHOLD = 400.0
+REQUIRED_HIGH_VALUE_TOOLS = frozenset({"query_carrier_tracking", "query_payment_transaction"})
 
 
 def _extract_text(content: Any) -> str:
@@ -294,7 +300,7 @@ def check_policy(
     # - late_delivery (requires external carrier verification)
     # - high-value orders (order_amount >= 400.0, requires dual external verification)
     # - damaged category when valid image evidence is provided (requires multimodal LLM inspection)
-    is_high_value = float(order.get("order_amount", 0.0) or 0.0) >= 400.0
+    is_high_value = float(order.get("order_amount", 0.0) or 0.0) >= HIGH_VALUE_THRESHOLD
     has_active_image_evidence = bool(image_blocks)
     should_bypass_pass = (
         category == "late_delivery"
@@ -343,6 +349,7 @@ def check_policy(
 
     # 3. LLM External Verification and Ambiguity Resolution
     executed_tool_calls: list[dict[str, Any]] = []
+    executed_tool_names: set[str] = set()
     active_tools = tools if tools is not None else [query_carrier_tracking, query_payment_transaction]
     tool_map: dict[str, Any] = {}
     for t in active_tools:
@@ -367,8 +374,15 @@ def check_policy(
         if customer_request_text and customer_request_text.strip()
         else ""
     )
+    high_value_mandate = ""
+    if is_high_value:
+        high_value_mandate = (
+            "\nHigh-Value Order Mandate: This order has an amount of $400.00 or greater (order_amount >= 400.0). "
+            "You MUST invoke BOTH 'query_carrier_tracking' and 'query_payment_transaction' to verify delivery proof and charge eligibility before concluding with policy_status: 'pass'."
+        )
+
     human_text = f"""Category: {category}
-Order Details: {order}{customer_line}
+Order Details: {order}{customer_line}{high_value_mandate}
 Deterministic Findings: {eval_result.details}
 Policy Rule: {rule_repr}
 
@@ -393,6 +407,17 @@ Analyze the situation and provide your determination:"""
                 if result.matched_policy_rule is None and eval_result.matched_policy_rule is not None:
                     result.matched_policy_rule = eval_result.matched_policy_rule
                 result.tool_calls = executed_tool_calls
+                if is_high_value and result.policy_status == "pass":
+                    missing = REQUIRED_HIGH_VALUE_TOOLS - executed_tool_names
+                    if missing:
+                        missing_str = ", ".join(sorted(missing))
+                        reminder = (
+                            f"MANDATORY VERIFICATION INCOMPLETE: High-value orders (order_amount >= $400.0) require "
+                            f"executing both query_carrier_tracking and query_payment_transaction before approval. "
+                            f"Missing required tool(s): {missing_str}. Please invoke the missing tool(s)."
+                        )
+                        messages.append(HumanMessage(content=reminder))
+                        continue
                 return result
 
             messages.append(response)
@@ -401,6 +426,7 @@ Analyze the situation and provide your determination:"""
             if isinstance(tool_calls, list) and tool_calls:
                 for call in tool_calls:
                     name = call.get("name", "")
+                    executed_tool_names.add(name)
                     raw_args = call.get("args", {})
                     call_id = call.get("id") or "call_id"
 
@@ -455,8 +481,46 @@ Analyze the situation and provide your determination:"""
                     fast_text, eval_result, executed_tool_calls
                 )
                 if fast_result is not None:
+                    if is_high_value and fast_result.policy_status == "pass":
+                        missing = REQUIRED_HIGH_VALUE_TOOLS - executed_tool_names
+                        if missing:
+                            missing_str = ", ".join(sorted(missing))
+                            reminder = (
+                                f"MANDATORY VERIFICATION INCOMPLETE: High-value orders (order_amount >= $400.0) require "
+                                f"executing both query_carrier_tracking and query_payment_transaction before approval. "
+                                f"Missing required tool(s): {missing_str}. Please invoke the missing tool(s)."
+                            )
+                            messages.append(HumanMessage(content=reminder))
+                            continue
                     return fast_result
+
+                if is_high_value:
+                    missing = REQUIRED_HIGH_VALUE_TOOLS - executed_tool_names
+                    if missing:
+                        missing_str = ", ".join(sorted(missing))
+                        reminder = (
+                            f"MANDATORY VERIFICATION INCOMPLETE: High-value orders (order_amount >= $400.0) require "
+                            f"executing both query_carrier_tracking and query_payment_transaction before approval. "
+                            f"Missing required tool(s): {missing_str}. Please invoke the missing tool(s)."
+                        )
+                        messages.append(HumanMessage(content=reminder))
+                        continue
                 break
+
+        missing_tools = REQUIRED_HIGH_VALUE_TOOLS - executed_tool_names
+        if is_high_value and missing_tools:
+            missing_str = ", ".join(sorted(missing_tools))
+            return PolicyCheckerOutput(
+                policy_status="ambiguous",
+                matched_policy_rule=eval_result.matched_policy_rule,
+                passed_rules=eval_result.passed_rules,
+                failed_rules=eval_result.failed_rules,
+                policy_reasoning=(
+                    "Mandatory dual external verification was incomplete for high-value order (order_amount >= $400.0). "
+                    f"Missing required tool verification: {missing_str}."
+                ),
+                tool_calls=executed_tool_calls,
+            )
 
         # Produce final structured output via reasoning-safe extraction
         messages.append(HumanMessage(content=FINAL_SYNTHESIS_PROMPT))

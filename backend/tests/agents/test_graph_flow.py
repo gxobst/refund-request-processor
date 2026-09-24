@@ -971,6 +971,85 @@ async def test_workflow_deny_generates_and_persists_denial_email_text():
         set_current_repository(None)
 
 
+@pytest.mark.asyncio
+async def test_workflow_high_value_dual_tool_execution():
+    """AC 2502: Integration test verifies that end-to-end workflow execution for ORD-1010 executes both tools and persists both audit records into DynamoDB."""
+    # ORD-1010 has order_amount == 450.0 (>= 400.0) -> high value
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.95,
+        reasoning="High value mirrorless camera arrived with damaged packaging and broken lens.",
+    )
+    mock_classifier_llm = make_mock_llm(mock_classification)
+
+    tool_call_msg = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "query_carrier_tracking",
+                "args": {"tracking_number": "TRK-1010"},
+                "id": "call_flow_trk_1010",
+            },
+            {
+                "name": "query_payment_transaction",
+                "args": {"order_id": "ORD-1010"},
+                "id": "call_flow_pay_1010",
+            },
+        ],
+    )
+    policy_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=[],
+        policy_reasoning="Carrier delivery confirmed with photo and payment charge confirmed refundable.",
+    )
+    mock_policy_llm = MockToolCallingLLM(responses=[tool_call_msg], final_output=policy_output)
+    checkpointer = MemorySaver()
+
+    mock_repo = MagicMock(spec=["update_decision"])
+    set_current_repository(mock_repo)
+
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm)
+            mp.setattr("app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm)
+
+            final_state = await run_refund_workflow(
+                refund_id="ref_test_high_value_1010",
+                order_id="ORD-1010",
+                customer_request_text="High value camera arrived damaged.",
+                checkpointer=checkpointer,
+            )
+
+        # Assert final workflow state
+        assert final_state["status"] == "completed"
+        assert final_state["decision"] == "auto_approve"
+        assert final_state["policy_status"] == "pass"
+        assert "tool_calls" in final_state
+        assert len(final_state["tool_calls"]) == 2
+        tool_names = {t["tool_name"] for t in final_state["tool_calls"]}
+        assert tool_names == {"query_carrier_tracking", "query_payment_transaction"}
+
+        # Assert DynamoDB persistence of both audit records
+        mock_repo.update_decision.assert_called_once()
+        kwargs = mock_repo.update_decision.call_args[1]
+        assert kwargs["refund_id"] == "ref_test_high_value_1010"
+        assert kwargs["decision"] == "auto_approve"
+        assert kwargs["status"] == "completed"
+        persisted_tool_calls = kwargs["tool_calls"]
+        assert len(persisted_tool_calls) == 2
+        persisted_names = {t["tool_name"] for t in persisted_tool_calls}
+        assert persisted_names == {"query_carrier_tracking", "query_payment_transaction"}
+        for t in persisted_tool_calls:
+            assert "tool_name" in t
+            assert "tool_input" in t
+            assert "tool_output" in t
+            assert "timestamp" in t
+    finally:
+        set_current_repository(None)
+
+
+
 
 
 
