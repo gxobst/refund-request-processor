@@ -3,11 +3,17 @@
 from datetime import date
 from pydantic import BaseModel, Field, field_validator
 
+ORDER_ID_PATTERN = r"^ORD-\d{4}$"
+
 
 class MockOrder(BaseModel):
     """Schema model representing an e-commerce mock order."""
 
-    order_id: str = Field(..., min_length=1, description="Unique identifier for the order.")
+    order_id: str = Field(
+        ...,
+        pattern=ORDER_ID_PATTERN,
+        description="Unique identifier for the order.",
+    )
     item: str = Field(..., min_length=1, description="Description or name of the ordered item.")
     purchase_date: date = Field(..., description="Date on which the order was placed.")
     order_amount: float = Field(..., gt=0.0, description="Total order monetary value (must be > 0).")

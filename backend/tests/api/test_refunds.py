@@ -361,16 +361,103 @@ async def test_submit_refund_request_openapi_schema():
     # Verify JSON schema properties
     json_props = content["application/json"]["schema"]["properties"]
     assert "order_id" in json_props
+    assert json_props["order_id"].get("pattern") == "^ORD-\\d{4}$"
     assert "customer_request_text" in json_props
 
     # Verify multipart schema properties including binary file
     form_schema = content["multipart/form-data"]["schema"]
     form_props = form_schema["properties"]
     assert "order_id" in form_props
+    assert form_props["order_id"].get("pattern") == "^ORD-\\d{4}$"
     assert "customer_request_text" in form_props
     assert "file" in form_props
     assert form_props["file"]["type"] == "string"
     assert form_props["file"]["format"] == "binary"
     # Verify file is optional (not in required fields)
     assert "file" not in form_schema.get("required", [])
+
+
+@pytest.mark.parametrize(
+    "valid_order_id",
+    [
+        "ORD-1001",
+        "ORD-1010",
+        "ORD-0001",
+        "ORD-9999",
+    ],
+)
+@pytest.mark.asyncio
+async def test_submit_refund_request_valid_order_id_pattern(
+    valid_order_id: str, mock_repo: MockRefundRepository
+):
+    """Test submitting POST /refunds with valid order IDs matching ^ORD-\\d{4}$ returns HTTP 202."""
+    payload = {
+        "order_id": valid_order_id,
+        "customer_request_text": "Valid order explanation.",
+    }
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/refunds", json=payload)
+
+    assert response.status_code == 202
+    assert response.json()["order_id"] == valid_order_id
+
+
+@pytest.mark.parametrize(
+    "invalid_order_id",
+    [
+        "ord-1001",    # lowercase prefix
+        "INV-1001",    # wrong prefix
+        "ORD-10",      # two digits
+        "ORD-100",     # three digits
+        "ORD-10001",   # five digits
+        "ORD-ABCD",    # letters instead of digits
+        "ORD_1001",    # underscore instead of hyphen
+        "1001",        # bare digits without prefix
+        "ORD-100A",    # alphanumeric digits
+        "ORD-",        # missing digits
+    ],
+)
+@pytest.mark.asyncio
+async def test_submit_refund_request_invalid_order_id_pattern(
+    invalid_order_id: str, mock_repo: MockRefundRepository
+):
+    """Test submitting POST /refunds with malformed order IDs in JSON returns HTTP 422."""
+    payload = {
+        "order_id": invalid_order_id,
+        "customer_request_text": "Valid explanation text.",
+    }
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/refunds", json=payload)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "invalid_order_id",
+    [
+        "ord-1001",    # lowercase prefix
+        "INV-1001",    # wrong prefix
+        "ORD-10",      # two digits
+        "ORD-100",     # three digits
+        "ORD-10001",   # five digits
+        "ORD-ABCD",    # letters instead of digits
+    ],
+)
+@pytest.mark.asyncio
+async def test_submit_refund_request_multipart_invalid_order_id(
+    invalid_order_id: str, mock_repo: MockRefundRepository
+):
+    """Test submitting POST /refunds with malformed order IDs in multipart form returns HTTP 422."""
+    form_data = {
+        "order_id": invalid_order_id,
+        "customer_request_text": "Valid explanation text.",
+    }
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/refunds", data=form_data)
+
+    assert response.status_code == 422
+
 

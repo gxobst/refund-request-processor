@@ -69,7 +69,7 @@ class MockDynamoResource:
 def test_mock_order_valid_schema():
     # Arrange & Act
     order = MockOrder(
-        order_id="ORD-001",
+        order_id="ORD-1001",
         item="Noise-Cancelling Headphones",
         purchase_date="2026-09-01",
         order_amount=299.99,
@@ -78,7 +78,7 @@ def test_mock_order_valid_schema():
     )
 
     # Assert
-    assert order.order_id == "ORD-001"
+    assert order.order_id == "ORD-1001"
     assert order.item == "Noise-Cancelling Headphones"
     assert order.purchase_date == date(2026, 9, 1)
     assert order.order_amount == 299.99
@@ -89,7 +89,7 @@ def test_mock_order_valid_schema():
 def test_mock_order_none_delivery_date():
     # Arrange & Act
     order = MockOrder(
-        order_id="ORD-002",
+        order_id="ORD-1002",
         item="Standing Desk",
         purchase_date="2026-09-10",
         order_amount=450.0,
@@ -107,7 +107,7 @@ def test_mock_order_rejects_non_positive_amount(invalid_amount: float):
     # Arrange, Act & Assert
     with pytest.raises(ValidationError) as exc_info:
         MockOrder(
-            order_id="ORD-003",
+            order_id="ORD-1003",
             item="Item",
             purchase_date="2026-09-01",
             order_amount=invalid_amount,
@@ -133,7 +133,7 @@ def test_mock_order_rejects_malformed_date():
     # Arrange, Act & Assert
     with pytest.raises(ValidationError) as exc_info:
         MockOrder(
-            order_id="ORD-004",
+            order_id="ORD-1004",
             item="Item",
             purchase_date="invalid-date",
             order_amount=100.0,
@@ -142,13 +142,58 @@ def test_mock_order_rejects_malformed_date():
     assert "purchase_date" in str(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    "invalid_order_id",
+    [
+        "ORD-001",
+        "ord-1001",
+        "INV-1001",
+        "ORD-10",
+        "ORD-100",
+        "ORD-10001",
+        "ORD-ABCD",
+        "ORD_1001",
+        "1001",
+        "",
+    ],
+)
+def test_mock_order_rejects_invalid_order_id_pattern(invalid_order_id: str):
+    """Test MockOrder rejects order_id that does not match ^ORD-\\d{4}$."""
+    with pytest.raises(ValidationError) as exc_info:
+        MockOrder(
+            order_id=invalid_order_id,
+            item="Item",
+            purchase_date="2026-09-01",
+            order_amount=50.0,
+            delivery_status="delivered",
+        )
+    assert "order_id" in str(exc_info.value)
+
+
+def test_mock_orders_json_order_ids_strict_pattern():
+    """Verify that all mock order records in mock_orders.json strictly adhere to the ^ORD-\\d{4}$ regex format."""
+    import re
+    assert DEFAULT_MOCK_ORDERS_PATH.is_file(), f"Mock orders file not found: {DEFAULT_MOCK_ORDERS_PATH}"
+    with open(DEFAULT_MOCK_ORDERS_PATH, "r", encoding="utf-8") as f:
+        orders = json.load(f)
+
+    assert len(orders) > 0, "mock_orders.json is empty"
+    pattern = re.compile(r"^ORD-\d{4}$")
+    for order in orders:
+        order_id = order.get("order_id")
+        assert order_id is not None, f"Order record missing order_id: {order}"
+        assert pattern.match(order_id), (
+            f"Mock order record ID '{order_id}' does not match required pattern '^ORD-\\d{{4}}$'"
+        )
+
+
 # --- 2. Decimal Conversion Tests ---
 
 
 def test_prepare_dynamo_item_converts_floats_to_decimal():
     # Arrange
     order = MockOrder(
-        order_id="ORD-005",
+        order_id="ORD-1005",
         item="Office Chair",
         purchase_date="2026-09-01",
         order_amount=249.99,
@@ -160,7 +205,7 @@ def test_prepare_dynamo_item_converts_floats_to_decimal():
     item = prepare_dynamo_item(order)
 
     # Assert
-    assert item["order_id"] == "ORD-005"
+    assert item["order_id"] == "ORD-1005"
     assert isinstance(item["order_amount"], Decimal)
     assert item["order_amount"] == Decimal("249.99")
     assert item["purchase_date"] == "2026-09-01"
@@ -171,7 +216,7 @@ def test_prepare_dynamo_item_converts_floats_to_decimal():
 def test_prepare_dynamo_item_omits_none_delivery_date():
     # Arrange
     order = MockOrder(
-        order_id="ORD-006",
+        order_id="ORD-1006",
         item="Coffee Maker",
         purchase_date="2026-09-01",
         order_amount=79.50,
@@ -231,7 +276,7 @@ def test_seed_orders_custom_file(tmp_path: Path):
     # Arrange: write custom valid mock orders
     custom_orders = [
         {
-            "order_id": "CUSTOM-1",
+            "order_id": "ORD-9001",
             "item": "Mechanical Keyboard",
             "purchase_date": "2026-09-01",
             "delivery_date": "2026-09-03",
@@ -239,7 +284,7 @@ def test_seed_orders_custom_file(tmp_path: Path):
             "delivery_status": "delivered",
         },
         {
-            "order_id": "CUSTOM-2",
+            "order_id": "ORD-9002",
             "item": "Mouse Pad",
             "purchase_date": "2026-09-02",
             "delivery_date": None,
@@ -261,8 +306,8 @@ def test_seed_orders_custom_file(tmp_path: Path):
     # Assert
     assert count == 2
     table = mock_resource.Table("custom_table")
-    assert "CUSTOM-1" in table.items
-    assert "CUSTOM-2" in table.items
+    assert "ORD-9001" in table.items
+    assert "ORD-9002" in table.items
 
 
 def test_seed_orders_raises_file_not_found():

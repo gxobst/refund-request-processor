@@ -5,6 +5,8 @@ from typing import Any, Literal
 import uuid
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.order import ORDER_ID_PATTERN
+
 RefundStatus = Literal["pending", "completed", "escalated", "awaiting_clarification"]
 RefundDecision = Literal["auto_approve", "deny", "escalate"]
 
@@ -30,7 +32,11 @@ class EvidenceItem(BaseModel):
 class RefundCreateRequest(BaseModel):
     """Request payload for submitting a new refund request."""
 
-    order_id: str = Field(..., min_length=1, description="Associated order identifier.")
+    order_id: str = Field(
+        ...,
+        pattern=ORDER_ID_PATTERN,
+        description="Associated order identifier.",
+    )
     customer_request_text: str = Field(
         ..., min_length=1, description="Customer refund explanation."
     )

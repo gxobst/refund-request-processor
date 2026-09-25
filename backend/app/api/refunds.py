@@ -2,6 +2,7 @@ from email.parser import BytesParser
 from email.policy import default
 import io
 from pathlib import Path
+import re
 from typing import Any, Literal
 import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
@@ -9,6 +10,7 @@ from starlette.datastructures import UploadFile
 
 from app.db.repository import RefundNotFoundError, RefundRepository
 from app.graph.runner import resume_refund_workflow, run_refund_workflow
+from app.schemas.order import ORDER_ID_PATTERN
 from app.schemas.refund import (
     EvidenceItem,
     RefundClarificationRequest,
@@ -87,6 +89,7 @@ REFUND_CREATE_OPENAPI_EXTRA: dict[str, Any] = {
                     "properties": {
                         "order_id": {
                             "type": "string",
+                            "pattern": "^ORD-\\d{4}$",
                             "description": "Identifier of the order to evaluate.",
                         },
                         "customer_request_text": {
@@ -103,6 +106,7 @@ REFUND_CREATE_OPENAPI_EXTRA: dict[str, Any] = {
                     "properties": {
                         "order_id": {
                             "type": "string",
+                            "pattern": "^ORD-\\d{4}$",
                             "description": "Identifier of the order to evaluate.",
                         },
                         "customer_request_text": {
@@ -151,13 +155,18 @@ async def submit_refund_request(
                 status_code=HTTP_422_STATUS,
                 detail="Field 'order_id' cannot be blank or empty.",
             )
+        order_id = str(raw_order_id).strip()
+        if not re.match(ORDER_ID_PATTERN, order_id):
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail=f"Invalid order_id '{order_id}'. Must match pattern '{ORDER_ID_PATTERN}'.",
+            )
         raw_text = form_fields.get("customer_request_text")
         if raw_text is None or not str(raw_text).strip():
             raise HTTPException(
                 status_code=HTTP_422_STATUS,
                 detail="Field 'customer_request_text' cannot be blank or empty.",
             )
-        order_id = str(raw_order_id).strip()
         customer_request_text = str(raw_text).strip()
         if form_files:
             uploaded_file = form_files[0]
@@ -173,6 +182,12 @@ async def submit_refund_request(
                 status_code=HTTP_422_STATUS,
                 detail="Field 'order_id' cannot be blank or empty.",
             )
+        order_id = str(raw_order_id).strip()
+        if not re.match(ORDER_ID_PATTERN, order_id):
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail=f"Invalid order_id '{order_id}'. Must match pattern '{ORDER_ID_PATTERN}'.",
+            )
         raw_text_list = parsed.get("customer_request_text", [])
         raw_text = raw_text_list[0] if raw_text_list else None
         if raw_text is None or not str(raw_text).strip():
@@ -180,7 +195,6 @@ async def submit_refund_request(
                 status_code=HTTP_422_STATUS,
                 detail="Field 'customer_request_text' cannot be blank or empty.",
             )
-        order_id = str(raw_order_id).strip()
         customer_request_text = str(raw_text).strip()
     else:
         try:
