@@ -1049,6 +1049,62 @@ async def test_workflow_high_value_dual_tool_execution():
         set_current_repository(None)
 
 
+@pytest.mark.asyncio
+async def test_workflow_with_initial_evidence_immediately_provides_evidence_to_policy_checker():
+    """Verify that a refund created with initial image evidence immediately provides evidence to policy_checker_node on the first workflow run."""
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.95,
+        reasoning="Customer reported damaged item with photo proof.",
+    )
+    mock_classifier_llm = make_mock_llm(mock_classification)
+    checkpointer = MemorySaver()
+
+    initial_evidence = [
+        {
+            "evidence_id": "evi_init_1",
+            "storage_key": "evidence/ORD-1001/broken_chair.jpg",
+            "filename": "broken_chair.jpg",
+            "content_type": "image/jpeg",
+            "size_bytes": 1024,
+            "url": "http://test/evidence/ORD-1001/broken_chair.jpg",
+            "created_at": "2026-09-25T12:00:00Z",
+        }
+    ]
+
+    policy_checker_calls = []
+    from app.agents import policy_checker
+
+    original_check_policy = policy_checker.check_policy
+
+    def spy_check_policy(*args, **kwargs):
+        policy_checker_calls.append(kwargs)
+        return original_check_policy(*args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm)
+        mp.setattr("app.agents.policy_checker.check_policy", spy_check_policy)
+        mock_storage = MagicMock()
+        mock_storage.get_file.return_value = b"\xff\xd8\xff\xe0" + b"\x00" * 30
+        mp.setattr("app.services.storage.get_evidence_storage_service", lambda: mock_storage)
+
+        final_state = await run_refund_workflow(
+            refund_id="ref_test_initial_evidence",
+            order_id="ORD-1001",
+            customer_request_text="Armrest broke during shipment, photo attached.",
+            checkpointer=checkpointer,
+            evidence=initial_evidence,
+        )
+
+    assert len(policy_checker_calls) == 1
+    passed_evidence = policy_checker_calls[0].get("evidence")
+    assert passed_evidence is not None
+    assert len(passed_evidence) == 1
+    assert passed_evidence[0]["storage_key"] == "evidence/ORD-1001/broken_chair.jpg"
+    assert final_state["evidence"] == initial_evidence
+
+
+
 
 
 

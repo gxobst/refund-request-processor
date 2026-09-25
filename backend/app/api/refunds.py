@@ -3,6 +3,7 @@ from email.policy import default
 import io
 from pathlib import Path
 from typing import Any, Literal
+import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from starlette.datastructures import UploadFile
 
@@ -76,23 +77,178 @@ async def list_refund_requests(
     return repo.list_refund_requests(status=status, limit=limit)
 
 
+REFUND_CREATE_OPENAPI_EXTRA: dict[str, Any] = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "application/json": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "order_id": {
+                            "type": "string",
+                            "description": "Identifier of the order to evaluate.",
+                        },
+                        "customer_request_text": {
+                            "type": "string",
+                            "description": "Customer explanation for the refund request.",
+                        },
+                    },
+                    "required": ["order_id", "customer_request_text"],
+                }
+            },
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "order_id": {
+                            "type": "string",
+                            "description": "Identifier of the order to evaluate.",
+                        },
+                        "customer_request_text": {
+                            "type": "string",
+                            "description": "Customer explanation for the refund request.",
+                        },
+                        "file": {
+                            "type": "string",
+                            "format": "binary",
+                            "description": "Optional supporting evidence image file.",
+                        },
+                    },
+                    "required": ["order_id", "customer_request_text"],
+                }
+            },
+        },
+    }
+}
+
+
 @router.post(
     "",
     response_model=RefundCreateResponse,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Submit a refund request for automated evaluation",
+    openapi_extra=REFUND_CREATE_OPENAPI_EXTRA,
 )
 async def submit_refund_request(
-    payload: RefundCreateRequest,
+    request: Request,
     background_tasks: BackgroundTasks,
     repo: RefundRepository = Depends(get_repository),
+    storage_service: EvidenceStorageService = Depends(get_evidence_storage_service),
 ) -> RefundCreateResponse:
     """Accept and initiate asynchronous multi-agent processing for a refund request."""
+    content_type_header = request.headers.get("content-type", "").lower()
+    order_id: str | None = None
+    customer_request_text: str | None = None
+    uploaded_file: UploadFile | None = None
+
+    if "multipart/form-data" in content_type_header:
+        body = await request.body()
+        form_fields, form_files = _parse_multipart_request(content_type_header, body)
+        raw_order_id = form_fields.get("order_id")
+        if raw_order_id is None or not str(raw_order_id).strip():
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail="Field 'order_id' cannot be blank or empty.",
+            )
+        raw_text = form_fields.get("customer_request_text")
+        if raw_text is None or not str(raw_text).strip():
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail="Field 'customer_request_text' cannot be blank or empty.",
+            )
+        order_id = str(raw_order_id).strip()
+        customer_request_text = str(raw_text).strip()
+        if form_files:
+            uploaded_file = form_files[0]
+    elif "application/x-www-form-urlencoded" in content_type_header:
+        from urllib.parse import parse_qs
+
+        body = await request.body()
+        parsed = parse_qs(body.decode("utf-8", errors="replace"))
+        raw_order_id_list = parsed.get("order_id", [])
+        raw_order_id = raw_order_id_list[0] if raw_order_id_list else None
+        if raw_order_id is None or not str(raw_order_id).strip():
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail="Field 'order_id' cannot be blank or empty.",
+            )
+        raw_text_list = parsed.get("customer_request_text", [])
+        raw_text = raw_text_list[0] if raw_text_list else None
+        if raw_text is None or not str(raw_text).strip():
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail="Field 'customer_request_text' cannot be blank or empty.",
+            )
+        order_id = str(raw_order_id).strip()
+        customer_request_text = str(raw_text).strip()
+    else:
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail="Invalid or missing request body.",
+            )
+        try:
+            payload = RefundCreateRequest.model_validate(body)
+            order_id = payload.order_id
+            customer_request_text = payload.customer_request_text
+        except Exception as err:
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail=str(err),
+            )
+
+    refund_id = f"ref_{uuid.uuid4().hex[:12]}"
+    evidence: list[dict[str, Any]] = []
+
+    if uploaded_file is not None:
+        filename = uploaded_file.filename or "evidence_file"
+        ext = Path(filename).suffix.lower()
+        allowed_extensions = {".jpg", ".jpeg", ".png", ".webp"}
+        if ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Disallowed file extension '{ext}'. Allowed extensions are: {sorted(allowed_extensions)}",
+            )
+        file_bytes = await uploaded_file.read()
+        file_content_type = uploaded_file.content_type or ""
+        try:
+            storage_service.validate_file(file_bytes=file_bytes, content_type=file_content_type)
+        except ValueError as e:
+            msg = str(e)
+            if "exceeds maximum allowed limit" in msg:
+                raise HTTPException(
+                    status_code=HTTP_413_STATUS,
+                    detail=msg,
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=msg,
+            )
+
+        saved_meta = storage_service.save_file(
+            file_bytes=file_bytes,
+            filename=filename,
+            content_type=file_content_type,
+            refund_id=refund_id,
+            order_id=order_id,
+        )
+        evidence.append(saved_meta)
+
     # 1. Create initial pending record in DynamoDB
-    record = repo.create_refund_request(
-        order_id=payload.order_id,
-        customer_request_text=payload.customer_request_text,
-    )
+    try:
+        record = repo.create_refund_request(
+            order_id=order_id,
+            customer_request_text=customer_request_text,
+            evidence=evidence,
+        )
+    except TypeError:
+        record = repo.create_refund_request(
+            order_id=order_id,
+            customer_request_text=customer_request_text,
+        )
 
     # 2. Schedule async LangGraph workflow execution in the background
     background_tasks.add_task(
@@ -101,6 +257,7 @@ async def submit_refund_request(
         order_id=record.order_id,
         customer_request_text=record.customer_request_text,
         repository=repo,
+        evidence=record.evidence,
     )
 
     # 3. Return accepted response

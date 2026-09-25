@@ -19,6 +19,7 @@ async def run_refund_workflow(
     repository: Any = None,
     use_dynamodb: bool | None = None,
     callbacks: list[Any] | None = None,
+    evidence: list[dict[str, Any] | Any] | None = None,
 ) -> dict[str, Any]:
     """Execute the multi-agent refund evaluation workflow asynchronously.
 
@@ -32,6 +33,7 @@ async def run_refund_workflow(
         use_dynamodb: Optional bool indicating whether to enable DynamoDB checkpointing.
             Defaults to True in non-test environments if checkpointer is None.
         callbacks: Optional list of callback handlers for tracing.
+        evidence: Optional list of attached evidence metadata items or dicts.
 
     Returns:
         Final state dictionary containing decision, reasoning, and status.
@@ -48,11 +50,22 @@ async def run_refund_workflow(
 
     graph = build_refund_graph(checkpointer=effective_checkpointer)
 
+    initial_evidence: list[dict[str, Any]] = []
+    if evidence:
+        for item in evidence:
+            if hasattr(item, "model_dump"):
+                initial_evidence.append(item.model_dump())
+            elif isinstance(item, dict):
+                initial_evidence.append(item)
+            else:
+                initial_evidence.append(dict(item))
+
     initial_state: dict[str, Any] = {
         "refund_id": refund_id,
         "order_id": order_id,
         "customer_request_text": customer_request_text,
         "status": "pending",
+        "evidence": initial_evidence,
     }
     if repository is not None:
         set_current_repository(repository)
@@ -124,6 +137,10 @@ async def resume_refund_workflow(
                 "order": order_data,
                 "missing_order_data": order_data is None,
                 "clarification_count": record.clarification_count or 1,
+                "evidence": [
+                    e.model_dump() if hasattr(e, "model_dump") else e
+                    for e in (record.evidence or [])
+                ],
             }
 
     if not existing_state:

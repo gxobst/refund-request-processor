@@ -76,18 +76,34 @@ class RefundRepository:
 
         self.table = self.dynamodb_resource.Table(self.table_name)
 
-    def create_refund_request(self, order_id: str, customer_request_text: str) -> RefundRecord:
+    def create_refund_request(
+        self,
+        order_id: str,
+        customer_request_text: str,
+        evidence: list[EvidenceItem | dict[str, Any]] | None = None,
+    ) -> RefundRecord:
         """Create and persist a new refund request record.
 
         Args:
             order_id: Associated order identifier.
             customer_request_text: Customer-provided refund explanation.
+            evidence: Optional initial evidence items or dicts.
 
         Returns:
             The created RefundRecord instance.
         """
         now_iso = datetime.now(timezone.utc).isoformat()
         refund_id = f"ref_{uuid.uuid4().hex[:12]}"
+
+        evidence_items: list[EvidenceItem] = []
+        if evidence:
+            for item in evidence:
+                if isinstance(item, EvidenceItem):
+                    evidence_items.append(item)
+                elif isinstance(item, dict):
+                    evidence_items.append(EvidenceItem.model_validate(item))
+                else:
+                    raise TypeError("evidence item must be an EvidenceItem or dict.")
 
         record = RefundRecord(
             refund_id=refund_id,
@@ -100,6 +116,7 @@ class RefundRepository:
             clarification_response=None,
             clarification_count=0,
             tool_calls=[],
+            evidence=evidence_items,
         )
 
         item = _convert_floats_to_decimal(record.model_dump())

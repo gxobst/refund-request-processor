@@ -116,6 +116,7 @@ def intake_validate_node(state: dict[str, Any]) -> dict[str, Any]:
     clarification_prompt = state.get("clarification_prompt")
     clarification_response = state.get("clarification_response")
     needs_clarification = state.get("needs_clarification", False)
+    evidence = state.get("evidence", [])
 
     return {
         "order": order,
@@ -124,6 +125,7 @@ def intake_validate_node(state: dict[str, Any]) -> dict[str, Any]:
         "clarification_prompt": clarification_prompt,
         "clarification_response": clarification_response,
         "needs_clarification": needs_clarification,
+        "evidence": evidence,
     }
 
 
