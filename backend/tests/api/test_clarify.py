@@ -433,12 +433,12 @@ async def test_clarify_multipart_form_disallowed_mime_400(mock_repo: MockRefundR
 
 @pytest.mark.asyncio
 async def test_clarify_multipart_form_oversized_file_413(mock_repo: MockRefundRepository):
-    """Test POST /refunds/{refund_id}/clarify returns 413 when attached file exceeds size limits."""
+    """Test POST /refunds/{refund_id}/clarify returns 413 when attached file exceeds 5MB limit."""
     refund_id = "ref-clarify-oversized"
     mock_repo.seed_record(refund_id=refund_id, status="awaiting_clarification")
     transport = ASGITransport(app=app)
 
-    oversized_data = b"0" * (10 * 1024 * 1024 + 1)
+    oversized_data = b"0" * (5 * 1024 * 1024 + 1)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
             f"/refunds/{refund_id}/clarify",
@@ -447,6 +447,29 @@ async def test_clarify_multipart_form_oversized_file_413(mock_repo: MockRefundRe
         )
     assert response.status_code == 413
     assert "exceeds maximum allowed limit" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("video_filename,video_mime", [
+    ("unboxing.mp4", "video/mp4"),
+    ("damage.mov", "video/quicktime"),
+])
+async def test_clarify_multipart_form_video_file_rejected_400(
+    mock_repo: MockRefundRepository, video_filename: str, video_mime: str
+):
+    """API integration test: attaching a video file during clarification response returns HTTP 400 Bad Request."""
+    refund_id = "ref-clarify-video"
+    mock_repo.seed_record(refund_id=refund_id, status="awaiting_clarification")
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/refunds/{refund_id}/clarify",
+            data={"response_text": "Video proof of damage attached."},
+            files={"evidence_file": (video_filename, b"video-bytes", video_mime)},
+        )
+    assert response.status_code == 400
+    assert "disallowed file extension" in response.json()["detail"].lower()
 
 
 @pytest.mark.asyncio

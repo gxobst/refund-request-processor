@@ -31,7 +31,7 @@ Thank you for reaching out to us regarding your refund request.
 
 We are currently unable to process your claim because your message was blank or did not provide sufficient details. Could you please reply with a specific explanation of the issue you experienced and specify which items from your order are affected?
 
-If your claim involves broken or damaged merchandise, please also provide clear photo or video proof of both the damaged item and the exterior shipping box/packaging condition.
+If your claim involves broken or damaged merchandise, please also provide clear photo proof of both the damaged item and the exterior shipping box/packaging condition.
 
 Thank you for your cooperation and understanding.
 
@@ -43,7 +43,7 @@ When a customer's refund request is ambiguous, lacks critical details, or requir
 1. Formal Greeting: Address the customer courteously (e.g., 'Dear Customer,').
 2. Statement of Missing Information: Clearly state what details are currently missing or unclear in their request.
 3. Specific Questions: Ask clear, targeted questions to gather the exact information needed to process the refund.
-4. Mandatory Damage Evidence Rule: Whenever a claim involves physical damage, defects, or broken goods (or category is 'damaged'), you MUST explicitly mandate that the customer provide clear photo or video proof showing BOTH:
+4. Mandatory Damage Evidence Rule: Whenever a claim involves physical damage, defects, or broken goods (or category is 'damaged'), you MUST explicitly mandate that the customer provide clear photo proof showing BOTH:
    - The damaged or defective item clearly displaying the damage.
    - The shipping box/exterior packaging condition upon delivery.
    For non-damage claims (such as wrong item, missing item, or changed mind), ask for the specific missing reason or details without falsely demanding damage photos.

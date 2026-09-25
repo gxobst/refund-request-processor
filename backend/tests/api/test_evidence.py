@@ -127,10 +127,10 @@ async def test_upload_evidence_multiple_sequential(mock_repo: MockRefundReposito
         assert res1.status_code == 201
         assert len(res1.json()["evidence"]) == 1
 
-        # Second upload: unboxing video
+        # Second upload: packaging photo
         res2 = await client.post(
             f"/refunds/{refund_id}/evidence",
-            files={"file": ("unboxing.mp4", b"video-mp4-bytes", "video/mp4")},
+            files={"file": ("packaging.webp", b"webp-bytes", "image/webp")},
         )
         assert res2.status_code == 201
         assert len(res2.json()["evidence"]) == 2
@@ -139,7 +139,7 @@ async def test_upload_evidence_multiple_sequential(mock_repo: MockRefundReposito
     assert stored is not None
     assert len(stored.evidence) == 2
     assert stored.evidence[0].filename == "item_photo.png"
-    assert stored.evidence[1].filename == "unboxing.mp4"
+    assert stored.evidence[1].filename == "packaging.webp"
 
 
 @pytest.mark.asyncio
@@ -202,12 +202,12 @@ async def test_upload_evidence_disallowed_extension_400(mock_repo: MockRefundRep
 
 @pytest.mark.asyncio
 async def test_upload_evidence_image_size_exceeded_413(mock_repo: MockRefundRepository):
-    """Test POST /refunds/{refund_id}/evidence returns 413 when image exceeds 10MB limit."""
+    """Test POST /refunds/{refund_id}/evidence returns 413 when image exceeds 5MB limit."""
     refund_id = "ref-oversized-image"
     mock_repo.seed_record(refund_id=refund_id)
     transport = ASGITransport(app=app)
 
-    oversized_bytes = b"x" * (10 * 1024 * 1024 + 1)
+    oversized_bytes = b"x" * (5 * 1024 * 1024 + 1)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
             f"/refunds/{refund_id}/evidence",
@@ -219,21 +219,26 @@ async def test_upload_evidence_image_size_exceeded_413(mock_repo: MockRefundRepo
 
 
 @pytest.mark.asyncio
-async def test_upload_evidence_video_size_exceeded_413(mock_repo: MockRefundRepository):
-    """Test POST /refunds/{refund_id}/evidence returns 413 when video exceeds 50MB limit."""
-    refund_id = "ref-oversized-video"
+@pytest.mark.parametrize("video_filename,video_mime", [
+    ("unboxing.mp4", "video/mp4"),
+    ("damage_inspection.mov", "video/quicktime"),
+])
+async def test_upload_evidence_video_rejected_400(
+    mock_repo: MockRefundRepository, video_filename: str, video_mime: str
+):
+    """API integration test: uploading .mp4 or .mov files to POST /refunds/{refund_id}/evidence returns HTTP 400."""
+    refund_id = "ref-video-upload"
     mock_repo.seed_record(refund_id=refund_id)
     transport = ASGITransport(app=app)
 
-    oversized_bytes = b"v" * (50 * 1024 * 1024 + 1)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
             f"/refunds/{refund_id}/evidence",
-            files={"file": ("huge_video.mp4", oversized_bytes, "video/mp4")},
+            files={"file": (video_filename, b"fake-video-bytes", video_mime)},
         )
 
-    assert response.status_code == 413
-    assert "exceeds maximum allowed limit" in response.json()["detail"].lower()
+    assert response.status_code == 400
+    assert "disallowed file extension" in response.json()["detail"].lower()
 
 
 @pytest.mark.asyncio

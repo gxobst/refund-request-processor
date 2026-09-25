@@ -169,7 +169,7 @@ EVIDENCE_UPLOAD_OPENAPI_EXTRA: dict[str, Any] = {
                         "file": {
                             "type": "string",
                             "format": "binary",
-                            "description": "Evidence image or video file.",
+                            "description": "Evidence image file.",
                         }
                     },
                     "required": ["file"],
@@ -184,7 +184,7 @@ EVIDENCE_UPLOAD_OPENAPI_EXTRA: dict[str, Any] = {
     "/{refund_id}/evidence",
     response_model=RefundRecord,
     status_code=status.HTTP_201_CREATED,
-    summary="Upload photo or video evidence for a refund request",
+    summary="Upload photo evidence for a refund request",
     openapi_extra=EVIDENCE_UPLOAD_OPENAPI_EXTRA,
 )
 async def upload_refund_evidence(
@@ -218,7 +218,7 @@ async def upload_refund_evidence(
 
     filename = file.filename or "evidence_file"
     ext = Path(filename).suffix.lower()
-    allowed_extensions = {".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov"}
+    allowed_extensions = {".jpg", ".jpeg", ".png", ".webp"}
     if ext not in allowed_extensions:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -284,7 +284,7 @@ CLARIFY_REQUEST_OPENAPI_EXTRA: dict[str, Any] = {
                         "evidence_file": {
                             "type": "string",
                             "format": "binary",
-                            "description": "Optional supporting evidence image or video file.",
+                            "description": "Optional supporting evidence image file.",
                         },
                     },
                     "required": ["response_text"],
@@ -370,7 +370,7 @@ async def clarify_refund_request(
     if evidence_file is not None:
         filename = evidence_file.filename or "evidence_file"
         ext = Path(filename).suffix.lower()
-        allowed_extensions = {".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov"}
+        allowed_extensions = {".jpg", ".jpeg", ".png", ".webp"}
         if ext not in allowed_extensions:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

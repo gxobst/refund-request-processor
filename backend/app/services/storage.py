@@ -20,16 +20,14 @@ ALLOWED_IMAGE_TYPES: set[str] = {
     "image/webp",
 }
 
-ALLOWED_VIDEO_TYPES: set[str] = {
-    "video/mp4",
-    "video/quicktime",
+ALLOWED_CONTENT_TYPES: set[str] = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
 }
 
-ALLOWED_CONTENT_TYPES: set[str] = ALLOWED_IMAGE_TYPES | ALLOWED_VIDEO_TYPES
-
-# Size limits (10MB for images, 50MB for videos)
-MAX_IMAGE_SIZE_BYTES: int = 10 * 1024 * 1024
-MAX_VIDEO_SIZE_BYTES: int = 50 * 1024 * 1024
+# Size limits (5MB for images)
+MAX_IMAGE_SIZE_BYTES: int = 5 * 1024 * 1024
 
 
 def sanitize_filename(filename: str) -> str:
@@ -63,15 +61,10 @@ def validate_file(file_bytes: bytes, content_type: str) -> None:
         )
 
     size = len(file_bytes)
-    if normalized_type in ALLOWED_IMAGE_TYPES and size > MAX_IMAGE_SIZE_BYTES:
+    if size > MAX_IMAGE_SIZE_BYTES:
         raise ValueError(
             f"File size ({size} bytes) exceeds maximum allowed limit of "
-            f"{MAX_IMAGE_SIZE_BYTES} bytes (10MB) for images."
-        )
-    if normalized_type in ALLOWED_VIDEO_TYPES and size > MAX_VIDEO_SIZE_BYTES:
-        raise ValueError(
-            f"File size ({size} bytes) exceeds maximum allowed limit of "
-            f"{MAX_VIDEO_SIZE_BYTES} bytes (50MB) for videos."
+            f"{MAX_IMAGE_SIZE_BYTES} bytes (5MB) for images."
         )
 
 

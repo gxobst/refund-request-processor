@@ -272,7 +272,8 @@ def test_clarification_system_prompt_structure_and_rules():
     assert "mandatory damage evidence rule" in prompt_lower or "damage evidence" in prompt_lower
     assert "shipping box" in prompt_lower
     assert "packaging condition" in prompt_lower
-    assert "photo or video proof" in prompt_lower
+    assert "photo proof" in prompt_lower or "image proof" in prompt_lower
+    assert "video" not in prompt_lower
     assert "professional sign-off" in prompt_lower or "sign-off" in prompt_lower
 
 
@@ -282,15 +283,15 @@ def test_generate_clarification_prompt_damage_claim_requires_photo_and_packaging
         "Dear Customer,\n\n"
         "Thank you for contacting support regarding your refund request for order ORD-1010.\n\n"
         "We are sorry to hear that your item arrived damaged. To process your refund under our policy, "
-        "we require clear photo or video proof of both the damaged item and the shipping box/packaging condition upon delivery.\n\n"
+        "we require clear photo proof of both the damaged item and the shipping box/packaging condition upon delivery.\n\n"
         "Could you please also specify if the packaging was torn upon arrival?\n\n"
         "Sincerely,\n"
         "Customer Support Team"
     )
     expected_output = ClarificationOutput(
         clarification_prompt=damage_email,
-        missing_aspects=["photo_or_video_proof_of_damage", "packaging_condition_proof"],
-        reasoning="Physical damage claims require photo or video proof of both the damaged item and packaging.",
+        missing_aspects=["photo_proof_of_damage", "packaging_condition_proof"],
+        reasoning="Physical damage claims require photo proof of both the damaged item and packaging.",
     )
     mock_llm = make_mock_clarification_llm(expected_output)
 
@@ -306,8 +307,9 @@ def test_generate_clarification_prompt_damage_claim_requires_photo_and_packaging
     assert "dear customer" in result.clarification_prompt.lower()
     # 2. Email sign-off
     assert "sincerely" in result.clarification_prompt.lower() or "customer support" in result.clarification_prompt.lower()
-    # 3. Explicit requirement for photo or video proof of both item and packaging
-    assert "photo or video proof" in result.clarification_prompt.lower()
+    # 3. Explicit requirement for photo or image proof of both item and packaging (no video)
+    assert "photo proof" in result.clarification_prompt.lower() or "image proof" in result.clarification_prompt.lower()
+    assert "video" not in result.clarification_prompt.lower()
     assert "damaged item" in result.clarification_prompt.lower()
     assert "packaging" in result.clarification_prompt.lower() or "shipping box" in result.clarification_prompt.lower()
     # 4. Missing aspects includes damage and packaging proof
@@ -365,7 +367,8 @@ def test_generate_clarification_prompt_fallback_structured_email_on_blank():
     assert "specific explanation" in result.clarification_prompt.lower() or "details" in result.clarification_prompt.lower()
     assert "items" in result.clarification_prompt.lower()
     # Evidence instructions
-    assert "photo or video proof" in result.clarification_prompt.lower()
+    assert "photo proof" in result.clarification_prompt.lower() or "image proof" in result.clarification_prompt.lower()
+    assert "video" not in result.clarification_prompt.lower()
     assert "packaging" in result.clarification_prompt.lower()
     # Professional sign-off
     assert "sincerely" in result.clarification_prompt.lower()

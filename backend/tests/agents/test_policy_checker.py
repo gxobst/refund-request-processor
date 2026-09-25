@@ -1534,28 +1534,28 @@ def test_check_policy_multimodal_blurry_or_product_mismatch_returns_ambiguous():
     assert "blurry" in result.policy_reasoning.lower()
 
 
-def test_check_policy_only_video_evidence_returns_ambiguous_without_calling_llm():
-    """AC 2216: Evidence containing only video files returns ambiguous without invoking LLM."""
+def test_check_policy_pure_image_evidence_multimodal_inspection():
+    """Verify that damaged order with valid image evidence invokes multimodal inspection."""
     order = {
         "order_id": "ORD-DMG-005",
         "order_amount": 110.0,
         "delivery_status": "delivered",
         "delivery_date": date.today().isoformat(),
     }
-    mock_llm = MagicMock()
+    expected_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=[],
+        policy_reasoning="Damage confirmed via photo.",
+    )
+    mock_llm = make_mock_llm(expected_output)
 
     evidence = [
         {
-            "evidence_id": "evi_vid_1",
-            "filename": "unboxing_video.mp4",
-            "content_type": "video/mp4",
-            "storage_key": "evidence/ORD-DMG-005/unboxing_video.mp4",
-        },
-        {
-            "evidence_id": "evi_vid_2",
-            "filename": "inspect.mov",
-            "content_type": "video/quicktime",
-            "storage_key": "evidence/ORD-DMG-005/inspect.mov",
+            "evidence_id": "evi_img_1",
+            "filename": "broken_item.jpg",
+            "content_type": "image/jpeg",
+            "raw_bytes": b"\xff\xd8\xff\xe0jpegdata",
         },
     ]
 
@@ -1566,10 +1566,14 @@ def test_check_policy_only_video_evidence_returns_ambiguous_without_calling_llm(
         evidence=evidence,
     )
 
-    assert result.policy_status == "ambiguous"
-    assert result.policy_reasoning == "Video evidence requires manual reviewer inspection."
-    mock_llm.invoke.assert_not_called()
-    mock_llm.bind_tools.assert_not_called()
+    assert result.policy_status == "pass"
+    assert result.policy_reasoning == "Damage confirmed via photo."
+    bound_model = mock_llm.bind_tools.return_value
+    assert bound_model.invoke.called
+    invoke_messages = bound_model.invoke.call_args[0][0]
+    human_msg = next(m for m in invoke_messages if isinstance(m, HumanMessage))
+    image_blocks = [b for b in human_msg.content if isinstance(b, dict) and b.get("type") == "image"]
+    assert len(image_blocks) == 1
 
 
 def test_check_policy_image_retrieval_file_not_found_returns_ambiguous():
@@ -1633,8 +1637,8 @@ def test_check_policy_damaged_without_evidence_preserves_deterministic_pass():
     mock_llm.invoke.assert_not_called()
 
 
-def test_check_policy_mixed_video_and_image_evidence_processes_image():
-    """Verify that when both video and image evidence are attached, video is ignored and image is processed."""
+def test_check_policy_non_image_evidence_ignored_and_image_processed():
+    """Verify that non-image items are ignored and only valid image evidence is processed."""
     order = {
         "order_id": "ORD-DMG-008",
         "order_amount": 150.0,
@@ -1651,9 +1655,9 @@ def test_check_policy_mixed_video_and_image_evidence_processes_image():
 
     evidence = [
         {
-            "filename": "recording.mp4",
-            "content_type": "video/mp4",
-            "storage_key": "vid.mp4",
+            "filename": "document.pdf",
+            "content_type": "application/pdf",
+            "storage_key": "doc.pdf",
         },
         {
             "filename": "photo.jpg",
@@ -1674,7 +1678,7 @@ def test_check_policy_mixed_video_and_image_evidence_processes_image():
     assert bound_model.invoke.called
     invoke_messages = bound_model.invoke.call_args[0][0]
     human_msg = next(m for m in invoke_messages if isinstance(m, HumanMessage))
-    # Exactly one image block (the photo), video was ignored
+    # Exactly one image block (the photo), non-image was ignored
     image_blocks = [b for b in human_msg.content if isinstance(b, dict) and b.get("type") == "image"]
     assert len(image_blocks) == 1
 

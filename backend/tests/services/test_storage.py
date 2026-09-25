@@ -9,10 +9,9 @@ from botocore.exceptions import ClientError
 
 from app.core.config import Settings
 from app.services.storage import (
+    ALLOWED_CONTENT_TYPES,
     ALLOWED_IMAGE_TYPES,
-    ALLOWED_VIDEO_TYPES,
     MAX_IMAGE_SIZE_BYTES,
-    MAX_VIDEO_SIZE_BYTES,
     EvidenceStorageService,
     generate_storage_key,
     get_evidence_storage_service,
@@ -68,18 +67,19 @@ def test_generate_storage_key_with_refund_id_fallback():
 
 @pytest.mark.parametrize("content_type", sorted(ALLOWED_IMAGE_TYPES))
 def test_validate_file_allowed_images(content_type: str):
-    """Verify all allowed image MIME types pass validation within 10MB."""
+    """Verify all allowed image MIME types (JPEG, PNG, WebP) pass validation within 5MB."""
     sample_bytes = b"\x00" * 1024
     # Should not raise
     validate_file(sample_bytes, content_type)
 
 
-@pytest.mark.parametrize("content_type", sorted(ALLOWED_VIDEO_TYPES))
-def test_validate_file_allowed_videos(content_type: str):
-    """Verify all allowed video MIME types pass validation within 50MB."""
+@pytest.mark.parametrize("video_type", ["video/mp4", "video/quicktime"])
+def test_validate_file_rejects_video_mime_types(video_type: str):
+    """Verify video MIME types are rejected with ValueError stating allowed types."""
     sample_bytes = b"\x00" * 1024
-    # Should not raise
-    validate_file(sample_bytes, content_type)
+    with pytest.raises(ValueError, match="Unsupported content type") as exc_info:
+        validate_file(sample_bytes, video_type)
+    assert "Allowed types are: ['image/jpeg', 'image/png', 'image/webp']" in str(exc_info.value)
 
 
 @pytest.mark.parametrize(
@@ -102,17 +102,10 @@ def test_validate_file_disallowed_mime_types(invalid_type: str):
 
 
 def test_validate_file_image_size_exceeded():
-    """Verify image exceeding 10MB raises ValueError."""
+    """Verify file exceeding 5MB ceiling raises ValueError."""
     oversized_bytes = b"x" * (MAX_IMAGE_SIZE_BYTES + 1)
-    with pytest.raises(ValueError, match="exceeds maximum allowed limit of 10485760 bytes"):
+    with pytest.raises(ValueError, match="exceeds maximum allowed limit of 5242880 bytes"):
         validate_file(oversized_bytes, "image/jpeg")
-
-
-def test_validate_file_video_size_exceeded():
-    """Verify video exceeding 50MB raises ValueError."""
-    oversized_bytes = b"x" * (MAX_VIDEO_SIZE_BYTES + 1)
-    with pytest.raises(ValueError, match="exceeds maximum allowed limit of 52428800 bytes"):
-        validate_file(oversized_bytes, "video/mp4")
 
 
 # --- Local Storage Backend Tests ---
@@ -172,7 +165,7 @@ def test_s3_storage_save_retrieval_and_metadata():
     """Verify S3 save and retrieval using a mocked boto3 S3 client."""
     mock_s3 = MagicMock()
     mock_body = MagicMock()
-    mock_body.read.return_value = b"s3-stored-video-bytes"
+    mock_body.read.return_value = b"s3-stored-image-bytes"
     mock_s3.get_object.return_value = {"Body": mock_body}
 
     service = EvidenceStorageService(
@@ -180,11 +173,11 @@ def test_s3_storage_save_retrieval_and_metadata():
         bucket_name="my-evidence-bucket",
     )
 
-    payload = b"s3-stored-video-bytes"
+    payload = b"s3-stored-image-bytes"
     metadata = service.save_file(
         file_bytes=payload,
-        filename="unboxing.mp4",
-        content_type="video/mp4",
+        filename="broken_screen.png",
+        content_type="image/png",
         refund_id="REF-2002",
         order_id="ORD-2002",
     )
@@ -194,13 +187,13 @@ def test_s3_storage_save_retrieval_and_metadata():
         Bucket="my-evidence-bucket",
         Key=metadata["storage_key"],
         Body=payload,
-        ContentType="video/mp4",
+        ContentType="image/png",
     )
 
     # Verify metadata fields
     assert metadata["storage_backend"] == "s3"
-    assert metadata["filename"] == "unboxing.mp4"
-    assert metadata["content_type"] == "video/mp4"
+    assert metadata["filename"] == "broken_screen.png"
+    assert metadata["content_type"] == "image/png"
     assert metadata["size_bytes"] == len(payload)
     assert metadata["url"] == f"https://my-evidence-bucket.s3.amazonaws.com/{metadata['storage_key']}"
 

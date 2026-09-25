@@ -158,10 +158,8 @@ def _extract_image_block(item: Any, storage_service: Any = None) -> dict[str, An
     filename = item_dict.get("filename") or getattr(item, "filename", "")
     storage_key = item_dict.get("storage_key") or getattr(item, "storage_key", None)
 
-    # Ignore video or non-image files
-    if content_type.startswith("video/") or any(
-        filename.lower().endswith(ext) for ext in (".mp4", ".mov", ".avi", ".mkv")
-    ):
+    # Ignore non-image files
+    if content_type and not content_type.startswith("image/"):
         return None
 
     file_bytes: bytes | None = None
@@ -252,24 +250,11 @@ def check_policy(
     active_policies = policies if policies is not None else load_policies()
     eval_result = evaluate_policy(category=category, order=order, policy=active_policies)
 
-    # Process evidence items
+    # Process image evidence items
     image_blocks: list[dict[str, Any]] = []
-    has_video_evidence = False
-    has_image_evidence = False
 
     if evidence:
         for ev in evidence:
-            ev_dict = ev.model_dump() if hasattr(ev, "model_dump") else (ev if isinstance(ev, dict) else {})
-            c_type = ev_dict.get("content_type") or getattr(ev, "content_type", "")
-            f_name = ev_dict.get("filename") or getattr(ev, "filename", "")
-            is_video = c_type.startswith("video/") or any(
-                f_name.lower().endswith(ext) for ext in (".mp4", ".mov", ".avi", ".mkv")
-            )
-            if is_video:
-                has_video_evidence = True
-                continue
-
-            has_image_evidence = True
             try:
                 block = _extract_image_block(ev, storage_service)
                 if block is not None:
@@ -284,16 +269,6 @@ def check_policy(
                     policy_reasoning=f"Failed to retrieve evidence file: {err_detail}",
                     tool_calls=[],
                 )
-
-        if has_video_evidence and not has_image_evidence:
-            return PolicyCheckerOutput(
-                policy_status="ambiguous",
-                matched_policy_rule=eval_result.matched_policy_rule,
-                passed_rules=eval_result.passed_rules,
-                failed_rules=eval_result.failed_rules,
-                policy_reasoning="Video evidence requires manual reviewer inspection.",
-                tool_calls=[],
-            )
 
     # 1. Deterministic Pass Bypass
     # Clear-cut pass bypasses LLM except for:
