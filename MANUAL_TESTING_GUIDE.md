@@ -28,17 +28,18 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
 | :---: | :--- | :--- | :---: | :---: |
 | **TC-01** | System Health Check | DynamoDB & API connectivity | N/A | `status: "healthy"` (HTTP 200) |
 | **TC-02** | Clear-Cut Approval & Return Email | Fast deterministic bypass + approval email with RMA | `ORD-1007` | `auto_approve` / `completed` |
-| **TC-03** | Max Order Amount Denial | Deterministic constraint enforcement | `ORD-1003` | `deny` / `completed` |
-| **TC-04** | Expired Return Window Denial | Date window policy evaluation | `ORD-1004` | `deny` / `completed` |
-| **TC-05** | Single Tool Carrier Verification | Autonomous `query_carrier_tracking` tool call | `ORD-1005` | `auto_approve` / `completed` |
-| **TC-06** | Dual Tool Verification (FedEx & Stripe) | High-value order dual external verification | `ORD-1010` | `auto_approve` / `completed` |
-| **TC-07** | Clarification Loop Lifecycle | Low confidence pause -> customer response -> resolution | `ORD-1008` | `awaiting_clarification` -> `auto_approve` |
+| **TC-03** | Max Order Amount Escalation | Order amount exceeding threshold ($750 > $500) escalates to human review | `ORD-1003` | `escalate` / `escalated` |
+| **TC-04** | Expired Return Window Denial & Denial Email | Date window violation (> 30 days) triggers denial + automated denial email | `ORD-1004` | `deny` / `completed` |
+| **TC-05** | Single Tool Carrier Verification | Autonomous `query_carrier_tracking` tool call for delayed delivery | `ORD-1005` | `auto_approve` / `completed` |
+| **TC-06** | Mandatory Dual Tool Verification (FedEx & Stripe) | High-value order (≥ $400) mandates both carrier & payment tool audit records | `ORD-1010` | `auto_approve` / `completed` |
+| **TC-07** | Clarification Loop Lifecycle | Low confidence (< 0.70) pause -> customer response -> resolution | `ORD-1008` | `awaiting_clarification` -> `auto_approve` |
 | **TC-08** | Clarification Exhaustion to Escalation | 2-cycle clarification exhaustion (low confidence < 0.70) -> human escalation | `ORD-1009` | `awaiting_clarification` (cycles 1 & 2) -> `escalate` / `escalated` |
-| **TC-09** | Supervisor Manual Override | Supervisor manual override on escalated TC-08 refund (approve / deny) | `ORD-1009` | `approve` or `deny` / `completed` |
-| **TC-10** | Multipart Damage Evidence Upload | Image file storage & metadata attachment | Any active refund | HTTP 201 (`evidence` array populated) |
-| **TC-11** | Multimodal Image Inspection | Multimodal Bedrock vision agent verifies damage | `ORD-1001` | `auto_approve` (damage verified) |
-| **TC-12** | Queue Listing and Filtering | DynamoDB querying with status filter | N/A | HTTP 200 (filtered list) |
-| **TC-13** | Input Validation & Error Boundaries | Rejection of blank inputs, 404s, invalid files | N/A | HTTP 400, 404, 413, 422 |
+| **TC-09** | Supervisor Manual Override | Supervisor manual override on escalated TC-08 refund (`approve` or `deny`) | `ORD-1009` | `approve` or `deny` / `completed` |
+| **TC-10** | Multipart Damage Evidence Upload | Interactive file picker upload (JPEG/PNG/WebP ≤ 5MB; video rejected) | Any active refund | HTTP 201 (`evidence` array populated) |
+| **TC-11** | Multimodal Image Inspection | Multimodal Bedrock vision agent verifies damage in attached photo | `ORD-1001` | `auto_approve` (damage verified) |
+| **TC-12** | Initial Refund Creation with Attached Image | Multipart `POST /refunds` with upfront image proof evaluates immediately | `ORD-1001` | HTTP 202 (`evidence` populated on intake) |
+| **TC-13** | Queue Listing and Filtering | DynamoDB querying with status filter (`completed`, `escalated`, etc.) | N/A | HTTP 200 (filtered list) |
+| **TC-14** | Input Validation & Error Boundaries | Order ID regex (`^ORD-\d{4}$`), blank fields, 404s, video rejection, 5MB limit | N/A | HTTP 400, 404, 413, 422 |
 
 ---
 
@@ -53,7 +54,7 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
   ```json
   {
     "status": "healthy",
-    "timestamp": "2026-09-24T...",
+    "timestamp": "2026-09-25T...",
     "dynamodb": "connected"
   }
   ```
@@ -70,7 +71,7 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
     "customer_request_text": "I changed my mind about this mouse. It is brand new and unopened in original packaging, I just do not need it anymore."
   }
   ```
-- **Step 1 Expected Output (`POST /refunds`)**: `201 Created`
+- **Step 1 Expected Output (`POST /refunds`)**: `202 Accepted`
   ```json
   {
     "refund_id": "ref_...",
@@ -87,18 +88,19 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
   - `status`: `"completed"`
   - `decision`: `"auto_approve"`
   - `confidence_score`: `>= 0.80`
+  - `denial_email_text`: `null`
   - `approval_email_text`: Non-null string containing:
-    - Customer greeting
+    - Formal customer greeting
     - Confirmation that refund for `ORD-1007` is approved
     - Unique RMA number (e.g. `RMA-1007-...`)
-    - 14-day return window deadline
-    - Return packaging and mailing instructions
+    - Explicit 14-day return window deadline
+    - Clear packaging and mailing return instructions
 
 ---
 
-### TC-03: Hard Constraint Policy Denial (Max Order Amount Exceeded)
+### TC-03: Max Order Amount Threshold Escalation
 - **Endpoint**: `POST /refunds` followed by `GET /refunds/{refund_id}`
-- **Goal**: Confirm that orders exceeding policy threshold (`$750.00 > $500.00` max limit for `damaged`) are deterministically denied without unneeded LLM tokens.
+- **Goal**: Confirm that orders exceeding the policy maximum order amount (`$750.00 > $500.00` limit for `damaged` in `ORD-1003`) are NOT auto-denied, but instead route to human supervisor escalation (`decision: "escalate"`, `status: "escalated"`, `policy_status: "ambiguous"`).
 - **Input (`POST /refunds`)**:
   ```json
   {
@@ -106,18 +108,21 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
     "customer_request_text": "The gaming monitor arrived with a completely shattered OLED panel and cracked stand."
   }
   ```
-- **Step 1 Expected Output**: `201 Created`
+- **Step 1 Expected Output**: `202 Accepted`
 - **Step 2 (`GET /refunds/{refund_id}`) Expected Output**: `200 OK`
-  - `status`: `"completed"`
-  - `decision`: `"deny"`
-  - `reasoning`: Contains `"max_order_amount"` failure explanation (order amount $750.00 exceeds $500.00 threshold).
-  - `approval_email_text`: `null` (no return instructions for denied claims).
+  - `status`: `"escalated"`
+  - `decision`: `"escalate"`
+  - `policy_status`: `"ambiguous"`
+  - `failed_rules`: `["max_order_amount"]`
+  - `reasoning`: Cites order amount threshold escalation (`"Order amount ($750.0) exceeds maximum threshold ($500.0); requires supervisor escalation."`).
+  - `approval_email_text`: `null`
+  - `denial_email_text`: `null`
 
 ---
 
-### TC-04: Date Window Policy Denial (Expired Return Window)
+### TC-04: Expired Return Window Denial & Customer Denial Email
 - **Endpoint**: `POST /refunds` followed by `GET /refunds/{refund_id}`
-- **Goal**: Confirm that return requests filed beyond the policy window (`ORD-1004` purchased in August, > 30 days ago) are denied.
+- **Goal**: Confirm that return requests filed beyond the policy window (`ORD-1004` purchased in August, > 30 days ago) are denied (`decision: "deny"`, `status: "completed"`) and automatically generate an empathetic customer denial email explaining the policy violation without an RMA number.
 - **Input (`POST /refunds`)**:
   ```json
   {
@@ -125,11 +130,18 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
     "customer_request_text": "The keyboard spacebar stopped working properly. I would like a refund."
   }
   ```
-- **Step 1 Expected Output**: `201 Created`
+- **Step 1 Expected Output**: `202 Accepted`
 - **Step 2 (`GET /refunds/{refund_id}`) Expected Output**: `200 OK`
   - `status`: `"completed"`
   - `decision`: `"deny"`
+  - `failed_rules`: `["refund_window_days"]`
   - `reasoning`: Identifies failed rule `"refund_window_days"`.
+  - `approval_email_text`: `null`
+  - `denial_email_text`: Non-null string containing:
+    - Customer greeting and order ID `ORD-1004`
+    - Polite explanation that the request falls outside the 30-day return policy window
+    - Customer support contact information
+    - Strictly **NO RMA number** or return shipping instructions
 
 ---
 
@@ -143,7 +155,7 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
     "customer_request_text": "My standing desk converter was supposed to arrive last week but the package is still delayed and missing."
   }
   ```
-- **Step 1 Expected Output**: `201 Created`
+- **Step 1 Expected Output**: `202 Accepted`
 - **Step 2 (`GET /refunds/{refund_id}`) Expected Output**: `200 OK`
   - `status`: `"completed"`
   - `decision`: `"auto_approve"`
@@ -155,9 +167,9 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
 
 ---
 
-### TC-06: Dual External Verification (FedEx Tracking & Stripe Charge)
+### TC-06: Mandatory Dual Tool Verification for High-Value Orders
 - **Endpoint**: `POST /refunds` followed by `GET /refunds/{refund_id}`
-- **Goal**: High-value claims (`ORD-1010`, $450.00 Camera) require autonomous multi-turn inspection of both carrier delivery proof (`query_carrier_tracking`) and payment dispute status (`query_payment_transaction`).
+- **Goal**: High-value claims (`ORD-1010`, $450.00 Camera, order amount ≥ $400.00) strictly mandate autonomous execution of BOTH external verification tools (`query_carrier_tracking` and `query_payment_transaction`) before any approval can be granted.
 - **Input (`POST /refunds`)**:
   ```json
   {
@@ -165,20 +177,20 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
     "customer_request_text": "I ordered this mirrorless camera but received the wrong lens bundle. I would like to return it for a refund."
   }
   ```
-- **Step 1 Expected Output**: `201 Created`
+- **Step 1 Expected Output**: `202 Accepted`
 - **Step 2 (`GET /refunds/{refund_id}`) Expected Output**: `200 OK`
   - `status`: `"completed"`
   - `decision`: `"auto_approve"`
-  - `tool_calls`: List with **2 distinct tool invocations**:
+  - `tool_calls`: List with **both required tool audit executions**:
     1. `tool_name`: `"query_carrier_tracking"` (`TRK-1010`, verifies delivery photo proof).
-    2. `tool_name`: `"query_payment_transaction"` (`ORD-1010`, verifies charge status $450.00 and `dispute_status: "none"`).
-  - `approval_email_text`: Populated with RMA code and high-value packaging instructions.
+    2. `tool_name`: `"query_payment_transaction"` (`ORD-1010`, verifies charge amount $450.00 and `dispute_status: "none"`).
+  - `approval_email_text`: Populated with RMA code `RMA-1010-...` and return instructions.
 
 ---
 
 ### TC-07: Low-Confidence Pause & Customer Clarification Lifecycle
 - **Endpoint**: `POST /refunds` $\rightarrow$ `GET /refunds/{id}` $\rightarrow$ `POST /refunds/{id}/clarify` $\rightarrow$ `GET /refunds/{id}`
-- **Goal**: Verify that ambiguous mixed-intent customer requests trigger low classifier confidence (< 0.70), pause the workflow with `awaiting_clarification`, generate a polite clarification inquiry email, and resume to completion once answered.
+- **Goal**: Verify that ambiguous mixed-intent customer requests trigger low classifier confidence (< 0.70), pause the workflow with `awaiting_clarification`, generate a polite clarification inquiry email requesting specific refund reasons and damage photo proof, and resume once answered.
 - **Step 1 (`POST /refunds`) Input**:
   ```json
   {
@@ -189,17 +201,17 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
 - **Step 2 (`GET /refunds/{refund_id}`) Expected Output**:
   - `status`: `"awaiting_clarification"`
   - `clarification_count`: `1`
-  - `clarification_prompt`: Formatted customer inquiry email asking for specific reasons and details.
-- **Step 3 (`POST /refunds/{refund_id}/clarify`) Input**:
-  - `refund_id`: `<copied_refund_id>`
-  - Request Body:
+  - `clarification_prompt`: Formatted customer inquiry email asking for specific reasons and photo proof.
+- **Step 3 (`POST /refunds/{refund_id}/clarify`) Input (Swagger Form / JSON)**:
+  - In Swagger UI, expand `POST /refunds/{refund_id}/clarify`.
+  - Enter `refund_id`.
+  - In the request body, provide:
     ```json
     {
       "response_text": "The watch is in perfect unopened condition, but I decided I prefer an analog watch instead. I want to return it."
     }
     ```
-- **Step 3 Expected Output**: `200 OK`
-  - `status`: `"pending"` (Workflow resumed).
+- **Step 3 Expected Output**: `200 OK` (`status: "pending"`).
 - **Step 4 (`GET /refunds/{refund_id}`) Expected Output** (after 2–3s):
   - `status`: `"completed"`
   - `decision`: `"auto_approve"`
@@ -224,7 +236,7 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
   - **Verification (`GET /refunds/{refund_id}`)**:
     - `status`: `"awaiting_clarification"`
     - `clarification_count`: `1`
-    - `clarification_prompt`: Formatted customer inquiry email asking for specific reasons and details.
+    - `clarification_prompt`: Formatted customer inquiry email prompting for clarification.
 - **Step 2 (`POST /refunds/{refund_id}/clarify`) - Clarification Cycle 1 (First Vague Response)**:
   - Submit the first ambiguous clarification response:
     ```json
@@ -333,26 +345,29 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
 
 ---
 
-### TC-10: Customer Damage Evidence Upload (Multipart)
+### TC-10: Customer Damage Evidence Upload (Interactive Swagger UI File Picker)
 - **Endpoint**: `POST /refunds/{refund_id}/evidence`
-- **Goal**: Verify multipart file upload handling for customer proof photos and videos.
-- **Input**:
-  - `refund_id`: Any existing refund ID.
-  - `file`: Attach any small image file (`sample_damage.jpg` or `sample_damage.png`).
-- **Expected Output**: `201 Created`
+- **Goal**: Verify multipart image file upload using Swagger UI's interactive file selector (`<input type="file">`). Only images (JPEG, PNG, WebP ≤ 5MB) are supported; videos are rejected.
+- **Instructions in Swagger UI**:
+  1. Navigate to `POST /refunds/{refund_id}/evidence` and click **Try it out**.
+  2. Input an active `refund_id`.
+  3. Click **Choose File** / **Browse** and select a valid JPEG, PNG, or WebP photo (`sample_crack.png`, ≤ 5MB).
+  4. Click **Execute**.
+- **Expected Status**: `201 Created`
+- **Expected Output**:
   ```json
   {
     "refund_id": "ref_...",
-    "order_id": "...",
+    "order_id": "ORD-...",
     "evidence": [
       {
         "evidence_id": "evi_...",
-        "storage_key": "evidence/.../sample_damage.jpg",
-        "filename": "sample_damage.jpg",
-        "content_type": "image/jpeg",
+        "storage_key": "evidence/ref_.../sample_crack.png",
+        "filename": "sample_crack.png",
+        "content_type": "image/png",
         "size_bytes": 12345,
-        "url": "/static/uploads/evidence/.../sample_damage.jpg",
-        "created_at": "..."
+        "url": "/static/uploads/evidence/ref_.../sample_crack.png",
+        "created_at": "2026-09-25T..."
       }
     ]
   }
@@ -361,26 +376,54 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
 ---
 
 ### TC-11: Multimodal Vision Inspection of Customer Damage Photo
-- **Endpoint**: `POST /refunds` (or attach evidence via `POST /refunds/{id}/evidence`)
-- **Goal**: When a claim is `damaged` and an image is attached, verify that deterministic pass is bypassed and the multimodal Bedrock agent inspects image bytes for visible damage.
-- **Input Step 1 (`POST /refunds`)**:
+- **Endpoint**: `POST /refunds` followed by `POST /refunds/{refund_id}/evidence`
+- **Goal**: When a claim is categorized as `damaged` and an image is attached, verify that deterministic pass is bypassed and the multimodal Bedrock agent inspects image bytes for visible damage.
+- **Step 1 (`POST /refunds`)**:
   ```json
   {
     "order_id": "ORD-1001",
     "customer_request_text": "The chair arrived broken with cracked plastic framing."
   }
   ```
-- **Input Step 2 (`POST /refunds/{refund_id}/evidence`)**:
-  - Attach an image demonstrating item damage.
-- **Expected Verification**:
-  - `GET /refunds/{refund_id}` reflects `evidence` array populated.
-  - Multimodal agent inspects image content blocks.
-  - If damage is verified: `decision: "auto_approve"`, `reasoning` explicitly confirms physical damage observed in proof photo.
-  - If non-image (video) only: routes to `ambiguous` with `reasoning="Video evidence requires manual reviewer inspection."`.
+  *(Copy returned `refund_id`)*.
+- **Step 2 (`POST /refunds/{refund_id}/evidence`)**:
+  - Upload a photo depicting visible product damage.
+- **Step 3 (`GET /refunds/{refund_id}`)**:
+  - `status`: `"completed"`
+  - `decision`: `"auto_approve"`
+  - `reasoning`: Explicitly confirms physical damage observed in proof photo.
+  - `approval_email_text`: RMA generated with return instructions.
 
 ---
 
-### TC-12: Refund Queue Listing & Status Filtering
+### TC-12: Initial Refund Request with Upfront Image Evidence Attachment
+- **Endpoint**: `POST /refunds` (via `multipart/form-data`)
+- **Goal**: Verify that customers can attach an image proof directly upon initial refund creation in `POST /refunds`, storing the image and immediately evaluating it on the first workflow run without requiring a secondary evidence upload call.
+- **Instructions in Swagger UI**:
+  1. In Swagger UI, expand `POST /refunds`.
+  2. Select `multipart/form-data` from the Request body dropdown.
+  3. Enter `order_id`: `"ORD-1001"`.
+  4. Enter `customer_request_text`: `"Chair armrest arrived snapped in half during transit."`.
+  5. Under `file`, select a valid image file (`damage_proof.jpg`).
+  6. Click **Execute**.
+- **Step 1 Expected Output**: `202 Accepted`
+  ```json
+  {
+    "refund_id": "ref_...",
+    "order_id": "ORD-1001",
+    "status": "pending",
+    "created_at": "..."
+  }
+  ```
+- **Step 2 Verification (`GET /refunds/{refund_id}`)**:
+  - `evidence`: Array is populated immediately on intake with the uploaded file metadata.
+  - `status`: `"completed"`
+  - `decision`: `"auto_approve"`
+  - `reasoning`: Confirms physical damage verified from initial attached photo.
+
+---
+
+### TC-13: Refund Queue Listing & Status Filtering
 - **Endpoint**: `GET /refunds`
 - **Goal**: Verify back-office query capabilities across refund statuses.
 - **Test Variations**:
@@ -393,13 +436,18 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
 
 ---
 
-### TC-13: Validation Boundaries & Error Handling
-- **Goal**: Verify robust HTTP error status codes on invalid inputs.
+### TC-14: Validation Boundaries & Error Handling
+
+Verify robust HTTP error responses across inputs, formats, and file restrictions:
 
 | Test Case | Method & Endpoint | Payload / Condition | Expected Status Code | Expected Behavior |
 | :--- | :--- | :--- | :---: | :--- |
+| **Malformed Order ID (lowercase)** | `POST /refunds` | `{"order_id": "ord-1001", "customer_request_text": "Defective"}` | `422 Unprocessable Entity` | Regex mismatch against `^ORD-\d{4}$` |
+| **Malformed Order ID (wrong prefix)** | `POST /refunds` | `{"order_id": "INV-1001", "customer_request_text": "Defective"}` | `422 Unprocessable Entity` | Regex mismatch against `^ORD-\d{4}$` |
+| **Malformed Order ID (wrong digits)** | `POST /refunds` | `{"order_id": "ORD-100", "customer_request_text": "Defective"}` | `422 Unprocessable Entity` | Regex mismatch (must have 4 digits) |
 | **Blank Order ID** | `POST /refunds` | `{"order_id": "", "customer_request_text": "Help"}` | `422 Unprocessable Entity` | Pydantic validation error |
-| **Blank Request Text** | `POST /refunds` | `{"order_id": "ORD-1001", "customer_request_text": "   "}` | `422 Unprocessable Entity` | Pydantic validation error |
-| **Nonexistent Refund** | `GET /refunds/ref_nonexistent` | Random invalid refund ID | `404 Not Found` | Detail: `"Refund request '...' not found."` |
-| **Disallowed File Upload** | `POST /refunds/{id}/evidence` | Upload `.exe` or `.txt` file | `400 Bad Request` | Detail: `"Disallowed file extension/MIME type"` |
-| **Oversized Upload** | `POST /refunds/{id}/evidence` | Upload image > 10MB or video > 50MB | `413 Payload Too Large` | Rejection of oversized file |
+| **Blank Request Text** | `POST /refunds` | `{"order_id": "ORD-1001", "customer_request_text": "   "}` | `422 Unprocessable Entity` | Blank text rejected |
+| **Nonexistent Refund** | `GET /refunds/ref_nonexistent` | Unknown refund ID | `404 Not Found` | Detail: `"Refund request '...' not found"` |
+| **Video File Rejection** | `POST /refunds/{id}/evidence` | Upload `.mp4` or `.mov` video file | `400 Bad Request` | Video formats disallowed; strictly images only |
+| **Oversized Image File** | `POST /refunds/{id}/evidence` | Upload image > 5MB | `413 Payload Too Large` | Rejection of file exceeding 5MB ceiling |
+| **Disallowed Extension** | `POST /refunds/{id}/evidence` | Upload `.exe`, `.pdf`, or `.txt` file | `400 Bad Request` | Disallowed file extension |
