@@ -158,16 +158,38 @@ async def get_refund_request_by_id(
     return record
 
 
+EVIDENCE_UPLOAD_OPENAPI_EXTRA: dict[str, Any] = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "file": {
+                            "type": "string",
+                            "format": "binary",
+                            "description": "Evidence image or video file.",
+                        }
+                    },
+                    "required": ["file"],
+                }
+            }
+        },
+    }
+}
+
+
 @router.post(
     "/{refund_id}/evidence",
     response_model=RefundRecord,
     status_code=status.HTTP_201_CREATED,
     summary="Upload photo or video evidence for a refund request",
+    openapi_extra=EVIDENCE_UPLOAD_OPENAPI_EXTRA,
 )
 async def upload_refund_evidence(
     refund_id: str,
     request: Request,
-    file: Any = None,
     repo: RefundRepository = Depends(get_repository),
     storage_service: EvidenceStorageService = Depends(get_evidence_storage_service),
 ) -> RefundRecord:
@@ -179,21 +201,20 @@ async def upload_refund_evidence(
             detail=f"Refund request '{refund_id}' not found",
         )
 
-    if file is None:
-        content_type_header = request.headers.get("content-type", "").lower()
-        if "multipart/form-data" not in content_type_header:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Request content-type must be multipart/form-data.",
-            )
-        body = await request.body()
-        _, uploaded_files = _parse_multipart_request(content_type_header, body)
-        if not uploaded_files:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No file uploaded in multipart request.",
-            )
-        file = uploaded_files[0]
+    content_type_header = request.headers.get("content-type", "").lower()
+    if "multipart/form-data" not in content_type_header:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Request content-type must be multipart/form-data.",
+        )
+    body = await request.body()
+    _, uploaded_files = _parse_multipart_request(content_type_header, body)
+    if not uploaded_files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No file uploaded in multipart request.",
+        )
+    file = uploaded_files[0]
 
     filename = file.filename or "evidence_file"
     ext = Path(filename).suffix.lower()
@@ -236,11 +257,50 @@ async def upload_refund_evidence(
     return updated
 
 
+CLARIFY_REQUEST_OPENAPI_EXTRA: dict[str, Any] = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "application/json": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "response_text": {
+                            "type": "string",
+                            "description": "Customer clarification response text.",
+                        }
+                    },
+                    "required": ["response_text"],
+                }
+            },
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "response_text": {
+                            "type": "string",
+                            "description": "Customer clarification response text.",
+                        },
+                        "evidence_file": {
+                            "type": "string",
+                            "format": "binary",
+                            "description": "Optional supporting evidence image or video file.",
+                        },
+                    },
+                    "required": ["response_text"],
+                }
+            },
+        },
+    }
+}
+
+
 @router.post(
     "/{refund_id}/clarify",
     response_model=RefundRecord,
     status_code=status.HTTP_200_OK,
     summary="Submit customer clarification response and resume evaluation",
+    openapi_extra=CLARIFY_REQUEST_OPENAPI_EXTRA,
 )
 async def clarify_refund_request(
     refund_id: str,

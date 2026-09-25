@@ -151,23 +151,23 @@ async def test_clarify_success_200(mock_repo: MockRefundRepository):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post(
                 f"/refunds/{refund_id}/clarify",
-                json={"response_text": "The box arrived crushed and item broken."},
+                json={"response_text": "Item was damaged"},
             )
 
     assert response.status_code == 200
     data = response.json()
     assert data["refund_id"] == refund_id
     assert data["status"] == "pending"
-    assert data["clarification_response"] == "The box arrived crushed and item broken."
+    assert data["clarification_response"] == "Item was damaged"
     # Verify repository updated
     updated_record = mock_repo.get_refund_request(refund_id)
     assert updated_record is not None
     assert updated_record.status == "pending"
-    assert updated_record.clarification_response == "The box arrived crushed and item broken."
+    assert updated_record.clarification_response == "Item was damaged"
     # Verify background task was scheduled
     mock_resume.assert_called_once_with(
         refund_id=refund_id,
-        response_text="The box arrived crushed and item broken.",
+        response_text="Item was damaged",
         repository=mock_repo,
     )
 
@@ -447,3 +447,74 @@ async def test_clarify_multipart_form_oversized_file_413(mock_repo: MockRefundRe
         )
     assert response.status_code == 413
     assert "exceeds maximum allowed limit" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_clarify_openapi_schema():
+    """Unit test: GET /openapi.json defines both application/json and multipart/form-data content types with binary format for evidence_file."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/openapi.json")
+
+    assert response.status_code == 200
+    spec = response.json()
+    endpoint = spec["paths"]["/refunds/{refund_id}/clarify"]["post"]
+    assert "requestBody" in endpoint
+    request_body = endpoint["requestBody"]
+    assert request_body.get("required") is True
+    content = request_body["content"]
+
+    # Verify application/json content type
+    assert "application/json" in content
+    json_schema = content["application/json"]["schema"]
+    assert json_schema["type"] == "object"
+    assert "response_text" in json_schema["properties"]
+    assert json_schema["properties"]["response_text"]["type"] == "string"
+    assert "response_text" in json_schema["required"]
+
+    # Verify multipart/form-data content type
+    assert "multipart/form-data" in content
+    form_schema = content["multipart/form-data"]["schema"]
+    assert form_schema["type"] == "object"
+    assert "response_text" in form_schema["properties"]
+    assert form_schema["properties"]["response_text"]["type"] == "string"
+    assert "response_text" in form_schema["required"]
+    assert "evidence_file" in form_schema["properties"]
+    assert form_schema["properties"]["evidence_file"]["type"] == "string"
+    assert form_schema["properties"]["evidence_file"]["format"] == "binary"
+
+
+@pytest.mark.asyncio
+async def test_clarify_multipart_form_with_evidence_file_parameter(
+    mock_repo: MockRefundRepository, tmp_path: Path
+):
+    """Integration test: submitting a multipart form body with response_text and evidence_file succeeds with HTTP 200 and attaches evidence."""
+    refund_id = "ref-clarify-multipart-evidence-param"
+    mock_repo.seed_record(refund_id=refund_id, order_id="ORD-1003", status="awaiting_clarification")
+    transport = ASGITransport(app=app)
+
+    file_bytes = b"fake-jpeg-photo-damage-evidence-param"
+    with patch("app.api.refunds.resume_refund_workflow", new_callable=AsyncMock) as mock_resume:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                f"/refunds/{refund_id}/clarify",
+                data={"response_text": "Item was damaged and here is the evidence file."},
+                files={"evidence_file": ("damaged_item.jpg", file_bytes, "image/jpeg")},
+            )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "pending"
+    assert data["clarification_response"] == "Item was damaged and here is the evidence file."
+    assert len(data["evidence"]) == 1
+    evidence = data["evidence"][0]
+    assert evidence["filename"] == "damaged_item.jpg"
+    assert evidence["content_type"] == "image/jpeg"
+    assert evidence["size_bytes"] == len(file_bytes)
+    assert evidence["storage_key"].startswith("evidence/ORD-1003/")
+    mock_resume.assert_called_once_with(
+        refund_id=refund_id,
+        response_text="Item was damaged and here is the evidence file.",
+        repository=mock_repo,
+    )
+

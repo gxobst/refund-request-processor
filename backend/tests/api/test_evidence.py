@@ -234,3 +234,28 @@ async def test_upload_evidence_video_size_exceeded_413(mock_repo: MockRefundRepo
 
     assert response.status_code == 413
     assert "exceeds maximum allowed limit" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_evidence_openapi_schema():
+    """Unit test fetches GET /openapi.json and asserts the OpenAPI spec for POST /refunds/{refund_id}/evidence defines multipart/form-data with binary format."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/openapi.json")
+
+    assert response.status_code == 200
+    spec = response.json()
+    endpoint = spec["paths"]["/refunds/{refund_id}/evidence"]["post"]
+    assert "requestBody" in endpoint
+    request_body = endpoint["requestBody"]
+    assert request_body.get("required") is True
+    content = request_body["content"]
+    assert "multipart/form-data" in content
+
+    schema = content["multipart/form-data"]["schema"]
+    assert schema["type"] == "object"
+    assert "file" in schema["properties"]
+    assert schema["properties"]["file"]["type"] == "string"
+    assert schema["properties"]["file"]["format"] == "binary"
+    assert "file" in schema["required"]
+
