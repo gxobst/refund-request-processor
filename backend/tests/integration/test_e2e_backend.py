@@ -410,6 +410,11 @@ async def test_e2e_clarification_lifecycle(mock_repo: RefundRepository):
         assert paused_record["status"] == "awaiting_clarification"
         assert paused_record["clarification_count"] == 1
         assert paused_record["clarification_prompt"] is not None
+        assert "clarification_history" in paused_record
+        assert len(paused_record["clarification_history"]) == 1
+        assert paused_record["clarification_history"][0]["cycle"] == 1
+        assert paused_record["clarification_history"][0]["prompt"] == paused_record["clarification_prompt"]
+        assert paused_record["clarification_history"][0]["response"] is None
         assert paused_record["category"] is not None
         assert paused_record["confidence_score"] is not None
         assert paused_record["confidence_score"] < 0.70
@@ -428,6 +433,10 @@ async def test_e2e_clarification_lifecycle(mock_repo: RefundRepository):
         clarify_data = clarify_response.json()
         assert clarify_data["status"] == "pending"
         assert clarify_data["clarification_response"] == clarify_payload["response_text"]
+        assert "clarification_history" in clarify_data
+        assert len(clarify_data["clarification_history"]) == 1
+        assert clarify_data["clarification_history"][0]["cycle"] == 1
+        assert clarify_data["clarification_history"][0]["response"] == clarify_payload["response_text"]
 
         # 4. Background workflow resumes, poll until completed
         final_record = await poll_until_not_pending(client, refund_id)
@@ -436,6 +445,8 @@ async def test_e2e_clarification_lifecycle(mock_repo: RefundRepository):
     assert final_record["decision"] == "auto_approve"
     assert final_record["confidence_score"] >= 0.70
     assert final_record["clarification_response"] == clarify_payload["response_text"]
+    assert len(final_record["clarification_history"]) == 1
+    assert final_record["clarification_history"][0]["response"] == clarify_payload["response_text"]
     assert "wrong_item" in final_record["reasoning"].lower() or "approved" in final_record["reasoning"].lower()
 
 
@@ -1316,3 +1327,56 @@ async def test_e2e_wrong_item_without_photos_pauses_at_awaiting_clarification(
     prompt = paused_record.get("clarification_prompt", "")
     assert "photo" in prompt.lower()
     assert "shipping label" in prompt.lower() or "packing slip" in prompt.lower()
+
+
+@pytest.mark.asyncio
+async def test_e2e_clarification_history_audit_log_persists_and_returns_via_api(
+    mock_repo: RefundRepository,
+):
+    """AC Task 56: Assert GET /refunds/{refund_id} and POST /refunds/{refund_id}/clarify return JSON responses containing populated clarification_history array matching OpenAPI schema."""
+    payload = {
+        "order_id": "ORD-1001",
+        "customer_request_text": "I received something completely different in the box, wrong item.",
+    }
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Step 1: Submit intake request
+        post_res = await client.post("/refunds", json=payload)
+        assert post_res.status_code == 202
+        refund_id = post_res.json()["refund_id"]
+
+        # Step 2: Poll until awaiting_clarification
+        paused_record = await poll_until_not_pending(client, refund_id)
+        assert paused_record["status"] == "awaiting_clarification"
+
+        # Check GET /refunds/{refund_id} returns populated clarification_history
+        get_res = await client.get(f"/refunds/{refund_id}")
+        assert get_res.status_code == 200
+        get_data = get_res.json()
+        assert "clarification_history" in get_data
+        assert isinstance(get_data["clarification_history"], list)
+        assert len(get_data["clarification_history"]) >= 1
+
+        turn = get_data["clarification_history"][0]
+        assert turn["cycle"] == 1
+        assert isinstance(turn["prompt"], str) and len(turn["prompt"]) > 0
+        assert turn["response"] is None
+        assert isinstance(turn["timestamp"], str)
+        assert isinstance(turn["evidence_ids"], list)
+
+        # Step 3: POST /refunds/{refund_id}/clarify returns populated clarification_history with response
+        clarify_res = await client.post(
+            f"/refunds/{refund_id}/clarify",
+            json={"response_text": "I ordered a desk chair but got a small lamp instead."},
+        )
+        assert clarify_res.status_code == 200
+        clarify_data = clarify_res.json()
+        assert "clarification_history" in clarify_data
+        assert len(clarify_data["clarification_history"]) >= 1
+        updated_turn = clarify_data["clarification_history"][0]
+        assert updated_turn["cycle"] == 1
+        assert updated_turn["response"] == "I ordered a desk chair but got a small lamp instead."
+        assert isinstance(updated_turn["timestamp"], str)
+        assert isinstance(updated_turn["evidence_ids"], list)
+

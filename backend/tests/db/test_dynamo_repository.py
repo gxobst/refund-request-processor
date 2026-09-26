@@ -6,7 +6,7 @@ import pytest
 
 from app.core.config import Settings
 from app.db.repository import RefundNotFoundError, RefundRepository
-from app.schemas.refund import EvidenceItem, RefundRecord
+from app.schemas.refund import ClarificationTurn, EvidenceItem, RefundRecord
 
 
 class MockDynamoTable:
@@ -1392,6 +1392,211 @@ def test_request_reviewer_proof_not_found_raises_refund_not_found_error(
             refund_id="nonexistent_id",
             proof_prompt="Please send photos.",
         )
+
+
+def test_request_clarification_appends_turn_to_history(repository: RefundRepository):
+    """AC: Calling request_clarification appends a turn to clarification_history with cycle 1, prompt, timestamp, and empty response and evidence IDs."""
+    record = repository.create_refund_request(
+        order_id="ORD-1001",
+        customer_request_text="Need refund for item.",
+    )
+    assert record.clarification_history == []
+
+    updated = repository.request_clarification(
+        refund_id=record.refund_id,
+        clarification_prompt="Please describe the damaged parts.",
+    )
+
+    assert updated.clarification_count == 1
+    assert updated.clarification_prompt == "Please describe the damaged parts."
+    assert len(updated.clarification_history) == 1
+    turn = updated.clarification_history[0]
+    assert turn.cycle == 1
+    assert turn.prompt == "Please describe the damaged parts."
+    assert turn.response is None
+    assert turn.timestamp is not None
+    assert turn.evidence_ids == []
+
+    # Verify retrieval from DynamoDB
+    fetched = repository.get_refund_request(record.refund_id)
+    assert fetched is not None
+    assert len(fetched.clarification_history) == 1
+    assert fetched.clarification_history[0].cycle == 1
+    assert fetched.clarification_history[0].prompt == "Please describe the damaged parts."
+    assert fetched.clarification_history[0].response is None
+    assert fetched.clarification_history[0].evidence_ids == []
+
+
+def test_submit_clarification_response_updates_turn_response(repository: RefundRepository):
+    """AC: Calling submit_clarification_response updates the turn's response in clarification_history and preserves prior prompt and cycle number."""
+    record = repository.create_refund_request(
+        order_id="ORD-1001",
+        customer_request_text="Need refund for item.",
+    )
+    repository.request_clarification(
+        refund_id=record.refund_id,
+        clarification_prompt="Please describe the defect.",
+    )
+
+    updated = repository.submit_clarification_response(
+        refund_id=record.refund_id,
+        clarification_response="The screen has multiple dead pixels.",
+    )
+
+    assert updated.status == "pending"
+    assert updated.clarification_response == "The screen has multiple dead pixels."
+    assert len(updated.clarification_history) == 1
+    turn = updated.clarification_history[0]
+    assert turn.cycle == 1
+    assert turn.prompt == "Please describe the defect."
+    assert turn.response == "The screen has multiple dead pixels."
+    assert turn.evidence_ids == []
+
+    # Verify directly from DynamoDB
+    fetched = repository.get_refund_request(record.refund_id)
+    assert fetched is not None
+    assert len(fetched.clarification_history) == 1
+    assert fetched.clarification_history[0].response == "The screen has multiple dead pixels."
+
+
+def test_multiturn_clarification_cycles_persist_sequentially(repository: RefundRepository):
+    """AC: Multi-turn clarification cycles persist 2 distinct sequential entries in clarification_history in chronological order without overwriting earlier turns."""
+    record = repository.create_refund_request(
+        order_id="ORD-1001",
+        customer_request_text="Vague request.",
+    )
+
+    # Turn 1
+    repository.request_clarification(
+        refund_id=record.refund_id,
+        clarification_prompt="Can you explain what went wrong?",
+    )
+    repository.submit_clarification_response(
+        refund_id=record.refund_id,
+        clarification_response="It stopped turning on.",
+    )
+
+    # Turn 2
+    repository.request_clarification(
+        refund_id=record.refund_id,
+        clarification_prompt="Have you tried replacing the batteries?",
+    )
+    updated = repository.submit_clarification_response(
+        refund_id=record.refund_id,
+        clarification_response="Yes, brand new batteries did not help.",
+    )
+
+    assert updated.clarification_count == 2
+    assert len(updated.clarification_history) == 2
+
+    turn1 = updated.clarification_history[0]
+    assert turn1.cycle == 1
+    assert turn1.prompt == "Can you explain what went wrong?"
+    assert turn1.response == "It stopped turning on."
+
+    turn2 = updated.clarification_history[1]
+    assert turn2.cycle == 2
+    assert turn2.prompt == "Have you tried replacing the batteries?"
+    assert turn2.response == "Yes, brand new batteries did not help."
+
+    # Verify from DB
+    fetched = repository.get_refund_request(record.refund_id)
+    assert fetched is not None
+    assert len(fetched.clarification_history) == 2
+    assert fetched.clarification_history[0].cycle == 1
+    assert fetched.clarification_history[1].cycle == 2
+
+
+def test_request_reviewer_proof_appends_turn_to_history(repository: RefundRepository):
+    """AC: Calling request_reviewer_proof on an escalated claim appends a new turn to clarification_history with incremented cycle number and proof prompt."""
+    record = repository.create_refund_request(
+        order_id="ORD-1001",
+        customer_request_text="Claim requiring proof.",
+    )
+    repository.update_decision(
+        refund_id=record.refund_id,
+        decision="escalate",
+        reasoning="Escalated for proof.",
+        matched_policy_rule=None,
+        confidence_score=0.6,
+        status="escalated",
+    )
+
+    updated = repository.request_reviewer_proof(
+        refund_id=record.refund_id,
+        proof_prompt="Please upload photos of the serial number.",
+        notification_email_text="Dear Customer, please upload photos.",
+    )
+
+    assert updated.status == "awaiting_clarification"
+    assert updated.clarification_count == 1
+    assert len(updated.clarification_history) == 1
+    turn = updated.clarification_history[0]
+    assert turn.cycle == 1
+    assert turn.prompt == "Please upload photos of the serial number."
+    assert turn.response is None
+    assert turn.evidence_ids == []
+
+    # Verify from DB
+    fetched = repository.get_refund_request(record.refund_id)
+    assert fetched is not None
+    assert len(fetched.clarification_history) == 1
+    assert fetched.clarification_history[0].prompt == "Please upload photos of the serial number."
+
+
+def test_add_evidence_records_evidence_id_in_latest_clarification_turn(repository: RefundRepository):
+    """AC: Calling add_evidence records the uploaded evidence_id in the current clarification turn's evidence_ids list."""
+    record = repository.create_refund_request(
+        order_id="ORD-1001",
+        customer_request_text="Need refund.",
+    )
+    repository.request_clarification(
+        refund_id=record.refund_id,
+        clarification_prompt="Please send photos of the damage.",
+    )
+
+    evidence_item = EvidenceItem(
+        evidence_id="evi_custom_12345",
+        storage_key="refunds/ref-1/photo.jpg",
+        filename="damage.jpg",
+        content_type="image/jpeg",
+        size_bytes=1024,
+        url="http://test/photo.jpg",
+    )
+
+    updated = repository.add_evidence(
+        refund_id=record.refund_id,
+        evidence_item=evidence_item,
+    )
+
+    assert len(updated.evidence) == 1
+    assert len(updated.clarification_history) == 1
+    assert "evi_custom_12345" in updated.clarification_history[0].evidence_ids
+
+    # Verify from DB
+    fetched = repository.get_refund_request(record.refund_id)
+    assert fetched is not None
+    assert "evi_custom_12345" in fetched.clarification_history[0].evidence_ids
+
+
+def test_legacy_dynamodb_item_missing_clarification_history_loads_empty_list(repository: RefundRepository):
+    """AC: Legacy DynamoDB items missing clarification_history load via get_refund_request with clarification_history == [] without schema errors."""
+    legacy_item = {
+        "refund_id": "ref_legacy_item_999",
+        "order_id": "ORD-1001",
+        "customer_request_text": "Legacy refund request created before clarification_history field.",
+        "status": "pending",
+        "created_at": "2026-09-01T12:00:00+00:00",
+        "updated_at": "2026-09-01T12:00:00+00:00",
+        # Note: clarification_history intentionally omitted
+    }
+    repository.table.put_item(Item=legacy_item)
+
+    fetched = repository.get_refund_request("ref_legacy_item_999")
+    assert fetched is not None
+    assert isinstance(fetched, RefundRecord)
+    assert fetched.clarification_history == []
+    assert fetched.refund_id == "ref_legacy_item_999"
 
 
 

@@ -5,6 +5,7 @@ from app.schemas.decision import DecisionOutput, DecisionType
 from app.schemas.order import MockOrder
 from app.schemas.policy_checker import PolicyCheckerOutput, PolicyStatusType
 from app.schemas.refund import (
+    ClarificationTurn,
     OverrideDecisionType,
     RefundCreateRequest,
     RefundCreateResponse,
@@ -17,6 +18,7 @@ from app.schemas.refund import (
 )
 
 __all__ = [
+    "ClarificationTurn",
     "MockOrder",
     "RefundRecord",
     "RefundDecisionUpdate",

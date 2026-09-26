@@ -9,7 +9,7 @@ import pytest
 from app.api.refunds import get_repository
 from app.db.repository import RefundNotFoundError
 from app.main import app
-from app.schemas.refund import EvidenceItem, RefundRecord
+from app.schemas.refund import ClarificationTurn, EvidenceItem, RefundRecord
 
 
 class MockRefundRepository:
@@ -24,13 +24,28 @@ class MockRefundRepository:
         order_id: str = "ORD-1001",
         status: str = "pending",
         customer_request_text: str = "Damaged item received",
+        clarification_history: list[ClarificationTurn] | list[dict[str, Any]] | None = None,
+        clarification_prompt: str | None = None,
+        clarification_response: str | None = None,
+        clarification_count: int = 0,
     ) -> RefundRecord:
         now_iso = datetime.now(timezone.utc).isoformat()
+        turns: list[ClarificationTurn] = []
+        if clarification_history:
+            for turn in clarification_history:
+                if isinstance(turn, ClarificationTurn):
+                    turns.append(turn)
+                else:
+                    turns.append(ClarificationTurn.model_validate(turn))
         record = RefundRecord(
             refund_id=refund_id,
             order_id=order_id,
             customer_request_text=customer_request_text,
             status=status,
+            clarification_history=turns,
+            clarification_prompt=clarification_prompt,
+            clarification_response=clarification_response,
+            clarification_count=clarification_count,
             created_at=now_iso,
             updated_at=now_iso,
         )
@@ -47,10 +62,34 @@ class MockRefundRepository:
         if record is None:
             raise RefundNotFoundError(f"Refund request '{refund_id}' not found.")
         now_iso = datetime.now(timezone.utc).isoformat()
+        clean_resp = clarification_response.strip()
+        updated_history = [turn.model_copy() for turn in record.clarification_history]
+        target_cycle = record.clarification_count or 1
+        found = False
+        for i in reversed(range(len(updated_history))):
+            if updated_history[i].cycle == target_cycle:
+                updated_history[i].response = clean_resp
+                found = True
+                break
+        if not found:
+            if updated_history:
+                updated_history[-1].response = clean_resp
+            else:
+                updated_history.append(
+                    ClarificationTurn(
+                        cycle=target_cycle,
+                        prompt=record.clarification_prompt,
+                        response=clean_resp,
+                        timestamp=now_iso,
+                        evidence_ids=[],
+                    )
+                )
+
         updated = record.model_copy(
             update={
                 "status": "pending",
-                "clarification_response": clarification_response,
+                "clarification_response": clean_resp,
+                "clarification_history": updated_history,
                 "updated_at": now_iso,
             }
         )
@@ -70,9 +109,16 @@ class MockRefundRepository:
             item = evidence_item
         evidence_list = list(record.evidence)
         evidence_list.append(item)
+
+        updated_history = [turn.model_copy(deep=True) for turn in record.clarification_history]
+        if updated_history:
+            if item.evidence_id not in updated_history[-1].evidence_ids:
+                updated_history[-1].evidence_ids.append(item.evidence_id)
+
         updated = record.model_copy(
             update={
                 "evidence": evidence_list,
+                "clarification_history": updated_history,
                 "updated_at": now_iso,
             }
         )
@@ -441,6 +487,54 @@ async def test_upload_evidence_validation_failures_never_enqueue_background_task
             )
             assert res_413.status_code == 413
             mock_resume.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_evidence_upload_updates_clarification_history_evidence_ids(
+    mock_repo: MockRefundRepository,
+):
+    """AC: When evidence is uploaded, evidence_id is appended to latest ClarificationTurn in clarification_history and returned in GET /refunds/{refund_id}."""
+    refund_id = "ref-evidence-turn-test"
+    turn = ClarificationTurn(
+        cycle=1,
+        prompt="Please provide photos of the damaged item",
+        response=None,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        evidence_ids=[],
+    )
+    mock_repo.seed_record(
+        refund_id=refund_id,
+        order_id="ORD-1002",
+        status="awaiting_clarification",
+        clarification_history=[turn],
+        clarification_prompt=turn.prompt,
+        clarification_count=1,
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # POST evidence
+        res = await client.post(
+            f"/refunds/{refund_id}/evidence",
+            files={"file": ("damage_photo.png", b"fake-png-bytes", "image/png")},
+        )
+        assert res.status_code == 201
+        data = res.json()
+        assert len(data["evidence"]) == 1
+        ev_id = data["evidence"][0]["evidence_id"]
+        assert len(data["clarification_history"]) == 1
+        assert data["clarification_history"][0]["cycle"] == 1
+        assert data["clarification_history"][0]["prompt"] == "Please provide photos of the damaged item"
+        assert ev_id in data["clarification_history"][0]["evidence_ids"]
+
+        # GET /refunds/{refund_id}
+        get_res = await client.get(f"/refunds/{refund_id}")
+        assert get_res.status_code == 200
+        get_data = get_res.json()
+        assert "clarification_history" in get_data
+        assert len(get_data["clarification_history"]) == 1
+        assert get_data["clarification_history"][0]["cycle"] == 1
+        assert ev_id in get_data["clarification_history"][0]["evidence_ids"]
+
 
 
 

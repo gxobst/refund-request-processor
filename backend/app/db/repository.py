@@ -7,7 +7,7 @@ import uuid
 import boto3
 
 from app.core.config import get_settings
-from app.schemas.refund import EvidenceItem, RefundRecord
+from app.schemas.refund import ClarificationTurn, EvidenceItem, RefundRecord
 
 
 class RefundNotFoundError(KeyError):
@@ -335,11 +335,22 @@ class RefundRepository:
 
         now_iso = datetime.now(timezone.utc).isoformat()
         updated_dict = existing.model_dump()
+        new_count = (existing.clarification_count or 0) + 1
         updated_dict["status"] = "awaiting_clarification"
         updated_dict["decision"] = None
         updated_dict["clarification_prompt"] = clarification_prompt.strip()
-        updated_dict["clarification_count"] = (existing.clarification_count or 0) + 1
+        updated_dict["clarification_count"] = new_count
         updated_dict["updated_at"] = now_iso
+
+        history = list(updated_dict.get("clarification_history") or [])
+        history.append({
+            "cycle": new_count,
+            "prompt": clarification_prompt.strip(),
+            "response": None,
+            "timestamp": now_iso,
+            "evidence_ids": [],
+        })
+        updated_dict["clarification_history"] = history
 
         if category is not None:
             updated_dict["category"] = category
@@ -383,6 +394,27 @@ class RefundRepository:
         updated_dict["clarification_response"] = clarification_response.strip()
         updated_dict["updated_at"] = now_iso
 
+        history = list(updated_dict.get("clarification_history") or [])
+        current_cycle = existing.clarification_count or 1
+        found = False
+        for turn in reversed(history):
+            if turn.get("cycle") == current_cycle:
+                turn["response"] = clarification_response.strip()
+                found = True
+                break
+        if not found:
+            if history:
+                history[-1]["response"] = clarification_response.strip()
+            else:
+                history.append({
+                    "cycle": current_cycle,
+                    "prompt": existing.clarification_prompt,
+                    "response": clarification_response.strip(),
+                    "timestamp": now_iso,
+                    "evidence_ids": [],
+                })
+        updated_dict["clarification_history"] = history
+
         item = _convert_floats_to_decimal(updated_dict)
         self.table.put_item(Item=item)
         return RefundRecord.model_validate(updated_dict)
@@ -422,6 +454,16 @@ class RefundRepository:
         updated_dict["evidence"] = current_evidence
         updated_dict["updated_at"] = now_iso
 
+        history = list(updated_dict.get("clarification_history") or [])
+        if history:
+            ev_id = item_dict.get("evidence_id")
+            if ev_id:
+                ev_ids = list(history[-1].get("evidence_ids") or [])
+                if ev_id not in ev_ids:
+                    ev_ids.append(ev_id)
+                history[-1]["evidence_ids"] = ev_ids
+        updated_dict["clarification_history"] = history
+
         item = _convert_floats_to_decimal(updated_dict)
         self.table.put_item(Item=item)
         return RefundRecord.model_validate(updated_dict)
@@ -460,12 +502,23 @@ class RefundRepository:
 
         now_iso = datetime.now(timezone.utc).isoformat()
         updated_dict = existing.model_dump()
+        new_count = (existing.clarification_count or 0) + 1
         updated_dict["status"] = "awaiting_clarification"
         updated_dict["decision"] = None
         updated_dict["clarification_prompt"] = proof_prompt.strip()
         updated_dict["clarification_email_text"] = notification_email_text
-        updated_dict["clarification_count"] = (existing.clarification_count or 0) + 1
+        updated_dict["clarification_count"] = new_count
         updated_dict["updated_at"] = now_iso
+
+        history = list(updated_dict.get("clarification_history") or [])
+        history.append({
+            "cycle": new_count,
+            "prompt": proof_prompt.strip(),
+            "response": None,
+            "timestamp": now_iso,
+            "evidence_ids": [],
+        })
+        updated_dict["clarification_history"] = history
 
         item = _convert_floats_to_decimal(updated_dict)
         self.table.put_item(Item=item)

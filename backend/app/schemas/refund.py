@@ -29,6 +29,28 @@ class EvidenceItem(BaseModel):
     )
 
 
+class ClarificationTurn(BaseModel):
+    """Structured audit log entry representing a single clarification or proof request turn."""
+
+    cycle: int = Field(..., ge=1, description="Clarification cycle number (1-indexed).")
+    prompt: str | None = Field(
+        default=None,
+        description="Clarification or proof prompt sent to the customer.",
+    )
+    response: str | None = Field(
+        default=None,
+        description="Customer-provided clarification response.",
+    )
+    timestamp: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="ISO-8601 timestamp when this clarification turn was initiated.",
+    )
+    evidence_ids: list[str] = Field(
+        default_factory=list,
+        description="IDs of evidence attachments associated with this clarification turn.",
+    )
+
+
 class RefundCreateRequest(BaseModel):
     """Request payload for submitting a new refund request."""
 
@@ -98,6 +120,10 @@ class RefundRecord(BaseModel):
     )
     clarification_count: int = Field(
         default=0, ge=0, description="Number of clarification cycles attempted."
+    )
+    clarification_history: list[ClarificationTurn] = Field(
+        default_factory=list,
+        description="Structured turn-by-turn audit history of clarification and proof request cycles.",
     )
     tool_calls: list[dict[str, Any]] = Field(
         default_factory=list,
