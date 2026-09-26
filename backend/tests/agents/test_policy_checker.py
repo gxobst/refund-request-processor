@@ -65,7 +65,7 @@ def test_check_policy_deterministic_fail_bypasses_llm():
     mock_llm = MagicMock()
 
     # Act
-    result = check_policy(category="damaged", order=order, llm=mock_llm)
+    result = check_policy(category="changed_mind", order=order, llm=mock_llm)
 
     # Assert
     assert isinstance(result, PolicyCheckerOutput)
@@ -2022,6 +2022,75 @@ def test_check_policy_partial_or_synonymous_product_naming_passes_verification(
 
     assert result.policy_status == "pass"
     assert "product mismatch" not in result.policy_reasoning.lower()
+
+
+def test_check_policy_damaged_exceeding_max_amount_without_evidence_requests_photos():
+    """AC: check_policy for category == 'damaged' with order_amount exceeding limit and no evidence returns policy_status: 'ambiguous' with failed_rules=['physical_damage_verification']."""
+    order = {
+        "order_id": "ORD-1003",
+        "order_amount": 750.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    mock_llm = MagicMock()
+
+    result = check_policy(category="damaged", order=order, llm=mock_llm, evidence=None)
+
+    assert result.policy_status == "ambiguous"
+    assert result.failed_rules == ["physical_damage_verification"]
+    assert "photo evidence" in result.policy_reasoning.lower()
+    mock_llm.invoke.assert_not_called()
+
+
+def test_check_policy_damaged_exceeding_max_amount_with_evidence_escalates_to_supervisor():
+    """AC: check_policy for category == 'damaged' with order_amount exceeding limit and valid image evidence returns policy_status: 'ambiguous' with failed_rules=['max_order_amount'] and supervisor escalation reasoning."""
+    order = {
+        "order_id": "ORD-1003",
+        "order_amount": 750.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    expected_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses"],
+        failed_rules=[],
+        policy_reasoning="Physical damage verified via uploaded photo.",
+    )
+    mock_llm = make_mock_llm(expected_output)
+
+    evidence = [
+        {
+            "filename": "damaged_screen.jpg",
+            "content_type": "image/jpeg",
+            "raw_bytes": b"\xff\xd8\xff\xe0testjpegimage",
+        }
+    ]
+
+    result = check_policy(category="damaged", order=order, llm=mock_llm, evidence=evidence)
+
+    assert result.policy_status == "ambiguous"
+    assert result.failed_rules == ["max_order_amount"]
+    assert "supervisor" in result.policy_reasoning.lower()
+
+
+def test_check_policy_non_damaged_exceeding_max_amount_escalates_immediately_without_evidence():
+    """AC: Non-damaged categories (e.g. changed_mind) exceeding max_order_amount return failed_rules=['max_order_amount'] immediately without requesting photos."""
+    order = {
+        "order_id": "ORD-1001",
+        "order_amount": 250.0,  # exceeds $200 limit for changed_mind
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    mock_llm = MagicMock()
+
+    result = check_policy(category="changed_mind", order=order, llm=mock_llm, evidence=None)
+
+    assert result.policy_status == "ambiguous"
+    assert result.failed_rules == ["max_order_amount"]
+    assert "supervisor" in result.policy_reasoning.lower()
+    assert "photo" not in result.policy_reasoning.lower()
+    mock_llm.invoke.assert_not_called()
+
 
 
 

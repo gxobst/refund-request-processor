@@ -585,20 +585,23 @@ def check_policy(
             tool_calls=[],
         )
 
-    # 2. Deterministic Supervisor Escalation for Order Amount Violations
-    if eval_result.status == "ambiguous" and eval_result.failed_rules == ["max_order_amount"]:
-        return PolicyCheckerOutput(
-            policy_status="ambiguous",
-            matched_policy_rule=eval_result.matched_policy_rule,
-            passed_rules=eval_result.passed_rules,
-            failed_rules=eval_result.failed_rules,
-            policy_reasoning=eval_result.details
-            or "Order amount exceeds maximum policy threshold; requires supervisor review.",
-            tool_calls=[],
-        )
+    def _finalize_result(output: PolicyCheckerOutput) -> PolicyCheckerOutput:
+        if (
+            category == "damaged"
+            and "max_order_amount" in eval_result.failed_rules
+            and output.policy_status != "fail"
+        ):
+            output.policy_status = "ambiguous"
+            output.failed_rules = ["max_order_amount"]
+            output.policy_reasoning = (
+                eval_result.details
+                or "Order amount exceeds maximum policy threshold; requires supervisor review."
+            )
+        return output
 
-    # 3. Deterministic Fail Bypass
+    # 2. Deterministic Fail Bypass
     # Clear-cut fail on hard constraints (e.g. expired refund window, ineligible delivery status)
+    # regardless of category or evidence presence.
     if eval_result.status == "fail":
         is_hard_constraint = (
             "max_order_amount" in eval_result.failed_rules
@@ -615,7 +618,8 @@ def check_policy(
                 tool_calls=[],
             )
 
-    # 4. Mandatory Photo Evidence Examination for Damaged Category
+    # 3. Mandatory Photo Evidence Examination for Damaged Category
+    # Prioritizes photo proof collection for damaged claims before max_order_amount escalation
     if category == "damaged" and not image_blocks:
         return PolicyCheckerOutput(
             policy_status="ambiguous",
@@ -625,6 +629,20 @@ def check_policy(
             policy_reasoning="Damage claims require photo evidence of the damaged merchandise and packaging before evaluation.",
             tool_calls=[],
         )
+
+    # 4. Deterministic Supervisor Escalation for Order Amount Violations
+    # Non-damaged categories exceeding max_order_amount escalate immediately without requesting photos
+    if eval_result.status == "ambiguous" and eval_result.failed_rules == ["max_order_amount"]:
+        if category != "damaged":
+            return PolicyCheckerOutput(
+                policy_status="ambiguous",
+                matched_policy_rule=eval_result.matched_policy_rule,
+                passed_rules=eval_result.passed_rules,
+                failed_rules=eval_result.failed_rules,
+                policy_reasoning=eval_result.details
+                or "Order amount exceeds maximum policy threshold; requires supervisor review.",
+                tool_calls=[],
+            )
 
     # 5. LLM External Verification and Ambiguity Resolution
     executed_tool_calls: list[dict[str, Any]] = []
@@ -682,7 +700,7 @@ Analyze the situation and provide your determination:"""
         for _ in range(max_tool_iterations):
             response = bound_model.invoke(messages)
             if isinstance(response, PolicyCheckerOutput):
-                result = response
+                result = _finalize_result(response)
                 if result.matched_policy_rule is None and eval_result.matched_policy_rule is not None:
                     result.matched_policy_rule = eval_result.matched_policy_rule
                 result.tool_calls = executed_tool_calls
@@ -760,6 +778,7 @@ Analyze the situation and provide your determination:"""
                     fast_text, eval_result, executed_tool_calls
                 )
                 if fast_result is not None:
+                    fast_result = _finalize_result(fast_result)
                     if is_high_value and fast_result.policy_status == "pass":
                         missing = REQUIRED_HIGH_VALUE_TOOLS - executed_tool_names
                         if missing:
@@ -773,7 +792,7 @@ Analyze the situation and provide your determination:"""
                             continue
                     return fast_result
 
-                if is_high_value:
+                if is_high_value and "max_order_amount" not in eval_result.failed_rules:
                     missing = REQUIRED_HIGH_VALUE_TOOLS - executed_tool_names
                     if missing:
                         missing_str = ", ".join(sorted(missing))
@@ -787,7 +806,7 @@ Analyze the situation and provide your determination:"""
                 break
 
         missing_tools = REQUIRED_HIGH_VALUE_TOOLS - executed_tool_names
-        if is_high_value and missing_tools:
+        if is_high_value and missing_tools and "max_order_amount" not in eval_result.failed_rules:
             missing_str = ", ".join(sorted(missing_tools))
             return PolicyCheckerOutput(
                 policy_status="ambiguous",
@@ -806,7 +825,7 @@ Analyze the situation and provide your determination:"""
         final_response = bound_model.invoke(messages)
 
         if isinstance(final_response, PolicyCheckerOutput):
-            result = final_response
+            result = _finalize_result(final_response)
             if result.matched_policy_rule is None and eval_result.matched_policy_rule is not None:
                 result.matched_policy_rule = eval_result.matched_policy_rule
             result.tool_calls = executed_tool_calls
@@ -819,34 +838,34 @@ Analyze the situation and provide your determination:"""
 
         mock_final_output = getattr(bound_model, "final_output", None) or getattr(model, "final_output", None)
         if parsed_result is not None:
-            result = parsed_result
+            result = _finalize_result(parsed_result)
         elif isinstance(mock_final_output, PolicyCheckerOutput):
-            result = mock_final_output.model_copy(deep=True)
+            result = _finalize_result(mock_final_output.model_copy(deep=True))
             if result.matched_policy_rule is None and eval_result.matched_policy_rule is not None:
                 result.matched_policy_rule = eval_result.matched_policy_rule
             result.tool_calls = executed_tool_calls
             return result
         else:
-            return PolicyCheckerOutput(
+            return _finalize_result(PolicyCheckerOutput(
                 policy_status="ambiguous",
                 matched_policy_rule=eval_result.matched_policy_rule,
                 passed_rules=eval_result.passed_rules,
                 failed_rules=eval_result.failed_rules,
                 policy_reasoning=f"Could not parse policy determination from model output: {final_text[:200]}",
                 tool_calls=executed_tool_calls,
-            )
+            ))
 
     except Exception as e:
         err_msg = str(e).strip()
         error_detail = err_msg if err_msg else type(e).__name__
-        return PolicyCheckerOutput(
+        return _finalize_result(PolicyCheckerOutput(
             policy_status="ambiguous",
             matched_policy_rule=eval_result.matched_policy_rule,
             passed_rules=eval_result.passed_rules,
             failed_rules=eval_result.failed_rules,
             policy_reasoning=f"External verification failed: {error_detail}",
             tool_calls=executed_tool_calls,
-        )
+        ))
 
     if result.matched_policy_rule is None and eval_result.matched_policy_rule is not None:
         result.matched_policy_rule = eval_result.matched_policy_rule
@@ -854,7 +873,7 @@ Analyze the situation and provide your determination:"""
     if not result.tool_calls and executed_tool_calls:
         result.tool_calls = executed_tool_calls
 
-    return result
+    return _finalize_result(result)
 
 
 def policy_checker_node(state: dict[str, Any]) -> dict[str, Any]:

@@ -125,7 +125,7 @@ def _classify_text_to_output(text: str) -> ClassificationOutput:
             confidence_score=0.94,
             reasoning="Customer received incorrect item.",
         )
-    elif "changed mind" in eval_text or "mistake" in eval_text:
+    elif "changed mind" in eval_text or "changed my mind" in eval_text or "mistake" in eval_text:
         return ClassificationOutput(
             category="changed_mind",
             confidence_score=0.91,
@@ -550,23 +550,23 @@ async def test_e2e_high_confidence_requests_bypass_clarification(mock_repo: Refu
         assert record_1001["clarification_count"] == 0
         assert record_1001["clarification_prompt"] is None
 
-        # 2. ORD-1003 with high confidence request text
-        res_1003 = await client.post(
+        # 2. ORD-1010 with high confidence request text (exceeds max_order_amount, escalates immediately without clarification)
+        res_1010 = await client.post(
             "/refunds",
             json={
-                "order_id": "ORD-1003",
-                "customer_request_text": "The monitor screen arrived shattered and damaged.",
+                "order_id": "ORD-1010",
+                "customer_request_text": "I changed my mind about this mirrorless camera and would like a refund.",
             },
         )
-        assert res_1003.status_code == 202
-        ref_id_1003 = res_1003.json()["refund_id"]
+        assert res_1010.status_code == 202
+        ref_id_1010 = res_1010.json()["refund_id"]
 
-        record_1003 = await poll_until_not_pending(client, ref_id_1003)
-        assert record_1003["status"] == "escalated"
-        assert record_1003["decision"] == "escalate"
-        assert record_1003["confidence_score"] >= 0.70
-        assert record_1003["clarification_count"] == 0
-        assert record_1003["clarification_prompt"] is None
+        record_1010 = await poll_until_not_pending(client, ref_id_1010)
+        assert record_1010["status"] == "escalated"
+        assert record_1010["decision"] == "escalate"
+        assert record_1010["confidence_score"] >= 0.70
+        assert record_1010["clarification_count"] == 0
+        assert record_1010["clarification_prompt"] is None
 
 
 @pytest.mark.asyncio
@@ -930,8 +930,8 @@ async def test_e2e_reviewer_proof_request_and_clarification_resumption(
     app.dependency_overrides[get_evidence_storage_service] = lambda: storage_service
 
     payload = {
-        "order_id": "ORD-1003",
-        "customer_request_text": "The monitor screen arrived shattered and damaged.",
+        "order_id": "ORD-1010",
+        "customer_request_text": "I changed my mind about this mirrorless camera and want to return it.",
     }
     transport = ASGITransport(app=app)
 
@@ -1154,6 +1154,96 @@ async def test_e2e_damaged_without_evidence_pauses_and_resumes_with_evidence(
         assert len(final_record.get("evidence", [])) == 1
 
     app.dependency_overrides.pop(get_evidence_storage_service, None)
+
+
+@pytest.mark.asyncio
+async def test_e2e_high_value_damaged_pauses_for_photos_and_escalates_after_evidence(
+    mock_repo: RefundRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """AC: Submitting a high-value damage refund request (e.g. ORD-1003, $750) without evidence pauses in status 'awaiting_clarification' with clarification_count == 1, and subsequent clarification with image attachment transitions to status 'escalated' with evidence attached for supervisor review."""
+    storage_service = EvidenceStorageService(local_dir=tmp_path, storage_backend="local")
+    app.dependency_overrides[get_evidence_storage_service] = lambda: storage_service
+    monkeypatch.setattr("app.services.storage.get_evidence_storage_service", lambda: storage_service)
+
+    expected_policy_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses"],
+        failed_rules=[],
+        policy_reasoning="Multimodal model verified physical damage on monitor.",
+    )
+    mock_policy_llm = MockToolCallingModel(
+        responses=[], final_output=expected_policy_output
+    )
+    monkeypatch.setattr(
+        "app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm
+    )
+
+    payload = {
+        "order_id": "ORD-1003",
+        "customer_request_text": "The gaming monitor arrived damaged with a cracked screen.",
+    }
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Step 1: Submit high-value damage refund request without evidence
+        post_res = await client.post("/refunds", json=payload)
+        assert post_res.status_code == 202
+        refund_id = post_res.json()["refund_id"]
+
+        # Step 2: Poll status until workflow pauses at awaiting_clarification on cycle 1
+        paused_record = await poll_until_not_pending(client, refund_id)
+        assert paused_record["status"] == "awaiting_clarification"
+        assert paused_record["clarification_count"] == 1
+        assert "photo" in paused_record.get("clarification_prompt", "").lower()
+
+        # Step 3: Customer uploads photo evidence
+        file_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+        evidence_res = await client.post(
+            f"/refunds/{refund_id}/evidence",
+            files={"file": ("cracked_monitor.jpg", file_bytes, "image/jpeg")},
+        )
+        assert evidence_res.status_code == 201
+
+        # Step 4: Customer submits clarification response
+        clarify_res = await client.post(
+            f"/refunds/{refund_id}/clarify",
+            json={"response_text": "Here is the photo of the cracked gaming monitor screen."},
+        )
+        assert clarify_res.status_code == 200
+
+        # Step 5: Workflow resumes, inspects photo, and escalates due to max_order_amount ($750 > $500)
+        final_record = await poll_until_not_pending(client, refund_id)
+        assert final_record["status"] == "escalated"
+        assert final_record["decision"] == "escalate"
+        assert "supervisor" in final_record.get("reasoning", "").lower()
+        assert len(final_record.get("evidence", [])) == 1
+        assert final_record["evidence"][0]["filename"] == "cracked_monitor.jpg"
+
+    app.dependency_overrides.pop(get_evidence_storage_service, None)
+
+
+@pytest.mark.asyncio
+async def test_e2e_high_value_non_damaged_escalates_directly_without_clarification(
+    mock_repo: RefundRepository,
+):
+    """AC: Submitting a high-value non-damaged refund request (e.g. changed_mind on an order exceeding $200) escalates directly to status 'escalated' on cycle 0 without pausing for clarification."""
+    payload = {
+        "order_id": "ORD-1010",
+        "customer_request_text": "I changed my mind about this mirrorless camera and would like a refund.",
+    }
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        post_res = await client.post("/refunds", json=payload)
+        assert post_res.status_code == 202
+        refund_id = post_res.json()["refund_id"]
+
+        final_record = await poll_until_not_pending(client, refund_id)
+        assert final_record["status"] == "escalated"
+        assert final_record["decision"] == "escalate"
+        assert final_record.get("clarification_count", 0) == 0
+        assert "supervisor" in final_record.get("reasoning", "").lower()
+
 
 
 

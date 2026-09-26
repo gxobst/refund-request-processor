@@ -897,11 +897,11 @@ async def test_workflow_auto_approve_generates_and_persists_approval_email_text(
 @pytest.mark.asyncio
 async def test_workflow_order_amount_exceeded_escalates():
     """AC 2311: Integration test asserts end-to-end workflow execution for an order exceeding max_order_amount produces decision='escalate' and status='escalated'."""
-    # ORD-1003 has order_amount: 750.0 (exceeds $500 limit for damaged), delivered recently
+    # ORD-1010 has order_amount: 450.0 (exceeds $200 limit for changed_mind), delivered recently within 14 days
     mock_classification = ClassificationOutput(
-        category="damaged",
+        category="changed_mind",
         confidence_score=0.95,
-        reasoning="Customer reported broken screen on monitor.",
+        reasoning="Customer changed mind on camera.",
     )
     mock_llm = make_mock_llm(mock_classification)
     checkpointer = MemorySaver()
@@ -915,8 +915,8 @@ async def test_workflow_order_amount_exceeded_escalates():
 
             final_state = await run_refund_workflow(
                 refund_id="ref_test_amount_escalate",
-                order_id="ORD-1003",
-                customer_request_text="The gaming monitor screen is cracked.",
+                order_id="ORD-1010",
+                customer_request_text="I changed my mind about the mirrorless camera.",
                 checkpointer=checkpointer,
             )
 
@@ -1347,6 +1347,119 @@ async def test_workflow_damaged_with_initial_evidence_immediately_executes_multi
     assert final_state["policy_status"] == "pass"
     assert final_state.get("clarification_prompt") is None
     assert final_state.get("clarification_count", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_workflow_high_value_damaged_without_evidence_pauses_and_resumes_to_escalation():
+    """AC: A high-value damage claim without evidence (e.g. ORD-1003) pauses at awaiting_clarification on cycle 1 to request photos, and after uploading evidence via clarification, escalates to status 'escalated' with evidence attached."""
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.95,
+        reasoning="Customer reported cracked monitor screen.",
+    )
+    mock_classifier_llm = make_mock_llm(mock_classification)
+    mock_policy_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses"],
+        failed_rules=[],
+        policy_reasoning="Multimodal model verified physical damage on screen.",
+    )
+    mock_policy_llm = make_mock_policy_llm(mock_policy_output)
+    checkpointer = MemorySaver()
+
+    # Step 1: Run initial workflow without evidence -> pauses at awaiting_clarification
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm)
+        mp.setattr("app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm)
+
+        paused_state = await run_refund_workflow(
+            refund_id="ref_test_high_val_dmg_flow",
+            order_id="ORD-1003",
+            customer_request_text="The ultra-wide gaming monitor arrived with a shattered display.",
+            checkpointer=checkpointer,
+        )
+
+    assert paused_state["status"] == "awaiting_clarification"
+    assert paused_state["clarification_count"] == 1
+    assert "photo proof" in paused_state["clarification_prompt"].lower() or "photo" in paused_state["clarification_prompt"].lower()
+
+    # Step 2: Resume with evidence attached -> executes policy check with photo, verifies damage, and escalates due to max_order_amount ($750 > $500)
+    customer_evidence = [
+        {
+            "evidence_id": "evi_monitor_broken",
+            "raw_bytes": b"\xff\xd8\xff\xe0" + b"\x00" * 30,
+            "content_type": "image/jpeg",
+            "filename": "broken_monitor.jpg",
+        }
+    ]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm)
+        mp.setattr("app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm)
+
+        resumed_state = await resume_refund_workflow(
+            refund_id="ref_test_high_val_dmg_flow",
+            response_text="Here is the clear photo showing the shattered display of the monitor.",
+            checkpointer=checkpointer,
+            evidence=customer_evidence,
+        )
+
+    assert resumed_state["status"] == "escalated"
+    assert resumed_state["decision"] == "escalate"
+    assert resumed_state["failed_rules"] == ["max_order_amount"]
+    assert "supervisor" in resumed_state["policy_reasoning"].lower()
+    assert len(resumed_state["evidence"]) == 1
+    assert resumed_state["evidence"][0]["filename"] == "broken_monitor.jpg"
+
+
+@pytest.mark.asyncio
+async def test_workflow_high_value_damaged_with_initial_evidence_escalates_on_first_pass():
+    """AC: A high-value damage claim with initial image evidence attached immediately routes to decision 'escalate' and status 'escalated' on the first pass with evidence retained."""
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.95,
+        reasoning="Customer reported broken screen with photo proof.",
+    )
+    mock_classifier_llm = make_mock_llm(mock_classification)
+    mock_policy_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses"],
+        failed_rules=[],
+        policy_reasoning="Multimodal model verified physical damage.",
+    )
+    mock_policy_llm = make_mock_policy_llm(mock_policy_output)
+    checkpointer = MemorySaver()
+
+    initial_evidence = [
+        {
+            "evidence_id": "evi_init_monitor",
+            "raw_bytes": b"\xff\xd8\xff\xe0" + b"\x00" * 30,
+            "content_type": "image/jpeg",
+            "filename": "monitor_damage.jpg",
+        }
+    ]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm)
+        mp.setattr("app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm)
+
+        final_state = await run_refund_workflow(
+            refund_id="ref_test_high_val_init_evi",
+            order_id="ORD-1003",
+            customer_request_text="Screen arrived shattered, photo attached.",
+            checkpointer=checkpointer,
+            evidence=initial_evidence,
+        )
+
+    assert final_state["status"] == "escalated"
+    assert final_state["decision"] == "escalate"
+    assert final_state["policy_status"] == "ambiguous"
+    assert final_state["failed_rules"] == ["max_order_amount"]
+    assert "supervisor" in final_state["policy_reasoning"].lower()
+    assert final_state.get("clarification_count", 0) == 0
+    assert len(final_state["evidence"]) == 1
+    assert final_state["evidence"][0]["filename"] == "monitor_damage.jpg"
+
 
 
 
