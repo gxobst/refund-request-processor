@@ -1527,3 +1527,147 @@ async def test_workflow_wrong_item_exhausted_clarifications_routes_to_decision()
     assert final_state["policy_status"] == "ambiguous"
     assert "wrong_item_verification" in final_state["failed_rules"]
     assert final_state["clarification_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_workflow_wrong_item_verified_evidence_auto_approves():
+    """AC: Workflow execution for a wrong_item claim with verified incorrect item evidence routes to decision: 'auto_approve' and status: 'completed'."""
+    mock_classification = ClassificationOutput(
+        category="wrong_item",
+        confidence_score=0.95,
+        reasoning="Customer reported receiving incorrect merchandise.",
+    )
+    mock_classifier_llm = make_mock_llm(mock_classification)
+
+    expected_policy = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=[],
+        policy_reasoning="Multimodal inspection verified photo depicts incorrect product received instead of ordered Ergonomic Office Chair.",
+    )
+    mock_policy_llm = make_mock_policy_llm(expected_policy)
+    checkpointer = MemorySaver()
+
+    evidence = [
+        {
+            "evidence_id": "evi_wrong_item_verified",
+            "filename": "incorrect_item.jpg",
+            "content_type": "image/jpeg",
+            "raw_bytes": b"\xff\xd8\xff\xe0" + b"\x00" * 30,
+        }
+    ]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm)
+        mp.setattr("app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm)
+
+        final_state = await run_refund_workflow(
+            refund_id="ref_test_wrong_item_verified",
+            order_id="ORD-1001",
+            customer_request_text="I received a small desk lamp instead of the ergonomic chair ordered.",
+            checkpointer=checkpointer,
+            evidence=evidence,
+        )
+
+    assert final_state["status"] == "completed"
+    assert final_state["decision"] == "auto_approve"
+    assert final_state["policy_status"] == "pass"
+    assert final_state["failed_rules"] == []
+    assert len(final_state["evidence"]) == 1
+    assert final_state["evidence"][0]["filename"] == "incorrect_item.jpg"
+
+
+@pytest.mark.asyncio
+async def test_workflow_wrong_item_refuted_evidence_denies():
+    """AC: Workflow execution for a wrong_item claim with refuted evidence (correct item shown) routes to decision: 'deny' and status: 'completed'."""
+    mock_classification = ClassificationOutput(
+        category="wrong_item",
+        confidence_score=0.95,
+        reasoning="Customer claimed receiving incorrect item.",
+    )
+    mock_classifier_llm = make_mock_llm(mock_classification)
+
+    expected_policy = PolicyCheckerOutput(
+        policy_status="fail",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=["wrong_item_verification"],
+        policy_reasoning="Multimodal inspection refutes claim: uploaded photo depicts the correct ordered Ergonomic Office Chair.",
+    )
+    mock_policy_llm = make_mock_policy_llm(expected_policy)
+    checkpointer = MemorySaver()
+
+    evidence = [
+        {
+            "evidence_id": "evi_wrong_item_refuted",
+            "filename": "chair_delivered.jpg",
+            "content_type": "image/jpeg",
+            "raw_bytes": b"\xff\xd8\xff\xe0" + b"\x00" * 30,
+        }
+    ]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm)
+        mp.setattr("app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm)
+
+        final_state = await run_refund_workflow(
+            refund_id="ref_test_wrong_item_refuted",
+            order_id="ORD-1001",
+            customer_request_text="I received the wrong item in my package.",
+            checkpointer=checkpointer,
+            evidence=evidence,
+        )
+
+    assert final_state["status"] == "completed"
+    assert final_state["decision"] == "deny"
+    assert final_state["policy_status"] == "fail"
+    assert "wrong_item_verification" in final_state["failed_rules"]
+    assert len(final_state["evidence"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_workflow_wrong_item_inconclusive_evidence_escalates():
+    """AC: Workflow execution for a wrong_item claim with inconclusive evidence routes to decision: 'escalate' and status: 'escalated' for supervisor review."""
+    mock_classification = ClassificationOutput(
+        category="wrong_item",
+        confidence_score=0.95,
+        reasoning="Customer claimed receiving incorrect item.",
+    )
+    mock_classifier_llm = make_mock_llm(mock_classification)
+
+    expected_policy = PolicyCheckerOutput(
+        policy_status="ambiguous",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=["wrong_item_verification"],
+        policy_reasoning="Customer uploaded blurry image that is inconclusive; requires human supervisor review.",
+    )
+    mock_policy_llm = make_mock_policy_llm(expected_policy)
+    checkpointer = MemorySaver()
+
+    evidence = [
+        {
+            "evidence_id": "evi_wrong_item_blurry",
+            "filename": "blurry_wrong_item.jpg",
+            "content_type": "image/jpeg",
+            "raw_bytes": b"\xff\xd8\xff\xe0" + b"\x00" * 30,
+        }
+    ]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm)
+        mp.setattr("app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm)
+
+        final_state = await run_refund_workflow(
+            refund_id="ref_test_wrong_item_blurry",
+            order_id="ORD-1001",
+            customer_request_text="I received the wrong item in my package.",
+            checkpointer=checkpointer,
+            evidence=evidence,
+        )
+
+    assert final_state["status"] == "escalated"
+    assert final_state["decision"] == "escalate"
+    assert final_state["policy_status"] == "ambiguous"
+    assert "wrong_item_verification" in final_state["failed_rules"]
+    assert "supervisor" in final_state["policy_reasoning"].lower() or "inconclusive" in final_state["policy_reasoning"].lower()
+    assert len(final_state["evidence"]) == 1
+

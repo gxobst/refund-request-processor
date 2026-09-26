@@ -40,6 +40,13 @@ When evaluating damage claims (category: 'damaged') with attached photos, inspec
 - If the item appears intact with no visible damage, conclude policy_status: 'fail' (or 'ambiguous') with reasoning stating no damage was detected.
 - If the image is blurry, inconclusive, corrupted, or depicts a mismatched product, conclude policy_status: 'ambiguous' requiring human reviewer inspection.
 
+When evaluating wrong item claims (category: 'wrong_item') with attached photos, inspect the images to verify whether:
+1. The received item appearance, model, packaging, or shipping label / packing slip details depict a distinct, incorrect product or variant different from the ordered product.
+2. The image depicts the correct ordered item matching order specifications.
+- If the photo depicts a distinct, incorrect product or variant, conclude policy_status: 'pass', failed_rules: [], with reasoning confirming the wrong item was verified from evidence.
+- If the photo depicts the correct ordered item matching order specifications, conclude policy_status: 'fail', failed_rules: ['wrong_item_verification'], with reasoning stating evidence refutes the claim by showing the correct item.
+- If the photo is blurry, corrupted, unrecognizable, or inconclusive, conclude policy_status: 'ambiguous', failed_rules: ['wrong_item_verification'], with reasoning indicating inconclusive photo evidence requiring human supervisor review.
+
 Return a structured output with:
 - policy_status: 'pass' (eligible), 'fail' (clearly ineligible), or 'ambiguous' (requires human review).
 - passed_rules: list of satisfied rule names.
@@ -531,19 +538,6 @@ def check_policy(
     if not ordered_item and order.get("order_id"):
         ordered_item = ORDER_ID_TO_ITEM.get(order.get("order_id", ""))
 
-    # Product mismatch verification: explicit discrepancy overrides deterministic pass evaluations
-    if ordered_item and customer_request_text:
-        is_mismatch, mismatch_reason = detect_product_mismatch(ordered_item, customer_request_text)
-        if is_mismatch:
-            return PolicyCheckerOutput(
-                policy_status="ambiguous",
-                matched_policy_rule=eval_result.matched_policy_rule,
-                passed_rules=eval_result.passed_rules,
-                failed_rules=["product_mismatch"],
-                policy_reasoning=mismatch_reason,
-                tool_calls=[],
-            )
-
     # Process image evidence items
     image_blocks: list[dict[str, Any]] = []
 
@@ -563,6 +557,19 @@ def check_policy(
                     policy_reasoning=f"Failed to retrieve evidence file: {err_detail}",
                     tool_calls=[],
                 )
+
+    # Product mismatch verification: explicit discrepancy overrides deterministic pass evaluations
+    if ordered_item and customer_request_text and not (category == "wrong_item" and image_blocks):
+        is_mismatch, mismatch_reason = detect_product_mismatch(ordered_item, customer_request_text)
+        if is_mismatch:
+            return PolicyCheckerOutput(
+                policy_status="ambiguous",
+                matched_policy_rule=eval_result.matched_policy_rule,
+                passed_rules=eval_result.passed_rules,
+                failed_rules=["product_mismatch"],
+                policy_reasoning=mismatch_reason,
+                tool_calls=[],
+            )
 
     # 1. Deterministic Pass Bypass
     # Clear-cut pass bypasses LLM except for:
@@ -690,8 +697,26 @@ def check_policy(
             "You MUST invoke BOTH 'query_carrier_tracking' and 'query_payment_transaction' to verify delivery proof and charge eligibility before concluding with policy_status: 'pass'."
         )
 
+    wrong_item_mandate = ""
+    if category == "wrong_item" and image_blocks:
+        resolved_item = (
+            ordered_item
+            or order.get("item")
+            or order.get("item_title")
+            or order.get("product_name")
+            or (ORDER_ID_TO_ITEM.get(order.get("order_id", "")) if order.get("order_id") else None)
+            or "the item specified in the order"
+        )
+        wrong_item_mandate = (
+            f"\nWrong Item Inspection Mandate: The customer claims they received the wrong item for ordered product '{resolved_item}'. "
+            "Inspect the attached photo(s) comparing received item appearance, models, and shipping label / packing slip details against the ordered product. "
+            "If multimodal inspection determines the photo depicts a distinct, incorrect product or variant, conclude policy_status: 'pass' and failed_rules: []. "
+            "If multimodal inspection determines the photo depicts the correct ordered item matching order specifications, conclude policy_status: 'fail' and failed_rules: ['wrong_item_verification']. "
+            "If multimodal inspection determines the photo is blurry, corrupted, unrecognizable, or inconclusive, conclude policy_status: 'ambiguous' and failed_rules: ['wrong_item_verification']."
+        )
+
     human_text = f"""Category: {category}
-Order Details: {order}{customer_line}{high_value_mandate}
+Order Details: {order}{customer_line}{high_value_mandate}{wrong_item_mandate}
 Deterministic Findings: {eval_result.details}
 Policy Rule: {rule_repr}
 

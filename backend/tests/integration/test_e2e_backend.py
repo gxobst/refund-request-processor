@@ -1395,3 +1395,63 @@ async def test_e2e_clarification_history_audit_log_persists_and_returns_via_api(
         assert isinstance(updated_turn["timestamp"], str)
         assert isinstance(updated_turn["evidence_ids"], list)
 
+
+@pytest.mark.asyncio
+async def test_e2e_wrong_item_with_image_evidence_verifies_and_completes(
+    mock_repo: RefundRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """AC Task 57: Submitting a wrong_item refund request with photo evidence verifies the evidence via multimodal policy checker and auto-approves."""
+    storage_service = EvidenceStorageService(local_dir=tmp_path, storage_backend="local")
+    app.dependency_overrides[get_evidence_storage_service] = lambda: storage_service
+    monkeypatch.setattr("app.services.storage.get_evidence_storage_service", lambda: storage_service)
+
+    expected_policy_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=[],
+        policy_reasoning="Multimodal model verified customer received a desk lamp instead of ordered Ergonomic Office Chair.",
+    )
+    mock_policy_llm = MockToolCallingModel(
+        responses=[], final_output=expected_policy_output
+    )
+    monkeypatch.setattr(
+        "app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm
+    )
+
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Step 1: Submit wrong_item request without evidence initially -> pauses for clarification
+        post_res = await client.post(
+            "/refunds",
+            json={
+                "order_id": "ORD-1001",
+                "customer_request_text": "I received the wrong item in my package, not the ergonomic chair I ordered.",
+            },
+        )
+        assert post_res.status_code == 202
+        refund_id = post_res.json()["refund_id"]
+
+        paused_record = await poll_until_not_pending(client, refund_id)
+        assert paused_record["status"] == "awaiting_clarification"
+        assert paused_record["category"] == "wrong_item"
+
+        # Step 2: Customer uploads photo evidence of wrong item via POST /refunds/{refund_id}/evidence
+        file_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+        evidence_res = await client.post(
+            f"/refunds/{refund_id}/evidence",
+            files={"file": ("received_lamp.jpg", file_bytes, "image/jpeg")},
+        )
+        assert evidence_res.status_code == 201
+
+        # Step 3: Workflow automatically resumes, runs multimodal policy checker, and completes with auto_approve
+        final_record = await poll_until_not_pending(client, refund_id)
+        assert final_record["status"] == "completed"
+        assert final_record["decision"] == "auto_approve"
+        assert len(final_record.get("evidence", [])) == 1
+        assert final_record["evidence"][0]["filename"] == "received_lamp.jpg"
+        assert "verified" in final_record.get("reasoning", "").lower() or "lamp" in final_record.get("reasoning", "").lower()
+
+    app.dependency_overrides.pop(get_evidence_storage_service, None)
+
+

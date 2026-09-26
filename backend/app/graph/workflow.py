@@ -96,6 +96,7 @@ def route_policy_check(state: RefundWorkflowState) -> str:
         category == "wrong_item"
         and policy_status == "ambiguous"
         and "wrong_item_verification" in failed_rules
+        and not state.get("evidence")
     ):
         count = state.get("clarification_count")
         if count is None:

@@ -2179,6 +2179,130 @@ def test_check_policy_non_wrong_item_categories_do_not_require_wrong_item_photos
     assert "wrong_item_verification" not in result.failed_rules
 
 
+def test_check_policy_wrong_item_verified_incorrect_item_returns_pass():
+    """AC: check_policy for wrong_item with image evidence showing an incorrect item returns policy_status: 'pass' and verification reasoning."""
+    order = {
+        "order_id": "ORD-1001",
+        "item": "Ergonomic Office Chair",
+        "order_amount": 250.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    expected_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=[],
+        policy_reasoning="Multimodal inspection verified photo depicts a desk lamp instead of ordered Ergonomic Office Chair.",
+    )
+    mock_llm = make_mock_llm(expected_output)
+
+    evidence = [
+        {
+            "filename": "wrong_product.jpg",
+            "content_type": "image/jpeg",
+            "raw_bytes": b"\xff\xd8\xff\xe0mockjpegdata",
+        }
+    ]
+
+    result = check_policy(
+        category="wrong_item",
+        order=order,
+        llm=mock_llm,
+        evidence=evidence,
+        customer_request_text="I received a desk lamp instead of my chair.",
+    )
+
+    assert result.policy_status == "pass"
+    assert result.failed_rules == []
+    assert "verified" in result.policy_reasoning.lower() or "lamp" in result.policy_reasoning.lower()
+
+    # Verify wrong item mandate was injected into human message
+    bound_model = mock_llm.bind_tools.return_value
+    assert bound_model.invoke.called
+    invoke_args = bound_model.invoke.call_args[0][0]
+    human_msg = next(m for m in invoke_args if isinstance(m, HumanMessage))
+    content_text = str(human_msg.content)
+    assert "Wrong Item Inspection Mandate" in content_text
+    assert "Ergonomic Office Chair" in content_text
+
+
+def test_check_policy_wrong_item_refuted_correct_item_returns_fail():
+    """AC: check_policy for wrong_item with image evidence showing the correct item returns policy_status: 'fail' with failed_rules=['wrong_item_verification'] and refutation reasoning."""
+    order = {
+        "order_id": "ORD-1001",
+        "item": "Ergonomic Office Chair",
+        "order_amount": 250.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    expected_output = PolicyCheckerOutput(
+        policy_status="fail",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=["wrong_item_verification"],
+        policy_reasoning="Multimodal inspection refutes claim: uploaded photo depicts the correct ordered Ergonomic Office Chair matching specifications.",
+    )
+    mock_llm = make_mock_llm(expected_output)
+
+    evidence = [
+        {
+            "filename": "delivered_chair.jpg",
+            "content_type": "image/jpeg",
+            "raw_bytes": b"\xff\xd8\xff\xe0mockjpegdata",
+        }
+    ]
+
+    result = check_policy(
+        category="wrong_item",
+        order=order,
+        llm=mock_llm,
+        evidence=evidence,
+        customer_request_text="I received the wrong item in my package.",
+    )
+
+    assert result.policy_status == "fail"
+    assert "wrong_item_verification" in result.failed_rules
+    assert "refute" in result.policy_reasoning.lower() or "correct" in result.policy_reasoning.lower()
+
+
+def test_check_policy_wrong_item_inconclusive_image_returns_ambiguous():
+    """AC: check_policy for wrong_item with blurry or inconclusive image evidence returns policy_status: 'ambiguous' with failed_rules=['wrong_item_verification'] and supervisor escalation reasoning."""
+    order = {
+        "order_id": "ORD-1001",
+        "item": "Ergonomic Office Chair",
+        "order_amount": 250.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    expected_output = PolicyCheckerOutput(
+        policy_status="ambiguous",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=["wrong_item_verification"],
+        policy_reasoning="Uploaded photo is blurry and unrecognizable; inconclusive evidence requires human supervisor review.",
+    )
+    mock_llm = make_mock_llm(expected_output)
+
+    evidence = [
+        {
+            "filename": "blurry_evidence.jpg",
+            "content_type": "image/jpeg",
+            "raw_bytes": b"\xff\xd8\xff\xe0mockjpegdata",
+        }
+    ]
+
+    result = check_policy(
+        category="wrong_item",
+        order=order,
+        llm=mock_llm,
+        evidence=evidence,
+        customer_request_text="I received the wrong item in my package.",
+    )
+
+    assert result.policy_status == "ambiguous"
+    assert "wrong_item_verification" in result.failed_rules
+    assert "supervisor" in result.policy_reasoning.lower() or "inconclusive" in result.policy_reasoning.lower() or "blurry" in result.policy_reasoning.lower()
+
+
+
 
 
 
