@@ -32,20 +32,21 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
 | :---: | :--- | :--- | :--- | :---: |
 | **TC-01** | System Health Check | DynamoDB & API connectivity | N/A | `status: "healthy"` (HTTP 200) |
 | **TC-02** | Clear-Cut Approval & Return Email | Fast deterministic bypass + approval email with RMA | `ORD-1007` | `auto_approve` / `completed` |
-| **TC-03** | Max Order Amount Escalation | Order amount exceeding threshold ($750 > $500) escalates to human review | `ORD-1003` | `escalate` / `escalated` |
+| **TC-03** | Max Order Amount Escalation & Damage Proof Collection | Two-stage evaluation: unproven damage pauses in `awaiting_clarification` to collect photos, then escalates with proof ($750 > $500) | `ORD-1003` | `awaiting_clarification` -> `escalate` / `escalated` |
 | **TC-04** | Expired Return Window Denial & Denial Email | Date window violation (> 30 days) triggers denial + automated denial email | `ORD-1004` | `deny` / `completed` |
 | **TC-05** | Single Tool Carrier Verification | Autonomous `query_carrier_tracking` tool call for delayed delivery | `ORD-1005` | `auto_approve` / `completed` |
 | **TC-06** | Mandatory Dual Tool Verification (FedEx & Stripe) | High-value order (≥ $400) mandates both carrier & payment tool audit records | `ORD-1010` | `auto_approve` / `completed` |
 | **TC-07** | Clarification Loop Lifecycle | Low confidence (< 0.70) pause (persists `category` & diagnostics) -> customer response -> resolution | `ORD-1008` | `awaiting_clarification` -> `auto_approve` |
-| **TC-08** | Clarification Exhaustion to Escalation | 2-cycle clarification exhaustion (low confidence < 0.70) -> human escalation | `ORD-1009` | `awaiting_clarification` (cycles 1 & 2) -> `escalate` / `escalated` |
+| **TC-08** | Clarification Exhaustion to Escalation | 2-cycle clarification exhaustion (low confidence < 0.70) -> human escalation; tracks `clarification_history` | `ORD-1009` | `awaiting_clarification` (cycles 1 & 2) -> `escalate` / `escalated` |
 | **TC-09** | Supervisor Manual Override | Supervisor manual override on escalated TC-08 refund (`approve` or `deny`) | `ORD-1009` | `approve` or `deny` / `completed` |
-| **TC-10** | Multipart Damage Evidence Upload | Interactive file picker upload (Swagger UI WebKit boundary support, JPEG/PNG/WebP ≤ 5MB; video rejected) | Any active refund | HTTP 201 (`evidence` array populated) |
-| **TC-11** | Multimodal Image Inspection | Mandatory proof check: missing photos pause with `awaiting_clarification`; attached image inspected via Bedrock vision | `ORD-1001` | `awaiting_clarification` -> `auto_approve` |
+| **TC-10** | Multipart Damage Evidence Upload & Workflow Resumption | Interactive file picker upload (JPEG/PNG/WebP ≤ 5MB); automatically triggers workflow resumption for paused refunds | Any active refund | HTTP 201 (`resume_refund_workflow` triggered) |
+| **TC-11** | Multimodal Image Inspection | Mandatory proof check: missing photos pause with `awaiting_clarification`; direct `/evidence` upload resumes Bedrock vision | `ORD-1001` | `awaiting_clarification` -> `auto_approve` |
 | **TC-12** | Initial Refund Creation with Attached Image | Multipart `POST /refunds` with upfront image proof (case-sensitive boundary support) | `ORD-1001` | HTTP 202 (`evidence` populated on intake) |
 | **TC-13** | Queue Listing and Filtering | DynamoDB querying with status filter (`completed`, `escalated`, etc.) | N/A | HTTP 200 (filtered list) |
 | **TC-14** | Input Validation & Error Boundaries | Order ID regex (`^ORD-\d{4}$`), blank fields, 404s, video rejection, 5MB limit, request-proof validation | N/A | HTTP 400, 404, 413, 422 |
-| **TC-15** | Supervisor Proof Request from Escalation Queue | Human supervisor requests targeted photo proof via `POST /refunds/{id}/request-proof` | `ORD-1009` | `escalated` -> `awaiting_clarification` (HTTP 200) |
+| **TC-15** | Supervisor Proof Request from Escalation Queue | Human supervisor requests targeted photo proof via `POST /refunds/{id}/request-proof`; tracks `clarification_history` | `ORD-1009` | `escalated` -> `awaiting_clarification` (HTTP 200) |
 | **TC-16** | Product Mismatch Customer Clarification | Item mismatch routes to customer inquiry email; resolves upon confirmation or escalates if 2 cycles exhausted | `ORD-1008` | `awaiting_clarification` -> `completed` (or `escalate`) |
+| **TC-17** | Wrong Item Photo Evidence Verification & Multimodal Inspection | Mandatory photo proof for `wrong_item`: pauses without photos, upload resumes vision inspection (auto-approve / deny / escalate) | `ORD-1002` | `awaiting_clarification` -> `auto_approve` / `deny` / `escalate` |
 
 ---
 
@@ -104,25 +105,112 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
 
 ---
 
-### TC-03: Max Order Amount Threshold Escalation
-- **Endpoint**: `POST /refunds` followed by `GET /refunds/{refund_id}`
-- **Goal**: Confirm that orders exceeding the policy maximum order amount (`$750.00 > $500.00` limit for `damaged` in `ORD-1003`) are NOT auto-denied, but instead route to human supervisor escalation (`decision: "escalate"`, `status: "escalated"`, `policy_status: "ambiguous"`).
-- **Input (`POST /refunds`)**:
+### TC-03: Max Order Amount Threshold Escalation & Mandatory Photo Collection
+- **Endpoint**: `POST /refunds` (Intake) $\rightarrow$ `GET /refunds/{refund_id}` (Pause) $\rightarrow$ `POST /refunds/{refund_id}/evidence` (Proof Upload) $\rightarrow$ `GET /refunds/{refund_id}` (Escalation)
+- **Goal**: Validate the two-stage evaluation sequence for high-value damage claims (`ORD-1003`, $750.00 OLED Gaming Monitor, exceeding the $500.00 damaged limit). Unproven damage claims must NOT escalate immediately to a supervisor with missing evidence; instead, the system pauses at `status: "awaiting_clarification"` to collect photo proof of the damage. Once the customer attaches photo evidence via `POST /refunds/{refund_id}/evidence`, workflow execution automatically resumes in the background and escalates to `status: "escalated"` with `failed_rules: ["max_order_amount"]` and the customer's photo proof attached for human supervisor review.
+
+> [!IMPORTANT]
+> **Two-Stage Evaluation Sequence for High-Value Damage Claims**:
+> - **Stage 1 (Proof Collection Pause)**: When a damage claim is filed without photos, the Policy Checker identifies the `damaged` category and pauses at `status: "awaiting_clarification"` with `failed_rules: ["physical_damage_verification"]`. This guarantees human supervisors do not receive escalated tickets that lack essential damage photographs.
+> - **Stage 2 (Supervisor Escalation with Evidence)**: Uploading photo evidence via `POST /refunds/{refund_id}/evidence` automatically resumes workflow execution in the background. With evidence now attached, policy evaluation verifies the photo and evaluates the order amount ($750.00 > $500.00 limit), routing to `status: "escalated"` and `decision: "escalate"` with `failed_rules: ["max_order_amount"]` and full evidence attached.
+
+#### Step 1: Initial Submission Without Photo Proof
+- **Action**: In Swagger UI, expand `POST /refunds` and submit:
   ```json
   {
     "order_id": "ORD-1003",
     "customer_request_text": "The gaming monitor arrived with a completely shattered OLED panel and cracked stand."
   }
   ```
-- **Step 1 Expected Output**: `202 Accepted`
-- **Step 2 (`GET /refunds/{refund_id}`) Expected Output**: `200 OK`
+- **Expected Status**: `202 Accepted`
+  ```json
+  {
+    "refund_id": "ref_...",
+    "order_id": "ORD-1003",
+    "status": "pending",
+    "created_at": "..."
+  }
+  ```
+  *(Copy the returned `refund_id` for subsequent steps)*.
+
+#### Step 2: Verification of Stage 1 Photo Proof Pause
+- **Action**: Wait 2–3 seconds and execute `GET /refunds/{refund_id}`.
+- **Expected Status**: `200 OK`
+- **Expected Output**:
+  - `status`: `"awaiting_clarification"` *(Note: Auto-escalation is paused to collect photo proof)*
+  - `decision`: `null`
+  - `category`: `"damaged"`
+  - `policy_status`: `"ambiguous"`
+  - `failed_rules`: `["physical_damage_verification"]`
+  - `clarification_count`: `1`
+  - `clarification_prompt`: Formatted customer inquiry email requesting clear photographs of the damaged OLED monitor and shipping packaging.
+  - `clarification_history`:
+    ```json
+    [
+      {
+        "cycle": 1,
+        "prompt": "Dear Customer,\n\nThank you for reaching out regarding order ORD-1003. To evaluate your damaged item claim, please provide photos of the damaged merchandise and packaging...",
+        "response": null,
+        "timestamp": "2026-09-26T...",
+        "evidence_ids": []
+      }
+    ]
+    ```
+
+#### Step 3: Customer Uploads Damage Photo Proof
+- **Action**: In Swagger UI, expand `POST /refunds/{refund_id}/evidence`.
+  1. Input `refund_id`: `<refund_id_from_step_1>`.
+  2. Under `file`, choose a valid image depicting the cracked monitor (`damaged_monitor.png`, JPEG/PNG/WebP ≤ 5MB).
+  3. Click **Execute**.
+- **Expected Status**: `201 Created`
+- **Expected Output**:
+  ```json
+  {
+    "refund_id": "ref_...",
+    "order_id": "ORD-1003",
+    "evidence": [
+      {
+        "evidence_id": "evi_...",
+        "storage_key": "evidence/ref_.../damaged_monitor.png",
+        "filename": "damaged_monitor.png",
+        "content_type": "image/png",
+        "size_bytes": 45120,
+        "url": "/static/uploads/evidence/ref_.../damaged_monitor.png",
+        "created_at": "2026-09-26T..."
+      }
+    ]
+  }
+  ```
+
+> [!NOTE]
+> **Automatic Workflow Resumption**: Calling `POST /refunds/{refund_id}/evidence` on a refund in `status: "awaiting_clarification"` automatically schedules background workflow resumption (`resume_refund_workflow`). No secondary call to `POST /refunds/{refund_id}/clarify` is needed.
+
+#### Step 4: Verification of Stage 2 Supervisor Escalation
+- **Action**: Wait 2–3 seconds for background workflow resumption to complete, then execute `GET /refunds/{refund_id}`.
+- **Expected Status**: `200 OK`
+- **Expected Output**:
   - `status`: `"escalated"`
   - `decision`: `"escalate"`
   - `policy_status`: `"ambiguous"`
   - `failed_rules`: `["max_order_amount"]`
-  - `reasoning`: Cites order amount threshold escalation (`"Order amount ($750.0) exceeds maximum threshold ($500.0); requires supervisor escalation."`).
+  - `reasoning`: `"Order amount ($750.0) exceeds maximum threshold ($500.0); requires supervisor escalation."`
   - `approval_email_text`: `null`
   - `denial_email_text`: `null`
+  - `evidence`: Array contains the uploaded `damaged_monitor.png` metadata.
+  - `clarification_history`:
+    ```json
+    [
+      {
+        "cycle": 1,
+        "prompt": "Dear Customer,\n\nThank you for reaching out regarding order ORD-1003...",
+        "response": null,
+        "timestamp": "2026-09-26T...",
+        "evidence_ids": [
+          "evi_..."
+        ]
+      }
+    ]
+    ```
 
 ---
 
@@ -256,6 +344,18 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
   - `decision`: `null`
   - `clarification_count`: `1`
   - `clarification_prompt`: Formatted customer inquiry email prompting for clarification (Question #1).
+  - `clarification_history`:
+    ```json
+    [
+      {
+        "cycle": 1,
+        "prompt": "Dear Customer,\n\nThank you for contacting us regarding order ORD-1009. Could you please provide more details regarding your request?",
+        "response": null,
+        "timestamp": "2026-09-26T10:00:00Z",
+        "evidence_ids": []
+      }
+    ]
+    ```
 
 #### Step 2: First Clarification Response - Enters Cycle 2 (Turn 2)
 - **Action**: In Swagger UI, expand `POST /refunds/{refund_id}/clarify`.
@@ -273,6 +373,25 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
   - `decision`: `null`
   - `clarification_count`: `2`
   - `clarification_prompt`: Formatted customer inquiry email prompting for clarification again (Question #2).
+  - `clarification_history`:
+    ```json
+    [
+      {
+        "cycle": 1,
+        "prompt": "Dear Customer,\n\nThank you for contacting us regarding order ORD-1009. Could you please provide more details regarding your request?",
+        "response": "Still unsure about what happened, low confidence details.",
+        "timestamp": "2026-09-26T10:00:00Z",
+        "evidence_ids": []
+      },
+      {
+        "cycle": 2,
+        "prompt": "Dear Customer,\n\nWe received your note but still need further specific details regarding order ORD-1009...",
+        "response": null,
+        "timestamp": "2026-09-26T10:02:00Z",
+        "evidence_ids": []
+      }
+    ]
+    ```
 
 #### Step 3: Second Clarification Response - Exhausts Attempts (Turn 3)
 - **Action**: In Swagger UI, submit a second vague answer to `POST /refunds/{refund_id}/clarify`.
@@ -299,6 +418,22 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
     "decision": "escalate",
     "clarification_count": 2,
     "clarification_response": "Still unsure and low confidence description.",
+    "clarification_history": [
+      {
+        "cycle": 1,
+        "prompt": "Dear Customer,\n\nThank you for contacting us regarding order ORD-1009. Could you please provide more details regarding your request?",
+        "response": "Still unsure about what happened, low confidence details.",
+        "timestamp": "2026-09-26T10:00:00Z",
+        "evidence_ids": []
+      },
+      {
+        "cycle": 2,
+        "prompt": "Dear Customer,\n\nWe received your note but still need further specific details regarding order ORD-1009...",
+        "response": "Still unsure and low confidence description.",
+        "timestamp": "2026-09-26T10:02:00Z",
+        "evidence_ids": []
+      }
+    ],
     "reasoning": "Confidence score 0.30 below threshold (0.70) after reaching maximum clarification cycles (2). Escalating to human review queue.",
     "approval_email_text": null,
     "denial_email_text": null,
@@ -376,10 +511,10 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
 
 ### TC-10: Customer Damage Evidence Upload (Interactive Swagger UI File Picker)
 - **Endpoint**: `POST /refunds/{refund_id}/evidence`
-- **Goal**: Verify multipart image file upload using Swagger UI's interactive file selector (`<input type="file">`). Only images (JPEG, PNG, WebP ≤ 5MB) are supported; videos are rejected.
+- **Goal**: Verify multipart image file upload using Swagger UI's interactive file selector (`<input type="file">`). Only images (JPEG, PNG, WebP ≤ 5MB) are supported; videos are rejected. Furthermore, verify that uploading evidence to a claim in `status: "awaiting_clarification"` automatically triggers background workflow resumption (`resume_refund_workflow`) without requiring a separate `/clarify` invocation.
 - **Instructions in Swagger UI**:
   1. Navigate to `POST /refunds/{refund_id}/evidence` and click **Try it out**.
-  2. Input an active `refund_id`.
+  2. Input an active `refund_id` (e.g. from TC-03, TC-11, or TC-17 in `awaiting_clarification`).
   3. Click **Choose File** / **Browse** and select a valid JPEG, PNG, or WebP photo (`sample_crack.png`, ≤ 5MB).
   4. Click **Execute**.
 - **Expected Status**: `201 Created`
@@ -402,14 +537,24 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
   }
   ```
 
+> [!IMPORTANT]
+> **Automatic Background Workflow Resumption on Evidence Upload**:
+> When a refund is in `status: "awaiting_clarification"`, submitting `POST /refunds/{refund_id}/evidence` automatically:
+> 1. Stores the uploaded file in S3/static storage and records the evidence metadata in DynamoDB.
+> 2. Links the newly generated `evidence_id` to `evidence_ids` in the active turn of `clarification_history`.
+> 3. Triggers `resume_refund_workflow` as a background task, transitioning status to `pending` and resuming policy evaluation.
+>
+> A manual follow-up call to `POST /refunds/{refund_id}/clarify` is **not required** when evidence is uploaded via this endpoint.
+> *(Note: For claims in `completed` or `escalated` status, evidence is attached to the record for audit/supervisor review without re-triggering automated policy evaluation).*
+
 > [!NOTE]
 > **Swagger UI & Browser Boundary Support**: The server preserves case sensitivity in request headers. Browser-generated WebKit boundary tokens (e.g. `boundary=----WebKitFormBoundary...`) are parsed accurately without returning false `No file uploaded in multipart request` errors.
 
 ---
 
 ### TC-11: Multimodal Vision Inspection of Customer Damage Photo
-- **Endpoint**: `POST /refunds` $\rightarrow$ `GET /refunds/{refund_id}` $\rightarrow$ `POST /refunds/{refund_id}/clarify` (with image) $\rightarrow$ `GET /refunds/{refund_id}`
-- **Goal**: When a claim is categorized as `damaged`, verify that automated approval without evidence is strictly blocked. The system pauses at `status: "awaiting_clarification"` to demand photo proof. Once the customer attaches a valid image, the multimodal Bedrock agent inspects the photo bytes to verify visible damage before approving.
+- **Endpoint**: `POST /refunds` $\rightarrow$ `GET /refunds/{refund_id}` $\rightarrow$ `POST /refunds/{refund_id}/evidence` (or `POST /refunds/{refund_id}/clarify`) $\rightarrow$ `GET /refunds/{refund_id}`
+- **Goal**: When a claim is categorized as `damaged`, verify that automated approval without evidence is strictly blocked. The system pauses at `status: "awaiting_clarification"` to demand photo proof. Once the customer attaches a valid image (either directly via `POST /refunds/{refund_id}/evidence` or via `POST /refunds/{refund_id}/clarify`), the multimodal Bedrock agent inspects the photo bytes to verify visible damage before approving.
 - **Multimodal Evaluation Behavior**:
   - **No Evidence Attached**: Policy evaluation returns `policy_status: "ambiguous"` with `failed_rules: ["physical_damage_verification"]`. The workflow pauses in `awaiting_clarification` and sends a clarification email requesting photos of the damaged merchandise and packaging.
   - **Damage Verified in Image**: The multimodal vision agent inspects the uploaded image bytes. If physical damage matching the claim is identified on the product, it auto-approves (`decision: "auto_approve"`, `status: "completed"`).
@@ -437,6 +582,18 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
   - `clarification_prompt`: Non-null customer inquiry email stating:
     - Informs customer that claims for damaged items require photo evidence of both the damaged merchandise and exterior shipping packaging.
     - Specifies supported file formats (JPEG, PNG, WebP ≤ 5MB).
+  - `clarification_history`:
+    ```json
+    [
+      {
+        "cycle": 1,
+        "prompt": "Dear Customer,\n\nThank you for reaching out regarding order ORD-1001. Please provide clear photo evidence of the damaged merchandise and outer packaging...",
+        "response": null,
+        "timestamp": "2026-09-26T12:00:00Z",
+        "evidence_ids": []
+      }
+    ]
+    ```
 
 #### Step 3: Customer Uploads Damage Photo Proof
 - **Option A (Interactive Clarification with File in Swagger UI)**:
@@ -446,10 +603,11 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
   4. Under `response_text`, enter: `"Attached photo showing the cracked chair armrest and frame."`.
   5. Under `evidence_file`, select a valid image depicting damage (`damaged_chair.png`, ≤ 5MB).
   6. Click **Execute**.
-- **Option B (Separate Upload via `/evidence`)**:
-  1. Upload the image file via `POST /refunds/{refund_id}/evidence`.
-  2. Call `POST /refunds/{refund_id}/clarify` with `{"response_text": "I have uploaded the requested damage photo."}`.
-- **Expected Status**: `200 OK` (`status: "pending"`).
+- **Option B (Direct Upload via `/evidence` with Automatic Workflow Resumption)**:
+  1. Expand `POST /refunds/{refund_id}/evidence`.
+  2. Enter `refund_id` and select the damage photo (`damaged_chair.png`, ≤ 5MB).
+  3. Click **Execute**.
+  4. Expected status is `201 Created`. Workflow evaluation automatically resumes in the background (`resume_refund_workflow`) without requiring a separate `POST /refunds/{refund_id}/clarify` follow-up invocation.
 
 #### Step 4: Final Multimodal Inspection & Verification
 - **Action**: Wait 3–4 seconds for Bedrock vision agent processing, then execute `GET /refunds/{refund_id}`.
@@ -460,6 +618,20 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
   - `reasoning`: Explicitly confirms physical damage verified from customer photo proof (e.g. `"Physical damage observed in uploaded evidence matching customer claim; policy rules satisfied."`).
   - `approval_email_text`: Populated with RMA number (`RMA-1001-...`) and return instructions.
   - `evidence`: Array contains the uploaded damage photo metadata.
+  - `clarification_history`:
+    ```json
+    [
+      {
+        "cycle": 1,
+        "prompt": "Dear Customer,\n\nThank you for reaching out regarding order ORD-1001. Please provide clear photo evidence of the damaged merchandise and outer packaging...",
+        "response": "Attached photo showing the cracked chair armrest and frame.",
+        "timestamp": "2026-09-26T12:00:00Z",
+        "evidence_ids": [
+          "evi_..."
+        ]
+      }
+    ]
+    ```
 
 ---
 
@@ -552,7 +724,30 @@ Verify robust HTTP error responses across inputs, formats, and file restrictions
     "decision": null,
     "clarification_prompt": "Please upload a clear close-up photograph of the manufacturer serial number sticker on the back of the device, as well as the outer shipping box condition.",
     "clarification_email_text": "Dear Jane Doe,\n\nWe are currently reviewing your refund request for order ORD-... regarding your recent purchase.\n\nTo help us complete our review, our support team has requested additional proof:\n\"Please upload a clear close-up photograph of the manufacturer serial number sticker on the back of the device, as well as the outer shipping box condition.\"\n\nHow to submit your proof:\n- Upload clear photos directly via our customer portal or reply to this request.\n- Supported formats: JPEG, PNG, WebP (up to 5MB per file).\n- Please ensure all markings and serial labels are fully legible.\n\nOnce we receive your additional information, our team will proceed with your claim.\n\nSincerely,\nCustomer Support Team",
-    "clarification_count": 3
+    "clarification_count": 3,
+    "clarification_history": [
+      {
+        "cycle": 1,
+        "prompt": "Dear Customer,\n\nThank you for contacting us regarding order ORD-1009. Could you please provide more details regarding your request?",
+        "response": "Still unsure about what happened, low confidence details.",
+        "timestamp": "2026-09-26T10:00:00Z",
+        "evidence_ids": []
+      },
+      {
+        "cycle": 2,
+        "prompt": "Dear Customer,\n\nWe received your note but still need further specific details regarding order ORD-1009...",
+        "response": "Still unsure and low confidence description.",
+        "timestamp": "2026-09-26T10:02:00Z",
+        "evidence_ids": []
+      },
+      {
+        "cycle": 3,
+        "prompt": "Please upload a clear close-up photograph of the manufacturer serial number sticker on the back of the device, as well as the outer shipping box condition.",
+        "response": null,
+        "timestamp": "2026-09-26T10:15:00Z",
+        "evidence_ids": []
+      }
+    ]
   }
   ```
 - **Step 2 Customer Evidence Submission**:
@@ -593,6 +788,18 @@ Verify robust HTTP error responses across inputs, formats, and file restrictions
   - `clarification_prompt`: Formatted customer inquiry email:
     - References order `ORD-1008` and the ordered item (*Smart Fitness Watch*).
     - Asks whether the refund is intended for the Smart Fitness Watch or if an incorrect order number was entered.
+  - `clarification_history`:
+    ```json
+    [
+      {
+        "cycle": 1,
+        "prompt": "Dear Customer,\n\nThank you for reaching out regarding order ORD-1008. We noticed your request mentions a camera, whereas order ORD-1008 is for a Smart Fitness Watch. Could you please confirm if this request is for the Smart Fitness Watch or an alternate order?",
+        "response": null,
+        "timestamp": "2026-09-26T13:00:00Z",
+        "evidence_ids": []
+      }
+    ]
+    ```
 
 #### Step 3: Customer Clarifies and Resolves Mismatch
 - **Action**: In Swagger UI, expand `POST /refunds/{refund_id}/clarify` and submit:
@@ -610,9 +817,186 @@ Verify robust HTTP error responses across inputs, formats, and file restrictions
   - `status`: `"completed"`
   - `decision`: `"auto_approve"`
   - `approval_email_text`: Populated with RMA number and return instructions for `ORD-1008`.
+  - `clarification_history`:
+    ```json
+    [
+      {
+        "cycle": 1,
+        "prompt": "Dear Customer,\n\nThank you for reaching out regarding order ORD-1008. We noticed your request mentions a camera, whereas order ORD-1008 is for a Smart Fitness Watch. Could you please confirm if this request is for the Smart Fitness Watch or an alternate order?",
+        "response": "Apologies for the mix-up! I was referencing order ORD-1008 for my Smart Fitness Watch, which stopped charging.",
+        "timestamp": "2026-09-26T13:00:00Z",
+        "evidence_ids": []
+      }
+    ]
+    ```
 
 #### Expected Edge-Case Behaviors
 - **Generic Phrasing Passes**: Generic phrasing (e.g. *"The item arrived defective"*, *"Package was damaged in transit"*, *"I would like to return my order"*) does NOT trigger a mismatch.
 - **Partial/Colloquial Names Pass**: Partial titles (e.g. *"the fitness watch strap broke"*, *"chair armrest snapped"*) correctly match the catalog and proceed with standard policy evaluation without clarification pause.
 - **Clarification Exhaustion**: Submitting two consecutive responses that both maintain the product mismatch exhausts the 2-cycle threshold, routing to `decision: "escalate"`, `status: "escalated"`.
+
+---
+
+### TC-17: Wrong Item Photo Evidence Verification & Multimodal Inspection
+- **Endpoint**: `POST /refunds` (Intake) $\rightarrow$ `GET /refunds/{refund_id}` (Pause) $\rightarrow$ `POST /refunds/{refund_id}/evidence` (Upload) $\rightarrow$ `GET /refunds/{refund_id}` (Inspection)
+- **Goal**: Validate end-to-end processing of `wrong_item` claims using Swagger UI. Automated approval without photographic evidence is strictly prohibited; the request must pause in `status: "awaiting_clarification"` with `failed_rules: ["wrong_item_verification"]` and request clear photos of the incorrect item and packing slip or shipping label. Uploading photographic evidence via `POST /refunds/{refund_id}/evidence` automatically resumes workflow execution in the background, invoking Bedrock multimodal vision inspection to evaluate the item against order records (`ORD-1002`, *Noise-Cancelling Headphones*, $500.00).
+
+> [!IMPORTANT]
+> **Multimodal Vision Verification Rules for Wrong Item Claims**:
+> - **Mandatory Upfront Proof**: Claims classified under `wrong_item` require photo proof before policy evaluation can pass. If submitted without an image, policy evaluation pauses at `awaiting_clarification`.
+> - **Verified Discrepancy (Auto-Approve)**: If multimodal inspection confirms the customer received a distinct, incorrect product or variant (e.g., received a keyboard, desk fan, or different model) or the packing slip shows an incorrect SKU, policy passes (`policy_status: "pass"`) routing to `decision: "auto_approve"`, `status: "completed"`.
+> - **Refuted Claim / Correct Item Depicted (Auto-Deny)**: If multimodal inspection determines the photo shows the correct ordered product matching catalog specifications, policy fails (`policy_status: "fail"`, `failed_rules: ["wrong_item_verification"]`) routing to `decision: "deny"`, `status: "completed"`.
+> - **Inconclusive / Blurry Photo (Supervisor Escalation)**: If the photo is blurry, corrupted, unrecognizable, or does not clearly show the item or shipping labels, policy concludes `policy_status: "ambiguous"` routing to `decision: "escalate"`, `status: "escalated"` for supervisor review.
+
+#### Step 1: Initial Submission Without Photo Proof
+- **Action in Swagger UI**:
+  1. Expand `POST /refunds`.
+  2. In the request body, submit a `wrong_item` refund claim for order `ORD-1002` without attaching any files:
+     ```json
+     {
+       "order_id": "ORD-1002",
+       "customer_request_text": "I received the wrong item in my package. Instead of the Noise-Cancelling Headphones I ordered, the delivery box contained a computer keyboard."
+     }
+     ```
+  3. Click **Execute**.
+- **CLI Alternative (`curl`)**:
+  ```bash
+  curl -X POST "http://127.0.0.1:8000/refunds" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "order_id": "ORD-1002",
+      "customer_request_text": "I received the wrong item in my package. Instead of the Noise-Cancelling Headphones I ordered, the delivery box contained a computer keyboard."
+    }'
+  ```
+- **Expected Status**: `202 Accepted`
+- **Step 1 Expected Output**:
+  ```json
+  {
+    "refund_id": "ref_...",
+    "order_id": "ORD-1002",
+    "status": "pending",
+    "created_at": "2026-09-26T..."
+  }
+  ```
+  *(Copy the returned `refund_id` for subsequent verification steps)*.
+
+#### Step 2: Verification of Mandatory Wrong Item Proof Pause
+- **Action**: Wait 2–3 seconds for initial intake and classifier execution, then execute `GET /refunds/{refund_id}`.
+- **Expected Status**: `200 OK`
+- **Expected Output**:
+  - `status`: `"awaiting_clarification"` *(Note: Auto-approval is blocked; photo evidence is required)*
+  - `decision`: `null`
+  - `category`: `"wrong_item"`
+  - `policy_status`: `"ambiguous"`
+  - `failed_rules`: `["wrong_item_verification"]`
+  - `clarification_count`: `1`
+  - `clarification_prompt`: Formatted customer inquiry email:
+    - Explicitly requests clear photos of the incorrect item received.
+    - Requests clear photos of the exterior shipping label and packing slip on the package.
+    - Specifies supported image formats (JPEG, PNG, WebP ≤ 5MB).
+  - `clarification_history`:
+    ```json
+    [
+      {
+        "cycle": 1,
+        "prompt": "Dear Customer,\n\nThank you for reaching out regarding order ORD-1002. You indicated that you received an incorrect item instead of your Noise-Cancelling Headphones.\n\nTo help us verify and resolve this issue, please provide:\n1. A clear photograph of the incorrect item received, including any visible brand/model labels.\n2. A clear photograph of the shipping label and packing slip on or inside the package.\n\nSupported formats: JPEG, PNG, WebP (up to 5MB).\n\nSincerely,\nCustomer Support Team",
+        "response": null,
+        "timestamp": "2026-09-26T14:00:00Z",
+        "evidence_ids": []
+      }
+    ]
+    ```
+
+#### Step 3: Customer Uploads Wrong Item Photo Proof
+- **Action in Swagger UI**:
+  1. Expand `POST /refunds/{refund_id}/evidence`.
+  2. Input `refund_id`: `<refund_id_from_step_1>`.
+  3. Under `file`, select a valid image file depicting the received item (`received_wrong_keyboard.jpg`, JPEG/PNG/WebP ≤ 5MB).
+  4. Click **Execute**.
+- **CLI Alternative (`curl`)**:
+  ```bash
+  curl -X POST "http://127.0.0.1:8000/refunds/<refund_id>/evidence" \
+    -F "file=@received_wrong_keyboard.jpg;type=image/jpeg"
+  ```
+- **Expected Status**: `201 Created`
+- **Expected Output**:
+  ```json
+  {
+    "refund_id": "ref_...",
+    "order_id": "ORD-1002",
+    "evidence": [
+      {
+        "evidence_id": "evi_...",
+        "storage_key": "evidence/ref_.../received_wrong_keyboard.jpg",
+        "filename": "received_wrong_keyboard.jpg",
+        "content_type": "image/jpeg",
+        "size_bytes": 65432,
+        "url": "/static/uploads/evidence/ref_.../received_wrong_keyboard.jpg",
+        "created_at": "2026-09-26T..."
+      }
+    ]
+  }
+  ```
+
+> [!NOTE]
+> **Automatic Workflow Resumption**: Calling `POST /refunds/{refund_id}/evidence` on an `awaiting_clarification` claim automatically triggers `resume_refund_workflow` in the background. The server associates `evi_...` with `clarification_history[0].evidence_ids` and resumes graph execution directly to `policy_checker` with the photo bytes attached. No separate call to `/clarify` is needed.
+
+#### Step 4: Verification of Multimodal Vision Inspection Outcomes
+Wait 3–4 seconds for Bedrock vision agent processing, then execute `GET /refunds/{refund_id}`.
+
+Depending on the image submitted, verify the corresponding evaluation outcome:
+
+##### Outcome 1: Discrepancy Verified — Distinct Item Received (Auto-Approval)
+- **Image Scenario**: Uploaded photo depicts an item distinct from Noise-Cancelling Headphones (e.g. computer keyboard, speaker, or different model).
+- **Expected Status**: `200 OK`
+- **Expected Output**:
+  - `status`: `"completed"`
+  - `decision`: `"auto_approve"`
+  - `failed_rules`: `[]`
+  - `reasoning`: Confirms physical inspection verified the discrepancy: `"Multimodal vision inspection confirmed received item does not match ordered Noise-Cancelling Headphones; wrong item verification passed."`
+  - `approval_email_text`: Populated with RMA number (`RMA-1002-...`) and clear return instructions.
+  - `denial_email_text`: `null`
+  - `clarification_history`:
+    ```json
+    [
+      {
+        "cycle": 1,
+        "prompt": "Dear Customer,\n\nThank you for reaching out regarding order ORD-1002...",
+        "response": null,
+        "timestamp": "2026-09-26T14:00:00Z",
+        "evidence_ids": [
+          "evi_..."
+        ]
+      }
+    ]
+    ```
+
+##### Outcome 2: Claim Refuted — Correct Item Depicted (Auto-Denial)
+- **Image Scenario**: Uploaded photo depicts the correct ordered item (Noise-Cancelling Headphones) in original condition.
+- **Expected Status**: `200 OK`
+- **Expected Output**:
+  - `status`: `"completed"`
+  - `decision`: `"deny"`
+  - `failed_rules`: `["wrong_item_verification"]`
+  - `reasoning`: Explicitly refutes claim: `"Evidence refutes claim; uploaded photo depicts the correct ordered Noise-Cancelling Headphones matching order specifications."`
+  - `approval_email_text`: `null`
+  - `denial_email_text`: Polite explanation detailing that the uploaded photo depicts the correct ordered product, with support contact details and **NO RMA number**.
+
+##### Outcome 3: Inconclusive / Blurry Photo (Supervisor Escalation)
+- **Image Scenario**: Uploaded photo is blurry, corrupted, unrecognizable, or poorly lit such that the product brand and packing slip cannot be identified.
+- **Expected Status**: `200 OK`
+- **Expected Output**:
+  - `status`: `"escalated"`
+  - `decision`: `"escalate"`
+  - `policy_status`: `"ambiguous"`
+  - `failed_rules`: `["wrong_item_verification"]`
+  - `reasoning`: Indicates inconclusive photo evidence: `"Uploaded photo evidence is inconclusive and cannot confirm product identity; routing to supervisor escalation."`
+  - `approval_email_text`: `null`
+  - `denial_email_text`: `null`
+
+#### Expected Edge-Case Behaviors
+- **Clarification Exhaustion After 2 Unsuccessful Cycles**: If a customer responds twice via `POST /refunds/{refund_id}/clarify` without attaching valid photos or resolving the question, the system increments `clarification_count` to 2 and escalates to human review (`decision: "escalate"`, `status: "escalated"`).
+- **Hard Constraints Take Immediate Precedence**: If an order has an expired return window (`> 30 days`) or was never marked as delivered, the policy checker fails deterministically upfront without pausing for wrong-item photos or invoking multimodal vision models.
+- **Supervisor Proof Request (Integration with TC-15)**: If escalated due to inconclusive evidence, a supervisor can call `POST /refunds/{refund_id}/request-proof` to prompt the customer for clearer photos or a direct image of the packing slip.
+
 
