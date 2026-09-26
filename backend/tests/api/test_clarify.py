@@ -259,7 +259,7 @@ async def test_resume_refund_workflow_with_checkpointer(monkeypatch: pytest.Monk
 
     initial_state = await run_refund_workflow(
         refund_id=refund_id,
-        order_id="ORD-1001",
+        order_id="ORD-1008",
         customer_request_text="Need refund, something broken.",
         thread_id=thread_id,
         checkpointer=checkpointer,
@@ -269,9 +269,9 @@ async def test_resume_refund_workflow_with_checkpointer(monkeypatch: pytest.Monk
 
     # Step 2: Resume with high confidence classification on the clarified text
     high_conf = ClassificationOutput(
-        category="wrong_item",
+        category="changed_mind",
         confidence_score=0.95,
-        reasoning="Customer provided clear evidence that the wrong item was delivered.",
+        reasoning="Customer changed their mind and no longer needs the item.",
     )
     mock_llm_high = MagicMock()
     mock_llm_high.with_structured_output.return_value = RunnableLambda(lambda _: high_conf)
@@ -279,15 +279,15 @@ async def test_resume_refund_workflow_with_checkpointer(monkeypatch: pytest.Monk
 
     resumed_state = await resume_refund_workflow(
         refund_id=refund_id,
-        response_text="The armrest was completely sheared off in shipping.",
+        response_text="I changed my mind and no longer need this fitness watch.",
         thread_id=thread_id,
         checkpointer=checkpointer,
     )
 
     assert resumed_state["status"] == "completed"
     assert resumed_state["decision"] == "auto_approve"
-    assert "Need refund, something broken.\n[Clarification]: The armrest was completely sheared off in shipping." in resumed_state["customer_request_text"]
-    assert resumed_state["clarification_response"] == "The armrest was completely sheared off in shipping."
+    assert "Need refund, something broken.\n[Clarification]: I changed my mind and no longer need this fitness watch." in resumed_state["customer_request_text"]
+    assert resumed_state["clarification_response"] == "I changed my mind and no longer need this fitness watch."
     assert resumed_state["needs_clarification"] is False
 
 
@@ -299,16 +299,16 @@ async def test_resume_refund_workflow_fallback_to_repository(monkeypatch: pytest
     refund_id = "ref_fallback_test_1"
     repo.seed_record(
         refund_id=refund_id,
-        order_id="ORD-1001",
+        order_id="ORD-1008",
         status="pending",
         customer_request_text="Initial ambiguous text",
         clarification_count=1,
     )
 
     high_conf = ClassificationOutput(
-        category="wrong_item",
+        category="changed_mind",
         confidence_score=0.92,
-        reasoning="Clear explanation of wrong item received.",
+        reasoning="Clear explanation of changed mind.",
     )
     mock_llm = MagicMock()
     mock_llm.with_structured_output.return_value = RunnableLambda(lambda _: high_conf)
@@ -316,7 +316,7 @@ async def test_resume_refund_workflow_fallback_to_repository(monkeypatch: pytest
 
     resumed_state = await resume_refund_workflow(
         refund_id=refund_id,
-        response_text="Customer clarification response details.",
+        response_text="I changed my mind and no longer need this fitness watch.",
         thread_id="nonexistent_thread",
         checkpointer=checkpointer,
         repository=repo,
@@ -324,8 +324,8 @@ async def test_resume_refund_workflow_fallback_to_repository(monkeypatch: pytest
 
     assert resumed_state["status"] == "completed"
     assert resumed_state["decision"] == "auto_approve"
-    assert "Initial ambiguous text\n[Clarification]: Customer clarification response details." in resumed_state["customer_request_text"]
-    assert resumed_state["clarification_response"] == "Customer clarification response details."
+    assert "Initial ambiguous text\n[Clarification]: I changed my mind and no longer need this fitness watch." in resumed_state["customer_request_text"]
+    assert resumed_state["clarification_response"] == "I changed my mind and no longer need this fitness watch."
     # Verify repository was updated with the final decision
     updated_rec = repo.get_refund_request(refund_id)
     assert updated_rec is not None
