@@ -349,6 +349,11 @@ async def test_e2e_escalation_flow_low_confidence(mock_repo: RefundRepository):
         clarify_1 = await poll_until_not_pending(client, refund_id)
         assert clarify_1["status"] == "awaiting_clarification"
         assert clarify_1["clarification_count"] == 1
+        assert clarify_1["category"] is not None
+        assert clarify_1["confidence_score"] is not None
+        assert clarify_1["confidence_score"] < 0.70
+        assert clarify_1["reasoning"] is not None
+        assert clarify_1["decision"] is None
 
         # Step 2: Customer provides still-ambiguous clarification (cycle 2)
         res1 = await client.post(
@@ -396,6 +401,12 @@ async def test_e2e_clarification_lifecycle(mock_repo: RefundRepository):
         assert paused_record["status"] == "awaiting_clarification"
         assert paused_record["clarification_count"] == 1
         assert paused_record["clarification_prompt"] is not None
+        assert paused_record["category"] is not None
+        assert paused_record["confidence_score"] is not None
+        assert paused_record["confidence_score"] < 0.70
+        assert paused_record["reasoning"] is not None
+        assert len(paused_record["reasoning"]) > 0
+        assert paused_record["decision"] is None
 
         # 3. Customer submits clarification response via POST /refunds/{refund_id}/clarify
         clarify_payload = {
@@ -438,6 +449,12 @@ async def test_e2e_clarification_lifecycle_ord_1008(mock_repo: RefundRepository)
         assert paused_record["status"] == "awaiting_clarification"
         assert paused_record["clarification_count"] == 1
         assert paused_record["clarification_prompt"] is not None
+        assert paused_record["category"] is not None
+        assert paused_record["confidence_score"] is not None
+        assert paused_record["confidence_score"] < 0.70
+        assert paused_record["reasoning"] is not None
+        assert len(paused_record["reasoning"]) > 0
+        assert paused_record["decision"] is None
 
         # Step 2: Customer submits high-confidence clarifying response via POST /refunds/{refund_id}/clarify
         clarify_payload = {

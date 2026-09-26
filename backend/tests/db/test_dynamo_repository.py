@@ -568,6 +568,125 @@ def test_request_clarification_nonexistent_id_raises_not_found(repository: Refun
         )
 
 
+def test_request_clarification_persists_category_confidence_reasoning(repository: RefundRepository):
+    """Unit test asserts request_clarification persists category, confidence_score, and reasoning and leaves decision=None."""
+    record = repository.create_refund_request(
+        order_id="ORD-1008",
+        customer_request_text="I am unsure what happened, low confidence description.",
+    )
+
+    updated = repository.request_clarification(
+        refund_id=record.refund_id,
+        clarification_prompt="Could you clarify if the watch screen or strap is damaged?",
+        category="damaged",
+        confidence_score=0.62,
+        reasoning="Classifier detected ambiguous damaged claim below 0.70 confidence.",
+    )
+
+    assert updated.status == "awaiting_clarification"
+    assert updated.decision is None
+    assert updated.category == "damaged"
+    assert updated.confidence_score == 0.62
+    assert updated.reasoning == "Classifier detected ambiguous damaged claim below 0.70 confidence."
+
+    # Verify persisted in raw DynamoDB item with Decimal conversion
+    raw = repository.table.items[record.refund_id]
+    assert raw["status"] == "awaiting_clarification"
+    assert raw.get("decision") is None
+    assert raw["category"] == "damaged"
+    assert raw["confidence_score"] == Decimal("0.62")
+    assert raw["reasoning"] == "Classifier detected ambiguous damaged claim below 0.70 confidence."
+
+    # Verify fetch via repository returns populated fields with decision=None
+    fetched = repository.get_refund_request(record.refund_id)
+    assert fetched is not None
+    assert fetched.status == "awaiting_clarification"
+    assert fetched.decision is None
+    assert fetched.category == "damaged"
+    assert fetched.confidence_score == 0.62
+    assert fetched.reasoning == "Classifier detected ambiguous damaged claim below 0.70 confidence."
+
+
+def test_request_clarification_without_optional_fields_retains_existing(repository: RefundRepository):
+    """Unit test asserts calling request_clarification without optional fields retains existing values or None without errors."""
+    record = repository.create_refund_request(
+        order_id="ORD-1009",
+        customer_request_text="Damaged headphones.",
+    )
+
+    # First call with fields
+    updated_1 = repository.request_clarification(
+        refund_id=record.refund_id,
+        clarification_prompt="Please send photos.",
+        category="damaged",
+        confidence_score=0.55,
+        reasoning="Initial low confidence classification.",
+    )
+    assert updated_1.category == "damaged"
+    assert updated_1.confidence_score == 0.55
+    assert updated_1.reasoning == "Initial low confidence classification."
+
+    # Second call without optional fields retains existing values
+    updated_2 = repository.request_clarification(
+        refund_id=record.refund_id,
+        clarification_prompt="Photos were blurry, please re-upload.",
+    )
+    assert updated_2.status == "awaiting_clarification"
+    assert updated_2.decision is None
+    assert updated_2.category == "damaged"
+    assert updated_2.confidence_score == 0.55
+    assert updated_2.reasoning == "Initial low confidence classification."
+    assert updated_2.clarification_count == 2
+
+
+@pytest.mark.parametrize("invalid_confidence", [-0.1, 1.1, -1.0, 2.5])
+def test_request_clarification_invalid_confidence_score_raises_value_error(
+    repository: RefundRepository, invalid_confidence: float
+):
+    """Unit test asserts invalid confidence_score out of [0.0, 1.0] raises ValueError."""
+    record = repository.create_refund_request(
+        order_id="ORD-1001",
+        customer_request_text="Defective product.",
+    )
+    with pytest.raises(ValueError, match="confidence_score must be between 0.0 and 1.0"):
+        repository.request_clarification(
+            refund_id=record.refund_id,
+            clarification_prompt="Please provide details.",
+            confidence_score=invalid_confidence,
+        )
+
+
+def test_update_decision_with_category(repository: RefundRepository):
+    """Unit test asserts update_decision accepts optional category and persists it, preserving existing if omitted."""
+    record = repository.create_refund_request(
+        order_id="ORD-1002",
+        customer_request_text="Late delivery claim.",
+    )
+
+    # Update decision with category
+    updated = repository.update_decision(
+        refund_id=record.refund_id,
+        decision="auto_approve",
+        reasoning="Order verified delivered late beyond guaranteed window.",
+        matched_policy_rule={"max_order_amount": 500.0},
+        confidence_score=0.95,
+        status="completed",
+        category="late",
+    )
+    assert updated.category == "late"
+
+    # Update decision without category preserves existing category
+    updated_2 = repository.update_decision(
+        refund_id=record.refund_id,
+        decision="auto_approve",
+        reasoning="Re-evaluated with same decision.",
+        matched_policy_rule={"max_order_amount": 500.0},
+        confidence_score=0.95,
+        status="completed",
+    )
+    assert updated_2.category == "late"
+
+
 def test_submit_clarification_response_success(repository: RefundRepository):
     """Verify submit_clarification_response updates response, resets status to pending, and persists."""
     record = repository.create_refund_request(

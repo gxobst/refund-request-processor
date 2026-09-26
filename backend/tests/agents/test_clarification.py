@@ -149,6 +149,8 @@ def test_clarification_node_invokes_repo_request_clarification():
         "refund_id": "ref_with_repo_100",
         "customer_request_text": "Item is not working.",
         "category": "damaged",
+        "confidence_score": 0.65,
+        "reasoning": "Confidence is low for damaged goods.",
         "clarification_count": 0,
     }
     mock_output = ClarificationOutput(
@@ -169,9 +171,51 @@ def test_clarification_node_invokes_repo_request_clarification():
         mock_repo.request_clarification.assert_called_once_with(
             refund_id="ref_with_repo_100",
             clarification_prompt="Please describe how the item fails to operate.",
+            category="damaged",
+            confidence_score=0.65,
+            reasoning="Confidence is low for damaged goods.",
         )
         assert update["status"] == "awaiting_clarification"
         assert update["clarification_count"] == 1
+    finally:
+        set_current_repository(None)
+
+
+def test_clarification_node_invokes_repo_request_clarification_with_classification_fallbacks():
+    # Arrange
+    mock_repo = MagicMock()
+    set_current_repository(mock_repo)
+    state = {
+        "refund_id": "ref_with_repo_101",
+        "customer_request_text": "Item is not working.",
+        "category": "late",
+        "classification_confidence": 0.58,
+        "classification_reasoning": "Unclear whether order was delayed.",
+        "clarification_count": 0,
+    }
+    mock_output = ClarificationOutput(
+        clarification_prompt="Please clarify tracking details.",
+        missing_aspects=["tracking"],
+        reasoning="Need tracking info.",
+    )
+    mock_llm = make_mock_clarification_llm(mock_output)
+
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("app.agents.clarification.get_bedrock_llm", lambda: mock_llm)
+
+            # Act
+            update = clarification_node(state)
+
+        # Assert
+        mock_repo.request_clarification.assert_called_once_with(
+            refund_id="ref_with_repo_101",
+            clarification_prompt="Please clarify tracking details.",
+            category="late",
+            confidence_score=0.58,
+            reasoning="Unclear whether order was delayed.",
+        )
+        assert update["status"] == "awaiting_clarification"
     finally:
         set_current_repository(None)
 
@@ -418,6 +462,9 @@ def test_clarification_node_stores_full_email_in_state_and_invokes_repo():
         mock_repo.request_clarification.assert_called_once_with(
             refund_id="ref_email_node_test",
             clarification_prompt=clarification_email,
+            category="unclassified",
+            confidence_score=None,
+            reasoning=None,
         )
     finally:
         set_current_repository(None)

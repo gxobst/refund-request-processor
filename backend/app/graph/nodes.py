@@ -131,7 +131,10 @@ def intake_validate_node(state: dict[str, Any]) -> dict[str, Any]:
 
 def classifier_node(state: dict[str, Any]) -> dict[str, Any]:
     """Classify customer refund request reason."""
-    return agent_classifier_node(state)
+    res = agent_classifier_node(state)
+    if "reasoning" not in res and "classification_reasoning" in res:
+        res["reasoning"] = res["classification_reasoning"]
+    return res
 
 
 def clarification_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -161,14 +164,31 @@ def clarification_node(state: dict[str, Any]) -> dict[str, Any]:
     ) + 1
 
     refund_id = state.get("refund_id")
+    category_to_persist = state.get("category")
+    confidence_to_persist = state.get("confidence_score")
+    if confidence_to_persist is None:
+        confidence_to_persist = state.get("classification_confidence")
+    reasoning_to_persist = state.get("reasoning")
+    if reasoning_to_persist is None:
+        reasoning_to_persist = state.get("classification_reasoning")
+
     if refund_id:
         repo = get_current_repository() or state.get("_repository")
         if repo is not None:
             try:
-                repo.request_clarification(
-                    refund_id=refund_id,
-                    clarification_prompt=prompt,
-                )
+                try:
+                    repo.request_clarification(
+                        refund_id=refund_id,
+                        clarification_prompt=prompt,
+                        category=category_to_persist,
+                        confidence_score=confidence_to_persist,
+                        reasoning=reasoning_to_persist,
+                    )
+                except TypeError:
+                    repo.request_clarification(
+                        refund_id=refund_id,
+                        clarification_prompt=prompt,
+                    )
             except (RefundNotFoundError, Exception):
                 pass
 
@@ -248,6 +268,7 @@ def save_dynamo_node(state: dict[str, Any]) -> dict[str, Any]:
     tool_calls = state.get("tool_calls", [])
     approval_email_text = state.get("approval_email_text")
     denial_email_text = state.get("denial_email_text")
+    category = state.get("category")
 
     if refund_id:
         repo = get_current_repository() or state.get("_repository") or RefundRepository()
@@ -263,6 +284,7 @@ def save_dynamo_node(state: dict[str, Any]) -> dict[str, Any]:
                     tool_calls=tool_calls,
                     approval_email_text=approval_email_text,
                     denial_email_text=denial_email_text,
+                    category=category,
                 )
             except TypeError:
                 repo.update_decision(

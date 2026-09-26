@@ -177,6 +177,7 @@ class RefundRepository:
         tool_calls: list[dict[str, Any]] | None = None,
         approval_email_text: str | None = None,
         denial_email_text: str | None = None,
+        category: str | None = None,
     ) -> RefundRecord:
         """Update decision metadata and workflow status for an existing refund record.
 
@@ -190,6 +191,7 @@ class RefundRepository:
             tool_calls: Optional list of executed tool call audit dictionaries.
             approval_email_text: Optional generated confirmation and return instructions email text.
             denial_email_text: Optional generated denial notification email text.
+            category: Optional classified refund reason category.
 
         Returns:
             Updated RefundRecord instance.
@@ -209,6 +211,8 @@ class RefundRepository:
         updated_dict["confidence_score"] = confidence_score
         updated_dict["status"] = status
         updated_dict["updated_at"] = now_iso
+        if category is not None:
+            updated_dict["category"] = category
         if tool_calls is not None:
             updated_dict["tool_calls"] = tool_calls
         else:
@@ -296,22 +300,34 @@ class RefundRepository:
         self,
         refund_id: str,
         clarification_prompt: str,
+        category: str | None = None,
+        confidence_score: float | None = None,
+        reasoning: str | None = None,
     ) -> RefundRecord:
         """Update refund request to awaiting_clarification with a clarification prompt.
 
         Args:
             refund_id: Target refund request ID.
             clarification_prompt: Clarification question for the customer.
+            category: Optional classified refund reason category.
+            confidence_score: Optional model confidence score between 0.0 and 1.0.
+            reasoning: Optional classification or evaluation reasoning.
 
         Returns:
             Updated RefundRecord instance.
 
         Raises:
-            ValueError: If clarification_prompt is empty or whitespace-only.
+            ValueError: If clarification_prompt is empty or whitespace-only, or confidence_score is invalid.
             RefundNotFoundError: If the refund request does not exist.
         """
         if not clarification_prompt or not clarification_prompt.strip():
             raise ValueError("clarification_prompt cannot be blank or empty.")
+
+        if confidence_score is not None:
+            if not (0.0 <= confidence_score <= 1.0):
+                raise ValueError(
+                    f"confidence_score must be between 0.0 and 1.0, got {confidence_score}"
+                )
 
         existing = self.get_refund_request(refund_id)
         if existing is None:
@@ -320,9 +336,17 @@ class RefundRepository:
         now_iso = datetime.now(timezone.utc).isoformat()
         updated_dict = existing.model_dump()
         updated_dict["status"] = "awaiting_clarification"
+        updated_dict["decision"] = None
         updated_dict["clarification_prompt"] = clarification_prompt.strip()
         updated_dict["clarification_count"] = (existing.clarification_count or 0) + 1
         updated_dict["updated_at"] = now_iso
+
+        if category is not None:
+            updated_dict["category"] = category
+        if confidence_score is not None:
+            updated_dict["confidence_score"] = confidence_score
+        if reasoning is not None:
+            updated_dict["reasoning"] = reasoning
 
         item = _convert_floats_to_decimal(updated_dict)
         self.table.put_item(Item=item)

@@ -115,6 +115,7 @@ class RefundRecord(BaseModel):
         default_factory=list,
         description="Customer-uploaded proof attachments (images and videos).",
     )
+    category: str | None = Field(default=None, description="Classified refund reason category.")
 
 
 class RefundDecisionUpdate(BaseModel):
@@ -128,6 +129,7 @@ class RefundDecisionUpdate(BaseModel):
     tool_calls: list[dict[str, Any]] | None = None
     approval_email_text: str | None = None
     denial_email_text: str | None = None
+    category: str | None = Field(default=None, description="Classified refund reason category.")
 
 
 class RefundOverrideUpdate(BaseModel):
