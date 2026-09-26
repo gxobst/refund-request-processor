@@ -5,7 +5,7 @@ status polling, manual override, queue listing, and LangSmith tracing.
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
@@ -393,14 +393,16 @@ async def test_e2e_escalation_flow_low_confidence(mock_repo: RefundRepository):
 @pytest.mark.asyncio
 async def test_e2e_clarification_lifecycle(mock_repo: RefundRepository):
     """Verify end-to-end customer clarification lifecycle from pause to resumption and auto-approval."""
-    # Seed ORD-1001 with order_amount <= $200 so changed_mind clarification passes deterministic policy limits
+    # Seed ORD-1001 with order_amount <= $200 and a recent delivery date so changed_mind clarification passes deterministic policy limits
+    recent_delivery = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    recent_purchase = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%d")
     orders_table = mock_repo.dynamodb_resource.Table("mock-orders")
     orders_table.put_item(
         Item={
             "order_id": "ORD-1001",
             "item": "Ergonomic Office Chair",
-            "purchase_date": "2026-09-10",
-            "delivery_date": "2026-09-12",
+            "purchase_date": recent_purchase,
+            "delivery_date": recent_delivery,
             "order_amount": Decimal("150.0"),
             "delivery_status": "delivered",
         }
