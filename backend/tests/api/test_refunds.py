@@ -461,3 +461,80 @@ async def test_submit_refund_request_multipart_invalid_order_id(
     assert response.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_submit_refund_request_mixed_case_webkit_boundary(
+    mock_repo: MockRefundRepository, mock_workflow_runner: MagicMock
+):
+    """Test POST /refunds with mixed-case WebKit boundary successfully parses fields and files."""
+    boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"
+    image_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="order_id"\r\n\r\n'
+        "ORD-1001\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="customer_request_text"\r\n\r\n'
+        "Item arrived with a broken frame, photo attached.\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="frame.png"\r\n'
+        "Content-Type: image/png\r\n\r\n"
+    ).encode("utf-8") + image_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/refunds",
+            content=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+
+    assert response.status_code == 202
+    data = response.json()
+    assert data["order_id"] == "ORD-1001"
+    assert data["status"] == "pending"
+
+    record = mock_repo.get_refund_request(data["refund_id"])
+    assert record is not None
+    assert record.order_id == "ORD-1001"
+    assert record.customer_request_text == "Item arrived with a broken frame, photo attached."
+    assert len(record.evidence) == 1
+    assert record.evidence[0].filename == "frame.png"
+    assert record.evidence[0].content_type == "image/png"
+
+
+@pytest.mark.parametrize(
+    "header_template",
+    [
+        "multipart/form-data; boundary={boundary}",
+        'multipart/form-data; boundary="{boundary}"',
+        "multipart/form-data; boundary={boundary}; charset=UTF-8",
+        'multipart/form-data; boundary="{boundary}"; charset=UTF-8',
+        "multipart/form-data; charset=UTF-8; boundary={boundary}",
+    ],
+)
+def test_parse_multipart_request_boundary_variations(header_template: str):
+    """Test _parse_multipart_request extracts fields and files with mixed-case, quoted, and trailing params."""
+    from app.api.refunds import _parse_multipart_request
+
+    boundary = "----WebKitFormBoundaryXyZ987AbC123"
+    content_type_header = header_template.format(boundary=boundary)
+    file_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 20
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="order_id"\r\n\r\n'
+        "ORD-1002\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="proof.jpg"\r\n'
+        "Content-Type: image/jpeg\r\n\r\n"
+    ).encode("utf-8") + file_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+    fields, files = _parse_multipart_request(content_type_header, body)
+
+    assert fields.get("order_id") == "ORD-1002"
+    assert len(files) == 1
+    assert files[0].filename == "proof.jpg"
+    assert files[0].content_type == "image/jpeg"
+    assert files[0].size == len(file_bytes)
+
+
+

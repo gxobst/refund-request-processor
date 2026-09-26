@@ -264,3 +264,39 @@ async def test_evidence_openapi_schema():
     assert schema["properties"]["file"]["format"] == "binary"
     assert "file" in schema["required"]
 
+
+@pytest.mark.asyncio
+async def test_upload_evidence_mixed_case_webkit_boundary(mock_repo: MockRefundRepository):
+    """Test POST /refunds/{refund_id}/evidence with mixed-case WebKit boundary successfully parses file, saves to storage, and returns HTTP 201."""
+    refund_id = "ref-evidence-boundary"
+    mock_repo.seed_record(refund_id=refund_id, order_id="ORD-2003")
+    boundary = "----WebKitFormBoundaryAbCdEf123456"
+    image_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="screen.png"\r\n'
+        "Content-Type: image/png\r\n\r\n"
+    ).encode("utf-8") + image_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/refunds/{refund_id}/evidence",
+            content=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["refund_id"] == refund_id
+    assert len(data["evidence"]) == 1
+    assert data["evidence"][0]["filename"] == "screen.png"
+    assert data["evidence"][0]["content_type"] == "image/png"
+
+    record = mock_repo.get_refund_request(refund_id)
+    assert record is not None
+    assert len(record.evidence) == 1
+    assert record.evidence[0].filename == "screen.png"
+    assert record.evidence[0].content_type == "image/png"
+
+

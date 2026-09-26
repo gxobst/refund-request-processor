@@ -541,3 +541,53 @@ async def test_clarify_multipart_form_with_evidence_file_parameter(
         repository=mock_repo,
     )
 
+
+@pytest.mark.asyncio
+async def test_clarify_mixed_case_webkit_boundary(
+    mock_repo: MockRefundRepository, tmp_path: Path
+):
+    """Test submitting customer clarification with mixed-case WebKit boundary parses response, resumes workflow, and returns HTTP 200."""
+    refund_id = "ref-clarify-boundary"
+    mock_repo.seed_record(refund_id=refund_id, order_id="ORD-1004", status="awaiting_clarification")
+    boundary = "----WebKitFormBoundaryClarifyAbC123"
+    image_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="response_text"\r\n\r\n'
+        "Item arrived with a shattered screen, proof attached.\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="evidence_file"; filename="broken.png"\r\n'
+        "Content-Type: image/png\r\n\r\n"
+    ).encode("utf-8") + image_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+    transport = ASGITransport(app=app)
+    with patch("app.api.refunds.resume_refund_workflow", new_callable=AsyncMock) as mock_resume:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                f"/refunds/{refund_id}/clarify",
+                content=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "pending"
+    assert data["clarification_response"] == "Item arrived with a shattered screen, proof attached."
+    assert len(data["evidence"]) == 1
+    assert data["evidence"][0]["filename"] == "broken.png"
+    assert data["evidence"][0]["content_type"] == "image/png"
+
+    record = mock_repo.get_refund_request(refund_id)
+    assert record is not None
+    assert record.status == "pending"
+    assert record.clarification_response == "Item arrived with a shattered screen, proof attached."
+    assert len(record.evidence) == 1
+    assert record.evidence[0].filename == "broken.png"
+
+    mock_resume.assert_called_once_with(
+        refund_id=refund_id,
+        response_text="Item arrived with a shattered screen, proof attached.",
+        repository=mock_repo,
+    )
+
+

@@ -30,11 +30,15 @@ HTTP_422_STATUS = 422
 def _parse_multipart_request(
     content_type_header: str, body_bytes: bytes
 ) -> tuple[dict[str, str], list[UploadFile]]:
-    """Parse multipart/form-data body using standard library email parser."""
+    """Parse multipart/form-data body using standard library email parser.
+
+    Constructs msg_bytes with the case-preserved Content-Type header so BytesParser
+    matches mixed-case multipart boundaries against boundary delimiters in the payload.
+    """
     fields: dict[str, str] = {}
     files: list[UploadFile] = []
 
-    msg_bytes = f"Content-Type: {content_type_header}\r\n\r\n".encode("latin1") + body_bytes
+    msg_bytes = f"Content-Type: {content_type_header}\r\n\r\n".encode("latin1", errors="replace") + body_bytes
     msg = BytesParser(policy=default).parsebytes(msg_bytes)
 
     for part in msg.iter_parts():
@@ -141,14 +145,15 @@ async def submit_refund_request(
     storage_service: EvidenceStorageService = Depends(get_evidence_storage_service),
 ) -> RefundCreateResponse:
     """Accept and initiate asynchronous multi-agent processing for a refund request."""
-    content_type_header = request.headers.get("content-type", "").lower()
+    raw_content_type = request.headers.get("content-type", "")
+    content_type_lower = raw_content_type.lower()
     order_id: str | None = None
     customer_request_text: str | None = None
     uploaded_file: UploadFile | None = None
 
-    if "multipart/form-data" in content_type_header:
+    if "multipart/form-data" in content_type_lower:
         body = await request.body()
-        form_fields, form_files = _parse_multipart_request(content_type_header, body)
+        form_fields, form_files = _parse_multipart_request(raw_content_type, body)
         raw_order_id = form_fields.get("order_id")
         if raw_order_id is None or not str(raw_order_id).strip():
             raise HTTPException(
@@ -170,7 +175,7 @@ async def submit_refund_request(
         customer_request_text = str(raw_text).strip()
         if form_files:
             uploaded_file = form_files[0]
-    elif "application/x-www-form-urlencoded" in content_type_header:
+    elif "application/x-www-form-urlencoded" in content_type_lower:
         from urllib.parse import parse_qs
 
         body = await request.body()
@@ -372,14 +377,15 @@ async def upload_refund_evidence(
             detail=f"Refund request '{refund_id}' not found",
         )
 
-    content_type_header = request.headers.get("content-type", "").lower()
-    if "multipart/form-data" not in content_type_header:
+    raw_content_type = request.headers.get("content-type", "")
+    content_type_lower = raw_content_type.lower()
+    if "multipart/form-data" not in content_type_lower:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Request content-type must be multipart/form-data.",
         )
     body = await request.body()
-    _, uploaded_files = _parse_multipart_request(content_type_header, body)
+    _, uploaded_files = _parse_multipart_request(raw_content_type, body)
     if not uploaded_files:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -481,13 +487,14 @@ async def clarify_refund_request(
     storage_service: EvidenceStorageService = Depends(get_evidence_storage_service),
 ) -> RefundRecord:
     """Submit customer clarification response to resume paused evaluation."""
-    content_type_header = request.headers.get("content-type", "").lower()
+    raw_content_type = request.headers.get("content-type", "")
+    content_type_lower = raw_content_type.lower()
     response_text: str | None = None
     evidence_file: UploadFile | None = None
 
-    if "multipart/form-data" in content_type_header:
+    if "multipart/form-data" in content_type_lower:
         body = await request.body()
-        form_fields, form_files = _parse_multipart_request(content_type_header, body)
+        form_fields, form_files = _parse_multipart_request(raw_content_type, body)
         raw_text = form_fields.get("response_text")
         if raw_text is None or not str(raw_text).strip():
             raise HTTPException(
@@ -497,7 +504,7 @@ async def clarify_refund_request(
         response_text = str(raw_text).strip()
         if form_files:
             evidence_file = form_files[0]
-    elif "application/x-www-form-urlencoded" in content_type_header:
+    elif "application/x-www-form-urlencoded" in content_type_lower:
         from urllib.parse import parse_qs
         body = await request.body()
         parsed = parse_qs(body.decode("utf-8", errors="replace"))
