@@ -27,6 +27,12 @@ When evaluating requests requiring external verification (such as late deliverie
 MANDATORY DUAL TOOL VERIFICATION FOR HIGH-VALUE ORDERS:
 For any high-value order (order_amount >= 400.0) or orders flagged as high-value, you MUST invoke BOTH query_carrier_tracking and query_payment_transaction before concluding with policy_status: "pass". You are strictly forbidden from approving or returning policy_status: "pass" for high-value orders without executing both verification tools.
 
+PRODUCT MISMATCH VERIFICATION:
+Carefully compare any specific product referenced in the customer request text against the ordered item title:
+- If the customer request explicitly describes or names a conflicting product different from the ordered item (e.g. claiming refund for a camera, monitor, or laptop when the order is for a fitness watch or office chair), you MUST conclude with policy_status: "ambiguous" with policy_reasoning explaining the product mismatch between the customer claim and the ordered item.
+- Generic customer item references (such as "the item", "my package", "the product", "this order", "it", or "goods") are neutral references and must NOT trigger a false-positive product mismatch.
+- Partial or colloquial product references (e.g. "watch" for "Smart Fitness Watch", "chair" for "Ergonomic Office Chair", "headphones" for "Noise-Cancelling Headphones") are valid product matches and must NOT trigger a product mismatch.
+
 When evaluating damage claims (category: 'damaged') with attached photos, inspect the images to verify whether:
 1. The image depicts the ordered product (product match).
 2. The image exhibits visible physical damage consistent with the customer's claim.
@@ -65,6 +71,276 @@ Respond with ONLY the JSON object, with no additional conversational text or mar
 
 HIGH_VALUE_THRESHOLD = 400.0
 REQUIRED_HIGH_VALUE_TOOLS = frozenset({"query_carrier_tracking", "query_payment_transaction"})
+
+ORDER_ID_TO_ITEM: dict[str, str] = {
+    "ORD-1001": "Ergonomic Office Chair",
+    "ORD-1002": "Noise-Cancelling Headphones",
+    "ORD-1003": "Ultra-Wide Gaming Monitor",
+    "ORD-1004": "Wireless Mechanical Keyboard",
+    "ORD-1005": "Standing Desk Converter",
+    "ORD-1006": "USB-C Multi-port Hub",
+    "ORD-1007": "Designer Wool Sweater",
+    "ORD-1008": "Smart Fitness Watch",
+    "ORD-1009": "Wireless Earbuds",
+    "ORD-1010": "Professional Mirrorless Camera",
+}
+
+PRODUCT_FAMILIES: dict[str, dict[str, Any]] = {
+    "watch": {
+        "title_keywords": ["smart fitness watch", "fitness watch", "watch", "smartwatch"],
+        "valid_matches": [
+            "smart fitness watch",
+            "fitness watch",
+            "smart watch",
+            "smartwatch",
+            "wrist watch",
+            "fitness tracker",
+            "watch",
+        ],
+        "explicit_patterns": [
+            r"\bsmart\s+fitness\s+watch(?:es)?\b",
+            r"\bfitness\s+watch(?:es)?\b",
+            r"\bsmartwatch(?:es)?\b",
+            r"\bsmart\s+watch(?:es)?\b",
+            r"\bwatch(?:es)?\b",
+        ],
+    },
+    "camera": {
+        "title_keywords": ["professional mirrorless camera", "mirrorless camera", "camera"],
+        "valid_matches": [
+            "professional mirrorless camera",
+            "mirrorless camera",
+            "dslr camera",
+            "dslr",
+            "camera",
+            "camcorder",
+            "lens",
+        ],
+        "explicit_patterns": [
+            r"\bprofessional\s+mirrorless\s+camera\b",
+            r"\bmirrorless\s+camera\b",
+            r"\bdslr\s+camera\b",
+            r"\bdslr\b",
+            r"\bcamcorder\b",
+            r"\bcamera(?:s)?\b",
+        ],
+    },
+    "monitor": {
+        "title_keywords": ["ultra-wide gaming monitor", "gaming monitor", "monitor"],
+        "valid_matches": [
+            "ultra-wide gaming monitor",
+            "ultrawide gaming monitor",
+            "oled gaming monitor",
+            "gaming monitor",
+            "oled monitor",
+            "ultrawide monitor",
+            "ultra-wide monitor",
+            "computer monitor",
+            "pc monitor",
+            "monitor",
+        ],
+        "explicit_patterns": [
+            r"\boled\s+gaming\s+monitor\b",
+            r"\bultra-?wide\s+gaming\s+monitor\b",
+            r"\bultrawide\s+gaming\s+monitor\b",
+            r"\bgaming\s+monitor\b",
+            r"\boled\s+monitor\b",
+            r"\bultra-?wide\s+monitor\b",
+            r"\bultrawide\s+monitor\b",
+            r"\bcomputer\s+monitor\b",
+            r"\bpc\s+monitor\b",
+            r"\bmonitor(?:s)?\b",
+        ],
+    },
+    "headphones": {
+        "title_keywords": ["noise-cancelling headphones", "headphones", "headphone", "headset"],
+        "valid_matches": [
+            "noise-cancelling headphones",
+            "noise cancelling headphones",
+            "over-ear headphones",
+            "over ear headphones",
+            "headphones",
+            "headphone",
+            "headset",
+        ],
+        "explicit_patterns": [
+            r"\bnoise-?cancelling\s+headphones?\b",
+            r"\bover-?ear\s+headphones?\b",
+            r"\bheadphones?\b",
+            r"\bheadsets?\b",
+        ],
+    },
+    "earbuds": {
+        "title_keywords": ["wireless earbuds", "earbuds", "earbud"],
+        "valid_matches": [
+            "wireless earbuds",
+            "earbuds",
+            "earbud",
+            "earphones",
+            "airpods",
+        ],
+        "explicit_patterns": [
+            r"\bwireless\s+earbuds?\b",
+            r"\bearbuds?\b",
+            r"\bearphones?\b",
+            r"\bairpods?\b",
+        ],
+    },
+    "chair": {
+        "title_keywords": ["ergonomic office chair", "office chair", "chair"],
+        "valid_matches": [
+            "ergonomic office chair",
+            "office chair",
+            "desk chair",
+            "chair",
+        ],
+        "explicit_patterns": [
+            r"\bergonomic\s+office\s+chair\b",
+            r"\boffice\s+chair\b",
+            r"\bdesk\s+chair\b",
+            r"\bergonomic\s+chair\b",
+            r"\bchair(?:s)?\b",
+        ],
+    },
+    "keyboard": {
+        "title_keywords": ["wireless mechanical keyboard", "mechanical keyboard", "keyboard"],
+        "valid_matches": [
+            "wireless mechanical keyboard",
+            "mechanical keyboard",
+            "gaming keyboard",
+            "keyboard",
+        ],
+        "explicit_patterns": [
+            r"\bwireless\s+mechanical\s+keyboard\b",
+            r"\bmechanical\s+keyboard\b",
+            r"\bgaming\s+keyboard\b",
+            r"\bkeyboards?\b",
+        ],
+    },
+    "desk_converter": {
+        "title_keywords": ["standing desk converter", "standing desk", "desk converter"],
+        "valid_matches": [
+            "standing desk converter",
+            "standing desk",
+            "desk converter",
+            "converter",
+        ],
+        "explicit_patterns": [
+            r"\bstanding\s+desk\s+converter\b",
+            r"\bstanding\s+desk\b",
+            r"\bdesk\s+converter\b",
+            r"\bstanding\s+converter\b",
+        ],
+    },
+    "usb_hub": {
+        "title_keywords": ["usb-c multi-port hub", "multi-port hub", "multiport hub", "usb hub", "hub"],
+        "valid_matches": [
+            "usb-c multi-port hub",
+            "multi-port hub",
+            "multiport hub",
+            "usb hub",
+            "usb-c hub",
+            "hub",
+        ],
+        "explicit_patterns": [
+            r"\busb-?c\s+multi-?port\s+hub\b",
+            r"\bmulti-?port\s+hub\b",
+            r"\busb-?c\s+hub\b",
+            r"\busb\s+hub\b",
+            r"\bdocking\s+station\b",
+        ],
+    },
+    "sweater": {
+        "title_keywords": ["designer wool sweater", "wool sweater", "sweater"],
+        "valid_matches": [
+            "designer wool sweater",
+            "wool sweater",
+            "sweater",
+            "jumper",
+            "cardigan",
+            "pullover",
+        ],
+        "explicit_patterns": [
+            r"\bdesigner\s+wool\s+sweater\b",
+            r"\bwool\s+sweater\b",
+            r"\bsweaters?\b",
+            r"\bjumper\b",
+            r"\bcardigan\b",
+            r"\bpullover\b",
+        ],
+    },
+    "laptop": {
+        "title_keywords": ["laptop", "macbook", "notebook"],
+        "valid_matches": ["laptop", "macbook", "notebook", "chromebook"],
+        "explicit_patterns": [
+            r"\blaptops?\b",
+            r"\bmacbooks?\b",
+            r"\bnotebooks?\b",
+            r"\bchromebooks?\b",
+        ],
+    },
+    "phone": {
+        "title_keywords": ["smartphone", "iphone", "phone"],
+        "valid_matches": ["smartphone", "iphone", "android phone", "mobile phone", "cell phone"],
+        "explicit_patterns": [
+            r"\bsmartphones?\b",
+            r"\biphones?\b",
+            r"\bandroid\s+phones?\b",
+            r"\bmobile\s+phones?\b",
+            r"\bcell\s+phones?\b",
+        ],
+    },
+}
+
+
+def detect_product_mismatch(ordered_item: str, customer_text: str) -> tuple[bool, str | None]:
+    """Detect discrepancies between product described in customer request and purchased item.
+
+    Args:
+        ordered_item: Title or description of the ordered item.
+        customer_text: Customer explanation or request text.
+
+    Returns:
+        Tuple of (is_mismatch, reasoning). If mismatch is detected, returns True and explanation;
+        otherwise returns False and None.
+    """
+    if not ordered_item or not customer_text:
+        return False, None
+
+    item_lower = ordered_item.strip().lower()
+    text_lower = customer_text.strip().lower()
+
+    # Identify product family of the ordered item
+    ordered_family: str | None = None
+    for family, data in PRODUCT_FAMILIES.items():
+        if any(keyword in item_lower for keyword in data["title_keywords"]):
+            ordered_family = family
+            break
+
+    if ordered_family is None:
+        return False, None
+
+    # Check if customer text mentions a valid matching reference for the ordered item
+    for valid_term in PRODUCT_FAMILIES[ordered_family]["valid_matches"]:
+        if re.search(rf"\b{re.escape(valid_term)}\b", text_lower):
+            return False, None
+
+    # Check if customer text explicitly describes a conflicting product from another family
+    for family, data in PRODUCT_FAMILIES.items():
+        if family == ordered_family:
+            continue
+        for pattern in data["explicit_patterns"]:
+            match = re.search(pattern, text_lower, re.IGNORECASE)
+            if match:
+                claimed_product = match.group(0).strip()
+                reasoning = (
+                    f"Product mismatch detected: customer request describes '{claimed_product}', "
+                    f"which conflicts with ordered item '{ordered_item}'. Requires supervisor review."
+                )
+                return True, reasoning
+
+    return False, None
+
 
 
 def _extract_text(content: Any) -> str:
@@ -249,6 +525,24 @@ def check_policy(
     """
     active_policies = policies if policies is not None else load_policies()
     eval_result = evaluate_policy(category=category, order=order, policy=active_policies)
+
+    # Resolve ordered item title from order dict or mock orders catalog
+    ordered_item = order.get("item") or order.get("item_title") or order.get("product_name")
+    if not ordered_item and order.get("order_id"):
+        ordered_item = ORDER_ID_TO_ITEM.get(order.get("order_id", ""))
+
+    # Product mismatch verification: explicit discrepancy overrides deterministic pass evaluations
+    if ordered_item and customer_request_text:
+        is_mismatch, mismatch_reason = detect_product_mismatch(ordered_item, customer_request_text)
+        if is_mismatch:
+            return PolicyCheckerOutput(
+                policy_status="ambiguous",
+                matched_policy_rule=eval_result.matched_policy_rule,
+                passed_rules=eval_result.passed_rules,
+                failed_rules=eval_result.failed_rules,
+                policy_reasoning=mismatch_reason,
+                tool_calls=[],
+            )
 
     # Process image evidence items
     image_blocks: list[dict[str, Any]] = []

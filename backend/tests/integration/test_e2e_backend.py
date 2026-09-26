@@ -992,4 +992,40 @@ async def test_e2e_reviewer_proof_request_and_clarification_resumption(
     app.dependency_overrides.pop(get_evidence_storage_service, None)
 
 
+@pytest.mark.asyncio
+async def test_e2e_product_mismatch_escalates(mock_repo: RefundRepository):
+    """Verify submitting a refund request for an order with conflicting product description results in status 'escalated', decision 'escalate', and mismatch reasoning."""
+    payload = {
+        "order_id": "ORD-1008",
+        "customer_request_text": "I am requesting a full refund because the mirrorless camera arrived with a shattered lens.",
+    }
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Step 1: Submit intake request
+        post_res = await client.post("/refunds", json=payload)
+        assert post_res.status_code == 202
+        refund_id = post_res.json()["refund_id"]
+
+        # Step 2: Poll status until workflow execution completes
+        final_record = await poll_until_not_pending(client, refund_id)
+
+        # Step 3: Direct GET endpoint inspection
+        get_res = await client.get(f"/refunds/{refund_id}")
+        assert get_res.status_code == 200
+        get_record = get_res.json()
+
+    # Assert: escalated status and decision with product mismatch explanation
+    assert final_record["status"] == "escalated"
+    assert final_record["decision"] == "escalate"
+    assert "product mismatch" in final_record["reasoning"].lower()
+    assert "mirrorless camera" in final_record["reasoning"].lower()
+    assert "smart fitness watch" in final_record["reasoning"].lower()
+
+    assert get_record["status"] == "escalated"
+    assert get_record["decision"] == "escalate"
+    assert "product mismatch" in get_record["reasoning"].lower()
+
+
+
 

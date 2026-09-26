@@ -1104,6 +1104,36 @@ async def test_workflow_with_initial_evidence_immediately_provides_evidence_to_p
     assert final_state["evidence"] == initial_evidence
 
 
+@pytest.mark.asyncio
+async def test_workflow_explicit_product_mismatch_escalates():
+    """Verify that a workflow execution for an otherwise eligible order with an explicit product mismatch transitions to status 'escalated' and decision 'escalate'."""
+    # ORD-1008 is Smart Fitness Watch ($99, delivered recent order, normally auto-approved)
+    mock_classification = ClassificationOutput(
+        category="damaged",
+        confidence_score=0.95,
+        reasoning="Customer reported damaged item with high confidence.",
+    )
+    mock_classifier_llm = make_mock_llm(mock_classification)
+    checkpointer = MemorySaver()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm)
+
+        final_state = await run_refund_workflow(
+            refund_id="ref_test_product_mismatch",
+            order_id="ORD-1008",
+            customer_request_text="I want a refund for the OLED gaming monitor, the screen is cracked.",
+            checkpointer=checkpointer,
+        )
+
+    assert final_state["decision"] == "escalate"
+    assert final_state["status"] == "escalated"
+    assert final_state["policy_status"] == "ambiguous"
+    assert "product mismatch" in final_state["policy_reasoning"].lower()
+    assert "product mismatch" in final_state["reasoning"].lower()
+
+
+
 
 
 

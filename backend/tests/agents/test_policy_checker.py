@@ -1908,6 +1908,100 @@ def test_check_policy_low_value_does_not_require_dual_tools():
     assert result_late.tool_calls[0]["tool_name"] == "query_carrier_tracking"
 
 
+@pytest.mark.parametrize(
+    "mismatched_text,claimed_mention",
+    [
+        ("I want a refund for the OLED gaming monitor, screen is cracked.", "OLED gaming monitor"),
+        ("The mirrorless camera arrived damaged with a broken lens.", "mirrorless camera"),
+        ("My camera does not turn on.", "camera"),
+    ],
+)
+def test_check_policy_explicit_product_mismatch_returns_ambiguous(
+    mismatched_text: str, claimed_mention: str
+):
+    """Verify customer request describing an explicit mismatched product for ORD-1008 returns policy_status='ambiguous' with product mismatch reasoning."""
+    order = {
+        "order_id": "ORD-1008",
+        "item": "Smart Fitness Watch",
+        "order_amount": 99.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    result = check_policy(
+        category="damaged",
+        order=order,
+        customer_request_text=mismatched_text,
+    )
+
+    assert result.policy_status == "ambiguous"
+    assert "product mismatch" in result.policy_reasoning.lower()
+    assert "smart fitness watch" in result.policy_reasoning.lower()
+    assert claimed_mention.lower() in result.policy_reasoning.lower()
+
+
+@pytest.mark.parametrize(
+    "generic_text",
+    [
+        "The item arrived damaged.",
+        "My package was crushed in transit.",
+        "The product is defective.",
+        "This order arrived broken.",
+        "It arrived shattered and unusable.",
+        "goods were damaged upon arrival.",
+    ],
+)
+def test_check_policy_generic_phrasing_does_not_trigger_product_mismatch(generic_text: str):
+    """Verify generic phrasing does not trigger a product mismatch and evaluates eligibility based on standard policy rules."""
+    order = {
+        "order_id": "ORD-1008",
+        "item": "Smart Fitness Watch",
+        "order_amount": 99.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    result = check_policy(
+        category="damaged",
+        order=order,
+        customer_request_text=generic_text,
+    )
+
+    # Eligible order without image evidence under $400 deterministically passes
+    assert result.policy_status == "pass"
+    assert "product mismatch" not in result.policy_reasoning.lower()
+
+
+@pytest.mark.parametrize(
+    "order_id,item_title,matching_text",
+    [
+        ("ORD-1008", "Smart Fitness Watch", "the fitness watch has a broken strap"),
+        ("ORD-1008", "Smart Fitness Watch", "my watch arrived with a cracked screen"),
+        ("ORD-1001", "Ergonomic Office Chair", "the chair has a broken armrest"),
+        ("ORD-1002", "Noise-Cancelling Headphones", "the headphones have static noise"),
+        ("ORD-1004", "Wireless Mechanical Keyboard", "the keyboard keys are sticking"),
+    ],
+)
+def test_check_policy_partial_or_synonymous_product_naming_passes_verification(
+    order_id: str, item_title: str, matching_text: str
+):
+    """Verify partial or synonymous product naming passes product verification and allows standard evaluation."""
+    order = {
+        "order_id": order_id,
+        "item": item_title,
+        "order_amount": 99.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    result = check_policy(
+        category="damaged",
+        order=order,
+        customer_request_text=matching_text,
+    )
+
+    assert result.policy_status == "pass"
+    assert "product mismatch" not in result.policy_reasoning.lower()
+
+
+
 
 
 

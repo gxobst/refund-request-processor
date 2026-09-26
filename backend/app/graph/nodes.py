@@ -221,7 +221,21 @@ def policy_checker_node(state: dict[str, Any]) -> dict[str, Any]:
 
 def decision_node(state: dict[str, Any]) -> dict[str, Any]:
     """Synthesize findings into final approval, denial, or escalation decision."""
+    policy_status = state.get("policy_status")
+    policy_reasoning = state.get("policy_reasoning", "")
+    is_product_mismatch = (
+        policy_status == "ambiguous"
+        and ("product mismatch" in (policy_reasoning or "").lower() or "mismatched product" in (policy_reasoning or "").lower())
+    )
+
     res = agent_decision_node(state)
+
+    if is_product_mismatch:
+        res["decision"] = "escalate"
+        res["status"] = "escalated"
+        reason = policy_reasoning or "Product mismatch between customer request and ordered item requires supervisor review."
+        res["reasoning"] = f"Escalated to human review due to policy ambiguity: {reason}"
+
     decision = res.get("decision")
     if decision == "auto_approve":
         order_id = state.get("order_id", "")
