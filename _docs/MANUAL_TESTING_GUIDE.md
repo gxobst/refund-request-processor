@@ -17,15 +17,19 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
    ```
 3. Open your browser and navigate to:
    ```text
-   http://127.0.0.1:8000/docs
-   ```
+    http://127.0.0.1:8000/docs
+    ```
+
+> [!TIP]
+> **Swagger UI Media Type Toggling & Reset**:
+> For endpoints offering dual media types (e.g. `POST /refunds` and `POST /refunds/{refund_id}/clarify` supporting both `application/json` and `multipart/form-data`), Swagger UI retains entered field values across format selections in browser state. If you switch between `multipart/form-data` and `application/json`, click the Swagger **Reset** button or reload the page to clear the previous form parameters.
 
 ---
 
 ## Summary Matrix of Test Scenarios
 
 | Scenario # | Test Name | Key Mechanism Verified | Target Order | Expected Decision / Status |
-| :---: | :--- | :--- | :---: | :---: |
+| :---: | :--- | :--- | :--- | :---: |
 | **TC-01** | System Health Check | DynamoDB & API connectivity | N/A | `status: "healthy"` (HTTP 200) |
 | **TC-02** | Clear-Cut Approval & Return Email | Fast deterministic bypass + approval email with RMA | `ORD-1007` | `auto_approve` / `completed` |
 | **TC-03** | Max Order Amount Escalation | Order amount exceeding threshold ($750 > $500) escalates to human review | `ORD-1003` | `escalate` / `escalated` |
@@ -36,12 +40,12 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
 | **TC-08** | Clarification Exhaustion to Escalation | 2-cycle clarification exhaustion (low confidence < 0.70) -> human escalation | `ORD-1009` | `awaiting_clarification` (cycles 1 & 2) -> `escalate` / `escalated` |
 | **TC-09** | Supervisor Manual Override | Supervisor manual override on escalated TC-08 refund (`approve` or `deny`) | `ORD-1009` | `approve` or `deny` / `completed` |
 | **TC-10** | Multipart Damage Evidence Upload | Interactive file picker upload (Swagger UI WebKit boundary support, JPEG/PNG/WebP ≤ 5MB; video rejected) | Any active refund | HTTP 201 (`evidence` array populated) |
-| **TC-11** | Multimodal Image Inspection | Multimodal Bedrock vision agent verifies damage in attached photo | `ORD-1001` | `auto_approve` (damage verified) |
+| **TC-11** | Multimodal Image Inspection | Mandatory proof check: missing photos pause with `awaiting_clarification`; attached image inspected via Bedrock vision | `ORD-1001` | `awaiting_clarification` -> `auto_approve` |
 | **TC-12** | Initial Refund Creation with Attached Image | Multipart `POST /refunds` with upfront image proof (case-sensitive boundary support) | `ORD-1001` | HTTP 202 (`evidence` populated on intake) |
 | **TC-13** | Queue Listing and Filtering | DynamoDB querying with status filter (`completed`, `escalated`, etc.) | N/A | HTTP 200 (filtered list) |
 | **TC-14** | Input Validation & Error Boundaries | Order ID regex (`^ORD-\d{4}$`), blank fields, 404s, video rejection, 5MB limit, request-proof validation | N/A | HTTP 400, 404, 413, 422 |
 | **TC-15** | Supervisor Proof Request from Escalation Queue | Human supervisor requests targeted photo proof via `POST /refunds/{id}/request-proof` | `ORD-1009` | `escalated` -> `awaiting_clarification` (HTTP 200) |
-| **TC-16** | Product Mismatch Detection & Escalation | Customer request product conflicts with ordered item (e.g. camera for fitness watch) | `ORD-1008` | `escalate` / `escalated` (`policy_status: "ambiguous"`) |
+| **TC-16** | Product Mismatch Customer Clarification | Item mismatch routes to customer inquiry email; resolves upon confirmation or escalates if 2 cycles exhausted | `ORD-1008` | `awaiting_clarification` -> `completed` (or `escalate`) |
 
 ---
 
@@ -404,27 +408,58 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
 ---
 
 ### TC-11: Multimodal Vision Inspection of Customer Damage Photo
-- **Endpoint**: `POST /refunds` followed by `POST /refunds/{refund_id}/evidence`
-- **Goal**: When a claim is categorized as `damaged` and an image is attached, verify that deterministic pass is bypassed and the multimodal Bedrock agent inspects image bytes for visible damage.
+- **Endpoint**: `POST /refunds` $\rightarrow$ `GET /refunds/{refund_id}` $\rightarrow$ `POST /refunds/{refund_id}/clarify` (with image) $\rightarrow$ `GET /refunds/{refund_id}`
+- **Goal**: When a claim is categorized as `damaged`, verify that automated approval without evidence is strictly blocked. The system pauses at `status: "awaiting_clarification"` to demand photo proof. Once the customer attaches a valid image, the multimodal Bedrock agent inspects the photo bytes to verify visible damage before approving.
 - **Multimodal Evaluation Behavior**:
-  - The multimodal vision agent reads the uploaded image content bytes directly and checks if the photo confirms the reported damage.
-  - If damage is clearly identified and matches the claim, it proceeds directly to approval.
-  - If the model is uncertain or the image does not show identifiable damage (low confidence), it routes the request to `status: "escalated"` for supervisor review.
-- **Step 1 (`POST /refunds`)**:
+  - **No Evidence Attached**: Policy evaluation returns `policy_status: "ambiguous"` with `failed_rules: ["physical_damage_verification"]`. The workflow pauses in `awaiting_clarification` and sends a clarification email requesting photos of the damaged merchandise and packaging.
+  - **Damage Verified in Image**: The multimodal vision agent inspects the uploaded image bytes. If physical damage matching the claim is identified on the product, it auto-approves (`decision: "auto_approve"`, `status: "completed"`).
+  - **Intact Product / No Damage**: If the photo clearly shows an intact, undamaged product, the request is denied (`decision: "deny"`).
+  - **Inconclusive / Corrupted**: If the image is blurry, corrupted, or inconclusive, the claim is escalated (`status: "escalated"`).
+
+#### Step 1: Initial Submission Without Photo Proof
+- **Action**: Submit a damaged claim without attaching an evidence file via `POST /refunds`:
   ```json
   {
     "order_id": "ORD-1001",
     "customer_request_text": "The chair arrived broken with cracked plastic framing."
   }
   ```
-  *(Copy returned `refund_id`)*.
-- **Step 2 (`POST /refunds/{refund_id}/evidence`)**:
-  - Upload a photo depicting visible product damage.
-- **Step 3 (`GET /refunds/{refund_id}`)**:
+- **Expected Status**: `202 Accepted` *(copy returned `refund_id`)*.
+
+#### Step 2: Verification of Mandatory Proof Clarification Pause
+- **Action**: Wait 2–3 seconds and execute `GET /refunds/{refund_id}`.
+- **Expected Status**: `200 OK`
+- **Expected Output**:
+  - `status`: `"awaiting_clarification"` *(Note: Auto-approval is blocked; photo evidence is required)*
+  - `decision`: `null`
+  - `clarification_count`: `1`
+  - `failed_rules`: `["physical_damage_verification"]`
+  - `clarification_prompt`: Non-null customer inquiry email stating:
+    - Informs customer that claims for damaged items require photo evidence of both the damaged merchandise and exterior shipping packaging.
+    - Specifies supported file formats (JPEG, PNG, WebP ≤ 5MB).
+
+#### Step 3: Customer Uploads Damage Photo Proof
+- **Option A (Interactive Clarification with File in Swagger UI)**:
+  1. Expand `POST /refunds/{refund_id}/clarify`.
+  2. Select `multipart/form-data` from the Request body media type dropdown.
+  3. Enter `refund_id`.
+  4. Under `response_text`, enter: `"Attached photo showing the cracked chair armrest and frame."`.
+  5. Under `evidence_file`, select a valid image depicting damage (`damaged_chair.png`, ≤ 5MB).
+  6. Click **Execute**.
+- **Option B (Separate Upload via `/evidence`)**:
+  1. Upload the image file via `POST /refunds/{refund_id}/evidence`.
+  2. Call `POST /refunds/{refund_id}/clarify` with `{"response_text": "I have uploaded the requested damage photo."}`.
+- **Expected Status**: `200 OK` (`status: "pending"`).
+
+#### Step 4: Final Multimodal Inspection & Verification
+- **Action**: Wait 3–4 seconds for Bedrock vision agent processing, then execute `GET /refunds/{refund_id}`.
+- **Expected Status**: `200 OK`
+- **Expected Output**:
   - `status`: `"completed"`
   - `decision`: `"auto_approve"`
-  - `reasoning`: Explicitly confirms physical damage observed in proof photo.
-  - `approval_email_text`: RMA generated with return instructions.
+  - `reasoning`: Explicitly confirms physical damage verified from customer photo proof (e.g. `"Physical damage observed in uploaded evidence matching customer claim; policy rules satisfied."`).
+  - `approval_email_text`: Populated with RMA number (`RMA-1001-...`) and return instructions.
+  - `evidence`: Array contains the uploaded damage photo metadata.
 
 ---
 
@@ -527,36 +562,57 @@ Verify robust HTTP error responses across inputs, formats, and file restrictions
 
 ---
 
-### TC-16: Product Mismatch Detection & Escalation
-- **Endpoint**: `POST /refunds` followed by polling `GET /refunds/{refund_id}`
-- **Goal**: Verify that when a customer refund request explicitly describes a product conflicting with the item recorded in the order database (e.g., claiming a refund for an "OLED gaming monitor" or "mirrorless camera" when order `ORD-1008` is actually for a "Smart Fitness Watch"), the system detects the discrepancy. Automated approval is overridden, and the request is routed to `policy_status: "ambiguous"` and `status: "escalated"` (`decision: "escalate"`) for human supervisor review.
-- **Step 1 (`POST /refunds`) Input**:
+### TC-16: Product Mismatch Detection & Customer Clarification
+- **Endpoint**: `POST /refunds` $\rightarrow$ `GET /refunds/{refund_id}` $\rightarrow$ `POST /refunds/{refund_id}/clarify` $\rightarrow$ `GET /refunds/{refund_id}`
+- **Goal**: Verify that when a customer refund request explicitly describes a product conflicting with the item recorded in the order database (e.g., claiming a refund for a "mirrorless camera" when order `ORD-1008` is actually for a "Smart Fitness Watch"), the system detects the discrepancy. Rather than escalating immediately to a human supervisor, the system routes to `status: "awaiting_clarification"` (`clarification_count < 2`) and automatically generates a polite customer inquiry email asking the customer to clarify whether they are claiming for the item on their order or entered an incorrect order number.
+- **Workflow Routing Behavior**:
+  - **First Pass (Mismatch Detected, `clarification_count < 2`)**: Policy Checker flags `failed_rules: ["product_mismatch"]` and sets `policy_status: "ambiguous"`. Graph routes to `clarification_node`, which crafts an inquiry email pointing out the discrepancy and asking for clarification. Status pauses at `awaiting_clarification`.
+  - **Customer Resolves Item**: Customer replies via `POST /refunds/{refund_id}/clarify` confirming the ordered item. Workflow resumes, policy evaluates without mismatch, and request proceeds to approval (`completed`).
+  - **Persistent Mismatch (Exhaustion)**: If the customer repeats the conflicting product description across 2 clarification cycles (`clarification_count >= 2`), the workflow escalates to `status: "escalated"` (`decision: "escalate"`) for human supervisor review.
+
+#### Step 1: Initial Submission with Item Discrepancy
+- **Action**: Submit a refund request with a mismatched product via `POST /refunds`:
   ```json
   {
     "order_id": "ORD-1008",
     "customer_request_text": "I ordered this mirrorless camera but received the wrong lens bundle. I would like to return it for a refund."
   }
   ```
-- **Step 1 Expected Output**: `202 Accepted`
+- **Expected Status**: `202 Accepted` *(copy returned `refund_id`)*.
+
+#### Step 2: Verification of Customer Clarification Pause
+- **Action**: Wait 2–3 seconds and execute `GET /refunds/{refund_id}`.
+- **Expected Status**: `200 OK`
+- **Expected Output**:
+  - `status`: `"awaiting_clarification"` *(Note: Does NOT escalate immediately; asks customer to clear it up)*
+  - `decision`: `null`
+  - `policy_status`: `"ambiguous"`
+  - `failed_rules`: `["product_mismatch"]`
+  - `clarification_count`: `1`
+  - `reasoning`: Explicitly identifies the product conflict (e.g. `"Customer request describes 'camera' which does not match ordered item 'Smart Fitness Watch'"`).
+  - `clarification_prompt`: Formatted customer inquiry email:
+    - References order `ORD-1008` and the ordered item (*Smart Fitness Watch*).
+    - Asks whether the refund is intended for the Smart Fitness Watch or if an incorrect order number was entered.
+
+#### Step 3: Customer Clarifies and Resolves Mismatch
+- **Action**: In Swagger UI, expand `POST /refunds/{refund_id}/clarify` and submit:
   ```json
   {
-    "refund_id": "ref_...",
-    "order_id": "ORD-1008",
-    "status": "pending",
-    "created_at": "..."
+    "response_text": "Apologies for the mix-up! I was referencing order ORD-1008 for my Smart Fitness Watch, which stopped charging."
   }
   ```
-- **Step 2 Verification (`GET /refunds/{refund_id}`)**:
-  - Wait 2–3 seconds for the agent evaluation.
-  - **Expected Status**: `200 OK`
-  - **Expected Fields**:
-    - `status`: `"escalated"`
-    - `decision`: `"escalate"`
-    - `policy_status`: `"ambiguous"`
-    - `reasoning`: Explicitly identifies the product conflict (e.g. `"Customer request describes 'camera' which does not match ordered item 'Smart Fitness Watch'"`).
-    - `approval_email_text`: `null`
-    - `denial_email_text`: `null`
-- **Expected Edge-Case Behaviors**:
-  - **Generic Phrasing Passes**: Generic phrasing (e.g. *"The item arrived damaged"*, *"My package was crushed"*, *"The product is defective"*) is treated neutrally and does NOT trigger a mismatch.
-  - **Partial/Colloquial Names Pass**: Partial titles (e.g. *"the fitness watch strap broke"*, *"chair armrest snapped"*) correctly match and proceed with standard policy evaluation.
+- **Expected Status**: `200 OK` (`status: "pending"`).
+
+#### Step 4: Final Evaluation Verification
+- **Action**: Wait 2–3 seconds and execute `GET /refunds/{refund_id}`.
+- **Expected Status**: `200 OK`
+- **Expected Output**:
+  - `status`: `"completed"`
+  - `decision`: `"auto_approve"`
+  - `approval_email_text`: Populated with RMA number and return instructions for `ORD-1008`.
+
+#### Expected Edge-Case Behaviors
+- **Generic Phrasing Passes**: Generic phrasing (e.g. *"The item arrived defective"*, *"Package was damaged in transit"*, *"I would like to return my order"*) does NOT trigger a mismatch.
+- **Partial/Colloquial Names Pass**: Partial titles (e.g. *"the fitness watch strap broke"*, *"chair armrest snapped"*) correctly match the catalog and proceed with standard policy evaluation without clarification pause.
+- **Clarification Exhaustion**: Submitting two consecutive responses that both maintain the product mismatch exhausts the 2-cycle threshold, routing to `decision: "escalate"`, `status: "escalated"`.
 
