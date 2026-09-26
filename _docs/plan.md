@@ -351,4 +351,27 @@ This section records formal design decisions and business rule refinements adopt
 - **Clarification Routing**: Discrepancies prompt customer clarification to confirm which item from the order is being claimed for, preventing unintended auto-approvals.
 
 ### 15.8 Strict Input Validation Boundaries
-- **Order ID Format**: Enforced strict regex format validation `^ORD-\d{4}$` across all API request models, rejecting lowercase prefixes (`ord-1001`), incorrect prefixes (`INV-1001`), or invalid digit counts with `HTTP 422 Unprocessable Entity`.
+- **Order ID Format**: Enforced strict regex format validation `^ORD-\d{4}$` across all API request models, rejecting lowercase prefixes (`ord-1001`), incorrect prefixes (`INV-1001`), or invalid digit counts with `HTTP 422 Unprocessable Entity`.
+
+### 15.9 Mandatory Damage Proof Precedence over Order Amount Escalation
+- **Proof-First Evaluation Order**: For `category == "damaged"`, the check for attached photo evidence strictly precedes the `max_order_amount` threshold check.
+- **Queue Protection**: If a high-value damaged item claim lacks photos, it pauses in `status: "awaiting_clarification"` to collect customer photo proof rather than escalating directly to human supervisors. Only after photo evidence is attached is the amount threshold evaluated for supervisor escalation.
+
+### 15.10 Automatic Background Workflow Resumption on Evidence Upload
+- **Zero-Friction Customer Experience**: Calling `POST /refunds/{refund_id}/evidence` on a refund in `status: "awaiting_clarification"` automatically enqueues background workflow execution (`resume_refund_workflow`) via FastAPI `BackgroundTasks`.
+- **Status Transition**: Immediately updates status to `"pending"` and resumes Bedrock evaluation without requiring the customer to submit a separate text call to `POST /refunds/{refund_id}/clarify`.
+
+### 15.11 Mandatory Photo Proof for Wrong Item Category Claims
+- **Proof Requirement**: Similar to physical damage claims, `category == "wrong_item"` claims unconditionally require photo proof before evaluation.
+- **Clarification Routing**: Claims submitted without photos pause in `status: "awaiting_clarification"` with `failed_rules: ["wrong_item_verification"]`, prompting the customer for clear photos of the incorrect item received along with the shipping label or packing slip.
+
+### 15.12 Structured Clarification History Audit Trail
+- **Audit Logging**: Added `clarification_history: list[ClarificationTurn]` to `RefundRecord` and API response schemas.
+- **Turn Immutability**: Each clarification cycle or supervisor proof inquiry appends a structured record containing `cycle`, `prompt`, `response`, `timestamp`, and `evidence_ids`, preserving the complete multi-turn audit trail across all clarification interactions.
+
+### 15.13 Multimodal Bedrock Vision Verification for Wrong Item Claims
+- **Visual Discrepancy Inspection**: When customer photo evidence is attached to a `wrong_item` claim, Policy Checker invokes multimodal Bedrock vision to compare the received item appearance, model, packaging, and shipping label against the ordered product specifications.
+- **Tri-State Resolution**:
+  - Distinct incorrect item verified -> `policy_status: "pass"` (auto-approved, or escalated if amount limits apply).
+  - Depiction of correct ordered item -> `policy_status: "fail"` (denied with refutation reasoning).
+  - Blurry, unrecognizable, or inconclusive evidence -> `policy_status: "ambiguous"` (escalated for human supervisor review).
