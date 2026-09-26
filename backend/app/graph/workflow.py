@@ -50,11 +50,13 @@ def route_classifier(state: RefundWorkflowState) -> str:
 def route_policy_check(state: RefundWorkflowState) -> str:
     """Conditional router following policy checking.
 
-    When category == "damaged" and policy_status == "ambiguous" with
-    "physical_damage_verification" in failed_rules:
-    - Returns 'clarification' if clarification_count < 2.
-    - Returns 'decision' if clarification_count >= 2 (escalating directly to supervisor review).
-    Otherwise returns 'decision'.
+    - When missing_order_data is True, returns 'decision'.
+    - When a product mismatch is detected ("product_mismatch" in failed_rules or is_product_mismatch):
+      Returns 'clarification' if clarification_count < 2, else 'decision'.
+    - When category == "damaged" and policy_status == "ambiguous" with
+      "physical_damage_verification" in failed_rules:
+      Returns 'clarification' if clarification_count < 2, else 'decision'.
+    - Otherwise returns 'decision'.
     """
     if state.get("missing_order_data"):
         return "decision"
@@ -62,6 +64,26 @@ def route_policy_check(state: RefundWorkflowState) -> str:
     category = state.get("category")
     policy_status = state.get("policy_status")
     failed_rules = state.get("failed_rules") or []
+    policy_reasoning = state.get("policy_reasoning") or ""
+
+    is_product_mismatch = (
+        "product_mismatch" in failed_rules
+        or (
+            policy_status == "ambiguous"
+            and (
+                "product mismatch" in policy_reasoning.lower()
+                or "mismatched product" in policy_reasoning.lower()
+            )
+        )
+    )
+
+    if is_product_mismatch:
+        count = state.get("clarification_count")
+        if count is None:
+            count = 0
+        if count < 2:
+            return "clarification"
+        return "decision"
 
     if (
         category == "damaged"

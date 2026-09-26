@@ -15,7 +15,7 @@ from app.graph.nodes import (
     set_current_repository,
 )
 from app.agents.clarification import ClarificationOutput
-from app.graph.runner import run_refund_workflow
+from app.graph.runner import resume_refund_workflow, run_refund_workflow
 from app.graph.workflow import build_refund_graph, route_classifier
 from app.schemas.classifier import ClassificationOutput
 from app.schemas.policy_checker import PolicyCheckerOutput
@@ -1127,13 +1127,13 @@ async def test_workflow_with_initial_evidence_immediately_provides_evidence_to_p
 
 
 @pytest.mark.asyncio
-async def test_workflow_explicit_product_mismatch_escalates():
-    """Verify that a workflow execution for an otherwise eligible order with an explicit product mismatch transitions to status 'escalated' and decision 'escalate'."""
-    # ORD-1008 is Smart Fitness Watch ($99, delivered recent order, normally auto-approved)
+async def test_workflow_explicit_product_mismatch_pauses_for_clarification():
+    """AC: A refund request with an explicit product mismatch and clarification_count == 0 routes to clarification and pauses at status 'awaiting_clarification' with clarification_count == 1."""
+    # ORD-1008 is Smart Fitness Watch ($99, delivered recent order)
     mock_classification = ClassificationOutput(
-        category="damaged",
+        category="wrong_item",
         confidence_score=0.95,
-        reasoning="Customer reported damaged item with high confidence.",
+        reasoning="Customer reported wrong item with high confidence.",
     )
     mock_classifier_llm = make_mock_llm(mock_classification)
     checkpointer = MemorySaver()
@@ -1141,18 +1141,101 @@ async def test_workflow_explicit_product_mismatch_escalates():
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm)
 
-        final_state = await run_refund_workflow(
-            refund_id="ref_test_product_mismatch",
+        paused_state = await run_refund_workflow(
+            refund_id="ref_test_product_mismatch_pause",
             order_id="ORD-1008",
             customer_request_text="I want a refund for the OLED gaming monitor, the screen is cracked.",
             checkpointer=checkpointer,
         )
 
-    assert final_state["decision"] == "escalate"
+    assert paused_state["status"] == "awaiting_clarification"
+    assert paused_state["needs_clarification"] is True
+    assert paused_state["clarification_count"] == 1
+    assert paused_state.get("decision") is None
+    assert "Smart Fitness Watch" in paused_state["clarification_prompt"]
+    assert "order number" in paused_state["clarification_prompt"].lower() or "clarify" in paused_state["clarification_prompt"].lower()
+
+
+@pytest.mark.asyncio
+async def test_workflow_explicit_product_mismatch_resumes_upon_resolution():
+    """AC: Submitting a clarifying customer response resolving the product mismatch resumes the workflow to normal policy evaluation and completion."""
+    mock_classification_1 = ClassificationOutput(
+        category="wrong_item",
+        confidence_score=0.95,
+        reasoning="Customer reported mismatch with high confidence.",
+    )
+    mock_classifier_llm_1 = make_mock_llm(mock_classification_1)
+    checkpointer = MemorySaver()
+
+    # Step 1: initial run pauses at awaiting_clarification due to mismatch
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm_1)
+
+        paused_state = await run_refund_workflow(
+            refund_id="ref_test_product_mismatch_resume",
+            order_id="ORD-1008",
+            customer_request_text="I want a refund for the OLED gaming monitor, the screen is cracked.",
+            checkpointer=checkpointer,
+        )
+
+    assert paused_state["status"] == "awaiting_clarification"
+    assert paused_state["clarification_count"] == 1
+
+    # Step 2: customer clarifies resolving product mismatch to the ordered item
+    mock_classification_2 = ClassificationOutput(
+        category="wrong_item",
+        confidence_score=0.95,
+        reasoning="Customer confirmed wrong fitness watch received.",
+    )
+    mock_classifier_llm_2 = make_mock_llm(mock_classification_2)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm_2)
+
+        resumed_state = await resume_refund_workflow(
+            refund_id="ref_test_product_mismatch_resume",
+            response_text="I made an error in my initial description; I actually received the wrong color Smart Fitness Watch.",
+            order_id="ORD-1008",
+            checkpointer=checkpointer,
+        )
+
+    assert resumed_state["status"] == "completed"
+    assert resumed_state["decision"] == "auto_approve"
+    assert resumed_state["policy_status"] == "pass"
+
+
+@pytest.mark.asyncio
+async def test_workflow_explicit_product_mismatch_exhausting_clarifications_escalates():
+    """AC: A product mismatch with clarification_count >= 2 routes directly to decision 'escalate' and status 'escalated'."""
+    # Run with clarification_count already at 2
+    mock_classification = ClassificationOutput(
+        category="wrong_item",
+        confidence_score=0.95,
+        reasoning="Customer reported wrong item with high confidence.",
+    )
+    mock_classifier_llm = make_mock_llm(mock_classification)
+    checkpointer = MemorySaver()
+
+    # Seed state in checkpointer with clarification_count = 2
+    initial_state = {
+        "refund_id": "ref_test_product_mismatch_exhausted",
+        "order_id": "ORD-1008",
+        "customer_request_text": "I definitely want a refund for the OLED gaming monitor.",
+        "clarification_count": 2,
+    }
+
+    graph = build_refund_graph(checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": "ref_test_product_mismatch_exhausted"}}
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_classifier_llm)
+
+        final_state = await graph.ainvoke(initial_state, config=config)
+
     assert final_state["status"] == "escalated"
-    assert final_state["policy_status"] == "ambiguous"
-    assert "product mismatch" in final_state["policy_reasoning"].lower()
+    assert final_state["decision"] == "escalate"
     assert "product mismatch" in final_state["reasoning"].lower()
+    assert "not resolved" in final_state["reasoning"].lower() or "was not resolved" in final_state["reasoning"].lower()
 
 
 @pytest.mark.asyncio

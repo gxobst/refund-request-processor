@@ -998,8 +998,8 @@ async def test_e2e_reviewer_proof_request_and_clarification_resumption(
 
 
 @pytest.mark.asyncio
-async def test_e2e_product_mismatch_escalates(mock_repo: RefundRepository):
-    """Verify submitting a refund request for an order with conflicting product description results in status 'escalated', decision 'escalate', and mismatch reasoning."""
+async def test_e2e_product_mismatch_pauses_and_resolves_upon_clarification(mock_repo: RefundRepository):
+    """AC: Submitting a refund request with conflicting item text initially pauses in awaiting_clarification, customer response confirming the correct item resumes the graph, and refund reaches completed."""
     payload = {
         "order_id": "ORD-1008",
         "customer_request_text": "I am requesting a full refund because the mirrorless camera arrived with a shattered lens.",
@@ -1007,29 +1007,80 @@ async def test_e2e_product_mismatch_escalates(mock_repo: RefundRepository):
     transport = ASGITransport(app=app)
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # Step 1: Submit intake request
+        # Step 1: Submit intake request with conflicting item text
         post_res = await client.post("/refunds", json=payload)
         assert post_res.status_code == 202
         refund_id = post_res.json()["refund_id"]
 
-        # Step 2: Poll status until workflow execution completes
+        # Step 2: Poll status until workflow pauses at awaiting_clarification
+        paused_record = await poll_until_not_pending(client, refund_id)
+        assert paused_record["status"] == "awaiting_clarification"
+        assert paused_record["clarification_count"] == 1
+        assert paused_record["decision"] is None
+        prompt = paused_record.get("clarification_prompt", "")
+        assert "Smart Fitness Watch" in prompt
+        assert "clarify" in prompt.lower() or "order number" in prompt.lower()
+
+        # Step 3: Customer submits clarification confirming the correct ordered item
+        clarify_payload = {
+            "response_text": "I received the wrong item in my package, an incorrect Smart Fitness Watch model.",
+        }
+        clarify_res = await client.post(
+            f"/refunds/{refund_id}/clarify", json=clarify_payload
+        )
+        assert clarify_res.status_code == 200
+
+        # Step 4: Background workflow resumes, product mismatch is resolved, reaches completed
+        final_record = await poll_until_not_pending(client, refund_id)
+        assert final_record["status"] == "completed"
+        assert final_record["decision"] == "auto_approve"
+        assert final_record["clarification_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_e2e_product_mismatch_repeated_clarifications_exhaust_and_escalate(mock_repo: RefundRepository):
+    """AC: Repeated product mismatch responses exhausting 2 clarification cycles transition to status 'escalated' and decision 'escalate'."""
+    payload = {
+        "order_id": "ORD-1008",
+        "customer_request_text": "I am requesting a full refund because the mirrorless camera arrived with a shattered lens.",
+    }
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Step 1: Initial intake pauses at awaiting_clarification (cycle 1)
+        post_res = await client.post("/refunds", json=payload)
+        assert post_res.status_code == 202
+        refund_id = post_res.json()["refund_id"]
+
+        clarify_1 = await poll_until_not_pending(client, refund_id)
+        assert clarify_1["status"] == "awaiting_clarification"
+        assert clarify_1["clarification_count"] == 1
+
+        # Step 2: Customer provides still-conflicting clarification (cycle 2)
+        res1 = await client.post(
+            f"/refunds/{refund_id}/clarify",
+            json={"response_text": "I received the wrong item, definitely a mirrorless camera in the box."},
+        )
+        assert res1.status_code == 200
+
+        clarify_2 = await poll_until_not_pending(client, refund_id)
+        assert clarify_2["status"] == "awaiting_clarification"
+        assert clarify_2["clarification_count"] == 2
+
+        # Step 3: Customer clarifies a second time with persistent mismatch (exhausts 2 attempts, routes to decision)
+        res2 = await client.post(
+            f"/refunds/{refund_id}/clarify",
+            json={"response_text": "Still claiming the wrong item mirrorless camera, definitely a camera."},
+        )
+        assert res2.status_code == 200
+
         final_record = await poll_until_not_pending(client, refund_id)
 
-        # Step 3: Direct GET endpoint inspection
-        get_res = await client.get(f"/refunds/{refund_id}")
-        assert get_res.status_code == 200
-        get_record = get_res.json()
-
-    # Assert: escalated status and decision with product mismatch explanation
+    # Assert: escalated after max clarification cycles exhausted
     assert final_record["status"] == "escalated"
     assert final_record["decision"] == "escalate"
     assert "product mismatch" in final_record["reasoning"].lower()
-    assert "mirrorless camera" in final_record["reasoning"].lower()
-    assert "smart fitness watch" in final_record["reasoning"].lower()
-
-    assert get_record["status"] == "escalated"
-    assert get_record["decision"] == "escalate"
-    assert "product mismatch" in get_record["reasoning"].lower()
+    assert "not resolved" in final_record["reasoning"].lower() or "was not resolved" in final_record["reasoning"].lower()
 
 
 @pytest.mark.asyncio

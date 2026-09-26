@@ -149,9 +149,31 @@ def clarification_node(state: dict[str, Any]) -> dict[str, Any]:
     customer_text = state.get("customer_request_text", "")
     category = state.get("category")
     order = state.get("order")
+    policy_reasoning = state.get("policy_reasoning") or ""
+    policy_status = state.get("policy_status")
     failed_rules = state.get("failed_rules") or []
 
-    if category == "damaged" and "physical_damage_verification" in failed_rules:
+    is_product_mismatch = (
+        "product_mismatch" in failed_rules
+        or (
+            policy_status == "ambiguous"
+            and (
+                "product mismatch" in policy_reasoning.lower()
+                or "mismatched product" in policy_reasoning.lower()
+            )
+        )
+    )
+
+    if is_product_mismatch:
+        output = generate_clarification_prompt(
+            customer_request_text=customer_text,
+            category=category,
+            order=order,
+            is_product_mismatch=True,
+            mismatch_reason=policy_reasoning,
+        )
+        prompt = output.clarification_prompt
+    elif category == "damaged" and "physical_damage_verification" in failed_rules:
         order_id = state.get("order_id") or (order.get("order_id") if order else "")
         order_str = f" for order {order_id}" if order_id else ""
         prompt = (
@@ -182,7 +204,7 @@ def clarification_node(state: dict[str, Any]) -> dict[str, Any]:
         confidence_to_persist = state.get("classification_confidence")
     reasoning_to_persist = state.get("reasoning")
     if reasoning_to_persist is None:
-        reasoning_to_persist = state.get("classification_reasoning")
+        reasoning_to_persist = state.get("policy_reasoning") or state.get("classification_reasoning")
 
     if refund_id:
         repo = get_current_repository() or state.get("_repository")
@@ -234,10 +256,17 @@ def policy_checker_node(state: dict[str, Any]) -> dict[str, Any]:
 def decision_node(state: dict[str, Any]) -> dict[str, Any]:
     """Synthesize findings into final approval, denial, or escalation decision."""
     policy_status = state.get("policy_status")
-    policy_reasoning = state.get("policy_reasoning", "")
+    policy_reasoning = state.get("policy_reasoning") or ""
+    failed_rules = state.get("failed_rules") or []
     is_product_mismatch = (
-        policy_status == "ambiguous"
-        and ("product mismatch" in (policy_reasoning or "").lower() or "mismatched product" in (policy_reasoning or "").lower())
+        "product_mismatch" in failed_rules
+        or (
+            policy_status == "ambiguous"
+            and (
+                "product mismatch" in policy_reasoning.lower()
+                or "mismatched product" in policy_reasoning.lower()
+            )
+        )
     )
 
     res = agent_decision_node(state)
@@ -245,8 +274,15 @@ def decision_node(state: dict[str, Any]) -> dict[str, Any]:
     if is_product_mismatch:
         res["decision"] = "escalate"
         res["status"] = "escalated"
-        reason = policy_reasoning or "Product mismatch between customer request and ordered item requires supervisor review."
-        res["reasoning"] = f"Escalated to human review due to policy ambiguity: {reason}"
+        count = state.get("clarification_count") or 0
+        if count >= 2:
+            res["reasoning"] = (
+                f"Product mismatch between customer request and ordered item was not resolved "
+                f"after {count} clarification attempts. Escalated for supervisor review."
+            )
+        else:
+            reason = policy_reasoning or "Product mismatch between customer request and ordered item requires supervisor review."
+            res["reasoning"] = f"Escalated to human review due to policy ambiguity: {reason}"
 
     decision = res.get("decision")
     if decision == "auto_approve":

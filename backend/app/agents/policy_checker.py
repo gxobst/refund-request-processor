@@ -539,7 +539,7 @@ def check_policy(
                 policy_status="ambiguous",
                 matched_policy_rule=eval_result.matched_policy_rule,
                 passed_rules=eval_result.passed_rules,
-                failed_rules=eval_result.failed_rules,
+                failed_rules=["product_mismatch"],
                 policy_reasoning=mismatch_reason,
                 tool_calls=[],
             )

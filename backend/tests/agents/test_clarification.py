@@ -469,3 +469,52 @@ def test_clarification_node_stores_full_email_in_state_and_invokes_repo():
     finally:
         set_current_repository(None)
 
+
+def test_generate_clarification_prompt_product_mismatch_generates_email_referencing_ordered_item():
+    """AC: Unit test asserts generate_clarification_prompt with a product mismatch context generates a customer email explicitly referencing the ordered item and asking for clarification."""
+    order = {"order_id": "ORD-1008", "item": "Smart Fitness Watch"}
+    customer_text = "I am requesting a full refund because the mirrorless camera arrived with a shattered lens."
+
+    # 1. Test with mocked LLM receiving product mismatch context
+    mock_email = (
+        "Dear Customer,\n\n"
+        "Thank you for reaching out regarding order ORD-1008.\n\n"
+        "We noticed your refund request references a mirrorless camera, but our records show this order was for a Smart Fitness Watch. "
+        "Could you please clarify whether you are requesting a refund for the Smart Fitness Watch, or if you may have entered an incorrect order number?\n\n"
+        "Sincerely,\nCustomer Support Team"
+    )
+    expected_output = ClarificationOutput(
+        clarification_prompt=mock_email,
+        missing_aspects=["product_confirmation", "order_number_verification"],
+        reasoning="Product mismatch detected between customer request and ordered item.",
+    )
+    mock_llm = make_mock_clarification_llm(expected_output)
+
+    result = generate_clarification_prompt(
+        customer_request_text=customer_text,
+        order=order,
+        llm=mock_llm,
+        is_product_mismatch=True,
+        mismatch_reason="Customer claimed camera for Smart Fitness Watch order.",
+    )
+
+    assert isinstance(result, ClarificationOutput)
+    assert "Smart Fitness Watch" in result.clarification_prompt
+    assert "clarify" in result.clarification_prompt.lower()
+    assert "order number" in result.clarification_prompt.lower() or "incorrect order number" in result.clarification_prompt.lower()
+    assert "product_confirmation" in result.missing_aspects
+
+    # 2. Test fallback deterministic generation without LLM
+    fallback_result = generate_clarification_prompt(
+        customer_request_text=customer_text,
+        order=order,
+        llm=None,
+        is_product_mismatch=True,
+        mismatch_reason="Customer claimed camera for Smart Fitness Watch order.",
+    )
+    assert isinstance(fallback_result, ClarificationOutput)
+    assert "Smart Fitness Watch" in fallback_result.clarification_prompt
+    assert "clarify" in fallback_result.clarification_prompt.lower()
+    assert "incorrect order number" in fallback_result.clarification_prompt.lower()
+
+
