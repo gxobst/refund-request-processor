@@ -368,6 +368,7 @@ EVIDENCE_UPLOAD_OPENAPI_EXTRA: dict[str, Any] = {
 async def upload_refund_evidence(
     refund_id: str,
     request: Request,
+    background_tasks: BackgroundTasks,
     repo: RefundRepository = Depends(get_repository),
     storage_service: EvidenceStorageService = Depends(get_evidence_storage_service),
 ) -> RefundRecord:
@@ -433,6 +434,21 @@ async def upload_refund_evidence(
         refund_id=refund_id,
         evidence_item=saved_meta,
     )
+
+    if record.status == "awaiting_clarification":
+        response_text = f"Uploaded evidence file: {filename}"
+        updated = repo.submit_clarification_response(
+            refund_id=refund_id,
+            clarification_response=response_text,
+        )
+        background_tasks.add_task(
+            resume_refund_workflow,
+            refund_id=record.refund_id,
+            response_text=response_text,
+            evidence=[saved_meta],
+            repository=repo,
+        )
+
     return updated
 
 

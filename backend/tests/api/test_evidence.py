@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from typing import Any
+from unittest.mock import AsyncMock, patch
 from httpx import ASGITransport, AsyncClient
 import pytest
 
@@ -38,6 +39,23 @@ class MockRefundRepository:
 
     def get_refund_request(self, refund_id: str) -> RefundRecord | None:
         return self.records.get(refund_id)
+
+    def submit_clarification_response(
+        self, refund_id: str, clarification_response: str
+    ) -> RefundRecord:
+        record = self.records.get(refund_id)
+        if record is None:
+            raise RefundNotFoundError(f"Refund request '{refund_id}' not found.")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        updated = record.model_copy(
+            update={
+                "status": "pending",
+                "clarification_response": clarification_response,
+                "updated_at": now_iso,
+            }
+        )
+        self.records[refund_id] = updated
+        return updated
 
     def add_evidence(
         self, refund_id: str, evidence_item: EvidenceItem | dict[str, Any]
@@ -298,5 +316,131 @@ async def test_upload_evidence_mixed_case_webkit_boundary(mock_repo: MockRefundR
     assert len(record.evidence) == 1
     assert record.evidence[0].filename == "screen.png"
     assert record.evidence[0].content_type == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_upload_evidence_awaiting_clarification_queues_workflow_and_sets_pending(
+    mock_repo: MockRefundRepository,
+):
+    """AC: Uploading evidence on status 'awaiting_clarification' queues resume_refund_workflow and transitions status to 'pending'."""
+    refund_id = "ref-evidence-resume"
+    mock_repo.seed_record(
+        refund_id=refund_id,
+        order_id="ORD-3001",
+        status="awaiting_clarification",
+        customer_request_text="Damaged monitor on arrival",
+    )
+    transport = ASGITransport(app=app)
+
+    with patch("app.api.refunds.resume_refund_workflow", new_callable=AsyncMock) as mock_resume:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                f"/refunds/{refund_id}/evidence",
+                files={"file": ("damaged_monitor.png", b"image-png-bytes", "image/png")},
+            )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["refund_id"] == refund_id
+    assert data["status"] == "pending"
+    assert data["clarification_response"] == "Uploaded evidence file: damaged_monitor.png"
+    assert len(data["evidence"]) == 1
+    assert data["evidence"][0]["filename"] == "damaged_monitor.png"
+
+    # Verify repository record
+    stored = mock_repo.get_refund_request(refund_id)
+    assert stored is not None
+    assert stored.status == "pending"
+    assert stored.clarification_response == "Uploaded evidence file: damaged_monitor.png"
+    assert len(stored.evidence) == 1
+
+    # Verify background task was queued with expected arguments
+    mock_resume.assert_called_once()
+    call_kwargs = mock_resume.call_args.kwargs
+    assert call_kwargs["refund_id"] == refund_id
+    assert call_kwargs["response_text"] == "Uploaded evidence file: damaged_monitor.png"
+    assert len(call_kwargs["evidence"]) == 1
+    assert call_kwargs["evidence"][0]["filename"] == "damaged_monitor.png"
+    assert call_kwargs["repository"] == mock_repo
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial_status", ["pending", "escalated"])
+async def test_upload_evidence_non_awaiting_clarification_does_not_queue_workflow(
+    mock_repo: MockRefundRepository, initial_status: str
+):
+    """AC: Uploading evidence on status other than 'awaiting_clarification' appends evidence but does NOT enqueue background task."""
+    refund_id = f"ref-evidence-{initial_status}"
+    mock_repo.seed_record(
+        refund_id=refund_id,
+        order_id="ORD-3002",
+        status=initial_status,
+        customer_request_text="Customer refund request",
+    )
+    transport = ASGITransport(app=app)
+
+    with patch("app.api.refunds.resume_refund_workflow", new_callable=AsyncMock) as mock_resume:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                f"/refunds/{refund_id}/evidence",
+                files={"file": ("extra_photo.jpg", b"jpeg-bytes", "image/jpeg")},
+            )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["status"] == initial_status
+    assert len(data["evidence"]) == 1
+    assert data["evidence"][0]["filename"] == "extra_photo.jpg"
+
+    # Verify background task was NOT queued
+    mock_resume.assert_not_called()
+
+    # Verify repo state
+    stored = mock_repo.get_refund_request(refund_id)
+    assert stored is not None
+    assert stored.status == initial_status
+    assert len(stored.evidence) == 1
+
+
+@pytest.mark.asyncio
+async def test_upload_evidence_validation_failures_never_enqueue_background_task(
+    mock_repo: MockRefundRepository,
+):
+    """AC: Validation failures (404, 400 disallowed ext, 413 oversized) never enqueue background tasks."""
+    refund_id = "ref-evidence-val"
+    mock_repo.seed_record(
+        refund_id=refund_id,
+        order_id="ORD-3003",
+        status="awaiting_clarification",
+    )
+    transport = ASGITransport(app=app)
+
+    with patch("app.api.refunds.resume_refund_workflow", new_callable=AsyncMock) as mock_resume:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # 1. 404 Not Found (non-existent refund_id)
+            res_404 = await client.post(
+                "/refunds/nonexistent-id/evidence",
+                files={"file": ("valid.png", b"bytes", "image/png")},
+            )
+            assert res_404.status_code == 404
+            mock_resume.assert_not_called()
+
+            # 2. 400 Bad Request (disallowed extension)
+            res_400 = await client.post(
+                f"/refunds/{refund_id}/evidence",
+                files={"file": ("document.pdf", b"bytes", "application/pdf")},
+            )
+            assert res_400.status_code == 400
+            mock_resume.assert_not_called()
+
+            # 3. 413 Payload Too Large (> 5MB)
+            oversized_bytes = b"x" * (5 * 1024 * 1024 + 1)
+            res_413 = await client.post(
+                f"/refunds/{refund_id}/evidence",
+                files={"file": ("huge.jpg", oversized_bytes, "image/jpeg")},
+            )
+            assert res_413.status_code == 413
+            mock_resume.assert_not_called()
+
 
 

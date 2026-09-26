@@ -962,30 +962,23 @@ async def test_e2e_reviewer_proof_request_and_clarification_resumption(
         assert "Supervisor Inquiry:" in proof_data["clarification_email_text"]
         assert "JPEG, PNG, or WebP" in proof_data["clarification_email_text"]
 
-        # Step 3: Customer uploads photo evidence via POST /refunds/{refund_id}/evidence
+        # Step 3: Customer submits clarification response with attached evidence via POST /refunds/{refund_id}/clarify
         file_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
-        evidence_res = await client.post(
-            f"/refunds/{refund_id}/evidence",
-            files={"file": ("cracked_screen.png", file_bytes, "image/png")},
-        )
-        assert evidence_res.status_code == 201
-        evidence_data = evidence_res.json()
-        assert len(evidence_data["evidence"]) == 1
-        assert evidence_data["evidence"][0]["filename"] == "cracked_screen.png"
-        assert evidence_data["evidence"][0]["content_type"] == "image/png"
-
-        # Step 4: Customer submits clarification response via POST /refunds/{refund_id}/clarify
         clarify_payload = {
             "response_text": "Here is the photo of the shattered screen as requested by the supervisor.",
         }
         clarify_res = await client.post(
-            f"/refunds/{refund_id}/clarify", json=clarify_payload
+            f"/refunds/{refund_id}/clarify",
+            data=clarify_payload,
+            files={"evidence_file": ("cracked_screen.png", file_bytes, "image/png")},
         )
         assert clarify_res.status_code == 200
         clarify_data = clarify_res.json()
         assert clarify_data["status"] == "pending"
         assert clarify_data["clarification_response"] == clarify_payload["response_text"]
         assert len(clarify_data["evidence"]) == 1
+        assert clarify_data["evidence"][0]["filename"] == "cracked_screen.png"
+        assert clarify_data["evidence"][0]["content_type"] == "image/png"
 
         # Step 5: Polling until workflow resumes and reaches final status
         resumed_record = await poll_until_not_pending(client, refund_id)
@@ -1128,6 +1121,7 @@ async def test_e2e_damaged_without_evidence_pauses_and_resumes_with_evidence(
         assert "packaging" in prompt.lower() or "damage" in prompt.lower()
 
         # Step 3: Customer uploads damage photo evidence via POST /refunds/{refund_id}/evidence
+        # This automatically resumes background workflow evaluation without calling /clarify
         file_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 32
         evidence_res = await client.post(
             f"/refunds/{refund_id}/evidence",
@@ -1136,22 +1130,15 @@ async def test_e2e_damaged_without_evidence_pauses_and_resumes_with_evidence(
         assert evidence_res.status_code == 201
         evidence_data = evidence_res.json()
         assert len(evidence_data["evidence"]) == 1
+        assert evidence_data["evidence"][0]["filename"] == "broken_chair.jpg"
 
-        # Step 4: Customer submits clarification response via POST /refunds/{refund_id}/clarify
-        clarify_payload = {
-            "response_text": "Here is the photo of the broken armrest and exterior shipping box.",
-        }
-        clarify_res = await client.post(
-            f"/refunds/{refund_id}/clarify", json=clarify_payload
-        )
-        assert clarify_res.status_code == 200
-
-        # Step 5: Background workflow resumes, multimodal inspection passes, reaches completed
+        # Step 4: Background workflow automatically resumed, multimodal inspection passes, reaches completed
         final_record = await poll_until_not_pending(client, refund_id)
         assert final_record["status"] == "completed"
         assert final_record["decision"] == "auto_approve"
         assert final_record["category"] == "damaged"
         assert len(final_record.get("evidence", [])) == 1
+        assert "broken_chair.jpg" in final_record.get("clarification_response", "")
 
     app.dependency_overrides.pop(get_evidence_storage_service, None)
 
@@ -1196,7 +1183,67 @@ async def test_e2e_high_value_damaged_pauses_for_photos_and_escalates_after_evid
         assert paused_record["clarification_count"] == 1
         assert "photo" in paused_record.get("clarification_prompt", "").lower()
 
-        # Step 3: Customer uploads photo evidence
+        # Step 3: Customer submits clarification with attached photo evidence
+        file_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+        clarify_res = await client.post(
+            f"/refunds/{refund_id}/clarify",
+            data={"response_text": "Here is the photo of the cracked gaming monitor screen."},
+            files={"evidence_file": ("cracked_monitor.jpg", file_bytes, "image/jpeg")},
+        )
+        assert clarify_res.status_code == 200
+
+        # Step 4: Workflow resumes, inspects photo, and escalates due to max_order_amount ($750 > $500)
+        final_record = await poll_until_not_pending(client, refund_id)
+        assert final_record["status"] == "escalated"
+        assert final_record["decision"] == "escalate"
+        assert "supervisor" in final_record.get("reasoning", "").lower()
+        assert len(final_record.get("evidence", [])) == 1
+        assert final_record["evidence"][0]["filename"] == "cracked_monitor.jpg"
+
+    app.dependency_overrides.pop(get_evidence_storage_service, None)
+
+
+@pytest.mark.asyncio
+async def test_e2e_high_value_damaged_evidence_upload_auto_resumes_and_escalates(
+    mock_repo: RefundRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """AC: Uploading evidence directly via POST /refunds/{refund_id}/evidence on a high-value damaged request automatically resumes workflow and escalates."""
+    storage_service = EvidenceStorageService(local_dir=tmp_path, storage_backend="local")
+    app.dependency_overrides[get_evidence_storage_service] = lambda: storage_service
+    monkeypatch.setattr("app.services.storage.get_evidence_storage_service", lambda: storage_service)
+
+    expected_policy_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses"],
+        failed_rules=[],
+        policy_reasoning="Multimodal model verified physical damage on monitor.",
+    )
+    mock_policy_llm = MockToolCallingModel(
+        responses=[], final_output=expected_policy_output
+    )
+    monkeypatch.setattr(
+        "app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm
+    )
+
+    payload = {
+        "order_id": "ORD-1003",
+        "customer_request_text": "The gaming monitor arrived damaged with a cracked screen.",
+    }
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Step 1: Submit high-value damage refund request without evidence
+        post_res = await client.post("/refunds", json=payload)
+        assert post_res.status_code == 202
+        refund_id = post_res.json()["refund_id"]
+
+        # Step 2: Poll status until workflow pauses at awaiting_clarification on cycle 1
+        paused_record = await poll_until_not_pending(client, refund_id)
+        assert paused_record["status"] == "awaiting_clarification"
+        assert paused_record["clarification_count"] == 1
+
+        # Step 3: Customer uploads photo evidence via POST /refunds/{refund_id}/evidence
+        # Automatically resumes workflow without calling /clarify
         file_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 32
         evidence_res = await client.post(
             f"/refunds/{refund_id}/evidence",
@@ -1204,14 +1251,7 @@ async def test_e2e_high_value_damaged_pauses_for_photos_and_escalates_after_evid
         )
         assert evidence_res.status_code == 201
 
-        # Step 4: Customer submits clarification response
-        clarify_res = await client.post(
-            f"/refunds/{refund_id}/clarify",
-            json={"response_text": "Here is the photo of the cracked gaming monitor screen."},
-        )
-        assert clarify_res.status_code == 200
-
-        # Step 5: Workflow resumes, inspects photo, and escalates due to max_order_amount ($750 > $500)
+        # Step 4: Workflow automatically resumed, inspects photo, and escalates due to max_order_amount
         final_record = await poll_until_not_pending(client, refund_id)
         assert final_record["status"] == "escalated"
         assert final_record["decision"] == "escalate"
