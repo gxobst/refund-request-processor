@@ -111,6 +111,10 @@ class RefundRecord(BaseModel):
         default=None,
         description="Generated customer notification email text explaining denial reasons.",
     )
+    clarification_email_text: str | None = Field(
+        default=None,
+        description="Generated customer notification email requesting proof or clarification.",
+    )
     evidence: list[EvidenceItem] = Field(
         default_factory=list,
         description="Customer-uploaded proof attachments (images and videos).",
@@ -174,4 +178,26 @@ class RefundClarificationRequest(BaseModel):
         if not v or not v.strip():
             raise ValueError("Field cannot be blank or empty.")
         return v.strip()
+
+
+class ReviewerProofRequest(BaseModel):
+    """Request payload for reviewer requesting customer proof from escalated status."""
+
+    proof_prompt: str = Field(
+        ...,
+        min_length=1,
+        description="Targeted proof request or inquiry prompt from the reviewer.",
+    )
+    customer_name: str | None = Field(
+        default=None,
+        description="Optional customer name for email greeting.",
+    )
+
+    @field_validator("proof_prompt")
+    @classmethod
+    def not_blank(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("proof_prompt cannot be blank or empty.")
+        return v.strip()
+
 

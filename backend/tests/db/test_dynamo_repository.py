@@ -1273,5 +1273,127 @@ def test_refund_record_deserializes_missing_evidence_to_empty_list(repository: R
     assert fetched.evidence == []
 
 
+def test_request_reviewer_proof_transitions_escalated_to_awaiting_clarification(
+    repository: RefundRepository,
+):
+    """Verify request_reviewer_proof transitions an escalated refund to awaiting_clarification, resets decision to None, persists prompt and email text, increments count, and saves to DynamoDB."""
+    created = repository.create_refund_request(
+        order_id="ORD-1008",
+        customer_request_text="Screen cracked on arrival.",
+    )
+    escalated = repository.update_decision(
+        refund_id=created.refund_id,
+        decision="escalate",
+        reasoning="Policy ambiguous, escalated to human reviewer.",
+        matched_policy_rule=None,
+        confidence_score=0.5,
+        status="escalated",
+    )
+    assert escalated.status == "escalated"
+    assert escalated.decision == "escalate"
+
+    proof_prompt = "Please upload a photo of the cracked screen and product barcode."
+    email_text = "Dear Customer,\n\nPlease provide proof..."
+
+    updated = repository.request_reviewer_proof(
+        refund_id=created.refund_id,
+        proof_prompt=proof_prompt,
+        notification_email_text=email_text,
+    )
+
+    assert updated.status == "awaiting_clarification"
+    assert updated.decision is None
+    assert updated.clarification_prompt == proof_prompt
+    assert updated.clarification_email_text == email_text
+    assert updated.clarification_count == 1
+    assert updated.updated_at is not None
+
+    raw_item = repository.table.items.get(created.refund_id)
+    assert raw_item is not None
+    assert raw_item["status"] == "awaiting_clarification"
+    assert raw_item.get("decision") is None
+    assert raw_item["clarification_prompt"] == proof_prompt
+    assert raw_item["clarification_email_text"] == email_text
+    assert raw_item["clarification_count"] == 1
+
+    fetched = repository.get_refund_request(created.refund_id)
+    assert fetched is not None
+    assert fetched.status == "awaiting_clarification"
+    assert fetched.decision is None
+    assert fetched.clarification_prompt == proof_prompt
+    assert fetched.clarification_email_text == email_text
+    assert fetched.clarification_count == 1
+
+
+
+@pytest.mark.parametrize("invalid_status", ["pending", "awaiting_clarification", "completed"])
+def test_request_reviewer_proof_invalid_status_raises_value_error(
+    repository: RefundRepository, invalid_status: str
+):
+    """Verify request_reviewer_proof raises ValueError when invoked on records with status pending, awaiting_clarification, or completed."""
+    created = repository.create_refund_request(
+        order_id="ORD-1009",
+        customer_request_text="Refund request for test.",
+    )
+    if invalid_status == "completed":
+        repository.update_decision(
+            refund_id=created.refund_id,
+            decision="auto_approve",
+            reasoning="Approved automatically.",
+            matched_policy_rule=None,
+            confidence_score=0.95,
+            status="completed",
+        )
+    elif invalid_status == "awaiting_clarification":
+        repository.request_clarification(
+            refund_id=created.refund_id,
+            clarification_prompt="Need more info.",
+        )
+    # If invalid_status == 'pending', created is already pending
+
+    with pytest.raises(ValueError, match="is not in 'escalated' status"):
+        repository.request_reviewer_proof(
+            refund_id=created.refund_id,
+            proof_prompt="Need photos.",
+        )
+
+
+@pytest.mark.parametrize("blank_prompt", ["", "   ", "\n\t  "])
+def test_request_reviewer_proof_blank_prompt_raises_value_error(
+    repository: RefundRepository, blank_prompt: str
+):
+    """Verify request_reviewer_proof raises ValueError when proof_prompt is blank or whitespace-only."""
+    created = repository.create_refund_request(
+        order_id="ORD-1010",
+        customer_request_text="Need refund.",
+    )
+    repository.update_decision(
+        refund_id=created.refund_id,
+        decision="escalate",
+        reasoning="Escalated for review.",
+        matched_policy_rule=None,
+        confidence_score=0.5,
+        status="escalated",
+    )
+
+    with pytest.raises(ValueError, match="proof_prompt cannot be blank or empty"):
+        repository.request_reviewer_proof(
+            refund_id=created.refund_id,
+            proof_prompt=blank_prompt,
+        )
+
+
+def test_request_reviewer_proof_not_found_raises_refund_not_found_error(
+    repository: RefundRepository,
+):
+    """Verify request_reviewer_proof raises RefundNotFoundError if refund_id does not exist."""
+    with pytest.raises(RefundNotFoundError, match="Refund request with id 'nonexistent_id' not found"):
+        repository.request_reviewer_proof(
+            refund_id="nonexistent_id",
+            proof_prompt="Please send photos.",
+        )
+
+
+
 
 

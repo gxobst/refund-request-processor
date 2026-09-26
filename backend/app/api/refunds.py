@@ -8,6 +8,7 @@ import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from starlette.datastructures import UploadFile
 
+from app.agents.proof_notifier import generate_reviewer_proof_email
 from app.db.repository import RefundNotFoundError, RefundRepository
 from app.graph.runner import resume_refund_workflow, run_refund_workflow
 from app.schemas.order import ORDER_ID_PATTERN
@@ -18,6 +19,7 @@ from app.schemas.refund import (
     RefundCreateResponse,
     RefundOverrideRequest,
     RefundRecord,
+    ReviewerProofRequest,
 )
 from app.services.storage import EvidenceStorageService, get_evidence_storage_service
 
@@ -589,4 +591,54 @@ async def clarify_refund_request(
         repository=repo,
     )
     return updated
+
+
+@router.post(
+    "/{refund_id}/request-proof",
+    response_model=RefundRecord,
+    status_code=status.HTTP_200_OK,
+    summary="Submit reviewer proof request for an escalated refund",
+)
+async def request_reviewer_proof_endpoint(
+    refund_id: str,
+    payload: ReviewerProofRequest,
+    repo: RefundRepository = Depends(get_repository),
+) -> RefundRecord:
+    """Accept reviewer proof request for an escalated refund, generate customer notification email, and transition to awaiting_clarification."""
+    record = repo.get_refund_request(refund_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Refund request '{refund_id}' not found.",
+        )
+    if record.status != "escalated":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Refund request '{refund_id}' is not in 'escalated' status (current status: '{record.status}').",
+        )
+
+    email_text = generate_reviewer_proof_email(
+        order_id=record.order_id,
+        proof_prompt=payload.proof_prompt,
+        customer_name=payload.customer_name,
+        refund_id=refund_id,
+    )
+    try:
+        updated = repo.request_reviewer_proof(
+            refund_id=refund_id,
+            proof_prompt=payload.proof_prompt,
+            notification_email_text=email_text,
+        )
+    except RefundNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Refund request '{refund_id}' not found.",
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    return updated
+
 

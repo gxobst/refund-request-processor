@@ -426,3 +426,49 @@ class RefundRepository:
         self.table.put_item(Item=item)
         return RefundRecord.model_validate(updated_dict)
 
+    def request_reviewer_proof(
+        self,
+        refund_id: str,
+        proof_prompt: str,
+        notification_email_text: str | None = None,
+    ) -> RefundRecord:
+        """Transition an escalated refund request to awaiting_clarification with reviewer proof instructions.
+
+        Args:
+            refund_id: Target refund request ID.
+            proof_prompt: Reviewer proof prompt or inquiry details.
+            notification_email_text: Optional generated customer notification email text.
+
+        Returns:
+            Updated RefundRecord instance with status awaiting_clarification and decision reset to None.
+
+        Raises:
+            RefundNotFoundError: If the refund request does not exist.
+            ValueError: If proof_prompt is blank or empty, or if current status is not 'escalated'.
+        """
+        if not proof_prompt or not proof_prompt.strip():
+            raise ValueError("proof_prompt cannot be blank or empty.")
+
+        existing = self.get_refund_request(refund_id)
+        if existing is None:
+            raise RefundNotFoundError(f"Refund request with id '{refund_id}' not found.")
+
+        if existing.status != "escalated":
+            raise ValueError(
+                f"Refund request '{refund_id}' is not in 'escalated' status (current status: '{existing.status}')."
+            )
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        updated_dict = existing.model_dump()
+        updated_dict["status"] = "awaiting_clarification"
+        updated_dict["decision"] = None
+        updated_dict["clarification_prompt"] = proof_prompt.strip()
+        updated_dict["clarification_email_text"] = notification_email_text
+        updated_dict["clarification_count"] = (existing.clarification_count or 0) + 1
+        updated_dict["updated_at"] = now_iso
+
+        item = _convert_floats_to_decimal(updated_dict)
+        self.table.put_item(Item=item)
+        return RefundRecord.model_validate(updated_dict)
+
+

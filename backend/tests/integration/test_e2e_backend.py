@@ -16,6 +16,8 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
 import pytest
 
+from pathlib import Path
+
 from app.api.refunds import get_repository
 from app.core.config import Settings
 from app.db.repository import RefundRepository
@@ -25,6 +27,7 @@ from app.main import app
 from app.schemas.classifier import ClassificationOutput
 from app.schemas.policy_checker import PolicyCheckerOutput
 from app.schemas.refund import RefundRecord
+from app.services.storage import EvidenceStorageService, get_evidence_storage_service
 
 
 # --- In-Memory DynamoDB Mock Components for Offline Integration Testing ---
@@ -911,5 +914,82 @@ async def test_e2e_dual_tool_verification_flow_ord_1010(
 
     # Verify GET response exposed tool_calls
     assert len(record_data["tool_calls"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_e2e_reviewer_proof_request_and_clarification_resumption(
+    mock_repo: RefundRepository, tmp_path: Path
+):
+    """Verify an escalated refund transitioned to awaiting_clarification via request-proof accepts evidence and clarification, resuming workflow."""
+    storage_service = EvidenceStorageService(local_dir=tmp_path, storage_backend="local")
+    app.dependency_overrides[get_evidence_storage_service] = lambda: storage_service
+
+    payload = {
+        "order_id": "ORD-1003",
+        "customer_request_text": "The monitor screen arrived shattered and damaged.",
+    }
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Step 1: Submit request and poll until escalated
+        post_res = await client.post("/refunds", json=payload)
+        assert post_res.status_code == 202
+        refund_id = post_res.json()["refund_id"]
+
+        escalated_record = await poll_until_not_pending(client, refund_id)
+        assert escalated_record["status"] == "escalated"
+        assert escalated_record["decision"] == "escalate"
+
+        # Step 2: Reviewer requests proof via POST /refunds/{refund_id}/request-proof
+        proof_payload = {
+            "proof_prompt": "Please provide a clear photo of the cracked screen and product barcode.",
+            "customer_name": "Marcus Vance",
+        }
+        proof_res = await client.post(
+            f"/refunds/{refund_id}/request-proof", json=proof_payload
+        )
+        assert proof_res.status_code == 200
+        proof_data = proof_res.json()
+        assert proof_data["status"] == "awaiting_clarification"
+        assert proof_data["decision"] is None
+        assert proof_data["clarification_prompt"] == proof_payload["proof_prompt"]
+        assert "Dear Marcus Vance," in proof_data["clarification_email_text"]
+        assert "Supervisor Inquiry:" in proof_data["clarification_email_text"]
+        assert "JPEG, PNG, or WebP" in proof_data["clarification_email_text"]
+
+        # Step 3: Customer uploads photo evidence via POST /refunds/{refund_id}/evidence
+        file_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+        evidence_res = await client.post(
+            f"/refunds/{refund_id}/evidence",
+            files={"file": ("cracked_screen.png", file_bytes, "image/png")},
+        )
+        assert evidence_res.status_code == 201
+        evidence_data = evidence_res.json()
+        assert len(evidence_data["evidence"]) == 1
+        assert evidence_data["evidence"][0]["filename"] == "cracked_screen.png"
+        assert evidence_data["evidence"][0]["content_type"] == "image/png"
+
+        # Step 4: Customer submits clarification response via POST /refunds/{refund_id}/clarify
+        clarify_payload = {
+            "response_text": "Here is the photo of the shattered screen as requested by the supervisor.",
+        }
+        clarify_res = await client.post(
+            f"/refunds/{refund_id}/clarify", json=clarify_payload
+        )
+        assert clarify_res.status_code == 200
+        clarify_data = clarify_res.json()
+        assert clarify_data["status"] == "pending"
+        assert clarify_data["clarification_response"] == clarify_payload["response_text"]
+        assert len(clarify_data["evidence"]) == 1
+
+        # Step 5: Polling until workflow resumes and reaches final status
+        resumed_record = await poll_until_not_pending(client, refund_id)
+        assert resumed_record["status"] in ("completed", "escalated")
+        assert resumed_record["clarification_response"] == clarify_payload["response_text"]
+        assert len(resumed_record["evidence"]) == 1
+        assert resumed_record["evidence"][0]["filename"] == "cracked_screen.png"
+
+    app.dependency_overrides.pop(get_evidence_storage_service, None)
+
 
 

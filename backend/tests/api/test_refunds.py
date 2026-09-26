@@ -9,6 +9,7 @@ import pytest
 
 from pathlib import Path
 from app.api.refunds import get_repository
+from app.db.repository import RefundNotFoundError
 from app.main import app
 from app.schemas.refund import EvidenceItem, RefundRecord
 from app.services.storage import EvidenceStorageService, get_evidence_storage_service
@@ -71,6 +72,36 @@ class MockRefundRepository:
         )
         self.records[refund_id] = updated
         return updated
+
+    def request_reviewer_proof(
+        self,
+        refund_id: str,
+        proof_prompt: str,
+        notification_email_text: str | None = None,
+    ) -> RefundRecord:
+        record = self.records.get(refund_id)
+        if record is None:
+            raise RefundNotFoundError(f"Refund request '{refund_id}' not found.")
+        if record.status != "escalated":
+            raise ValueError(
+                f"Refund request '{refund_id}' is not in 'escalated' status (current status: '{record.status}')."
+            )
+        if not proof_prompt or not proof_prompt.strip():
+            raise ValueError("proof_prompt cannot be blank or empty.")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        updated = record.model_copy(
+            update={
+                "status": "awaiting_clarification",
+                "decision": None,
+                "clarification_prompt": proof_prompt.strip(),
+                "clarification_email_text": notification_email_text,
+                "clarification_count": (record.clarification_count or 0) + 1,
+                "updated_at": now_iso,
+            }
+        )
+        self.records[refund_id] = updated
+        return updated
+
 
 
 @pytest.fixture
@@ -535,6 +566,103 @@ def test_parse_multipart_request_boundary_variations(header_template: str):
     assert files[0].filename == "proof.jpg"
     assert files[0].content_type == "image/jpeg"
     assert files[0].size == len(file_bytes)
+
+
+@pytest.mark.asyncio
+async def test_request_reviewer_proof_success_200(mock_repo: MockRefundRepository):
+    """Verify POST /refunds/{refund_id}/request-proof returns HTTP 200 with status awaiting_clarification on escalated refund."""
+    record = mock_repo.create_refund_request(order_id="ORD-1008", customer_request_text="Damaged screen")
+    mock_repo.update_decision(
+        refund_id=record.refund_id,
+        decision="escalate",
+        reasoning="Escalated for supervisor review",
+        matched_policy_rule=None,
+        confidence_score=0.6,
+        status="escalated",
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/refunds/{record.refund_id}/request-proof",
+            json={
+                "proof_prompt": "Please provide a clear photo of the cracked screen.",
+                "customer_name": "Jane Doe",
+            },
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["refund_id"] == record.refund_id
+    assert data["status"] == "awaiting_clarification"
+    assert data["decision"] is None
+    assert data["clarification_prompt"] == "Please provide a clear photo of the cracked screen."
+    assert "Dear Jane Doe," in data["clarification_email_text"]
+    assert "Supervisor Inquiry:" in data["clarification_email_text"]
+    assert "JPEG, PNG, or WebP" in data["clarification_email_text"]
+    assert data["clarification_count"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_status", ["pending", "completed", "awaiting_clarification"])
+async def test_request_reviewer_proof_not_escalated_400(
+    mock_repo: MockRefundRepository, invalid_status: str
+):
+    """Verify POST /refunds/{refund_id}/request-proof returns HTTP 400 when refund is not in escalated status."""
+    record = mock_repo.create_refund_request(order_id="ORD-1009", customer_request_text="Test request")
+    if invalid_status != "pending":
+        mock_repo.records[record.refund_id] = record.model_copy(update={"status": invalid_status})
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/refunds/{record.refund_id}/request-proof",
+            json={"proof_prompt": "Please provide proof."},
+        )
+
+    assert response.status_code == 400
+    assert "not in 'escalated' status" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_request_reviewer_proof_not_found_404(mock_repo: MockRefundRepository):
+    """Verify POST /refunds/{refund_id}/request-proof returns HTTP 404 when refund does not exist."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/refunds/nonexistent_refund_id/request-proof",
+            json={"proof_prompt": "Please provide proof."},
+        )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blank_prompt", ["", "   ", "\n\t  "])
+async def test_request_reviewer_proof_blank_prompt_422(
+    mock_repo: MockRefundRepository, blank_prompt: str
+):
+    """Verify POST /refunds/{refund_id}/request-proof returns HTTP 422 when proof_prompt is blank or whitespace."""
+    record = mock_repo.create_refund_request(order_id="ORD-1010", customer_request_text="Test request")
+    mock_repo.update_decision(
+        refund_id=record.refund_id,
+        decision="escalate",
+        reasoning="Escalated for supervisor review",
+        matched_policy_rule=None,
+        confidence_score=0.6,
+        status="escalated",
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            f"/refunds/{record.refund_id}/request-proof",
+            json={"proof_prompt": blank_prompt},
+        )
+
+    assert response.status_code == 422
+
 
 
 
