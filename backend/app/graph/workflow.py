@@ -56,6 +56,9 @@ def route_policy_check(state: RefundWorkflowState) -> str:
     - When category == "damaged" and policy_status == "ambiguous" with
       "physical_damage_verification" in failed_rules:
       Returns 'clarification' if clarification_count < 2, else 'decision'.
+    - When category == "wrong_item" and policy_status == "ambiguous" with
+      "wrong_item_verification" in failed_rules:
+      Returns 'clarification' if clarification_count < 2, else 'decision'.
     - Otherwise returns 'decision'.
     """
     if state.get("missing_order_data"):
@@ -89,6 +92,10 @@ def route_policy_check(state: RefundWorkflowState) -> str:
         category == "damaged"
         and policy_status == "ambiguous"
         and "physical_damage_verification" in failed_rules
+    ) or (
+        category == "wrong_item"
+        and policy_status == "ambiguous"
+        and "wrong_item_verification" in failed_rules
     ):
         count = state.get("clarification_count")
         if count is None:

@@ -38,7 +38,7 @@ def test_check_policy_deterministic_pass_bypasses_llm():
     mock_llm = MagicMock()
 
     # Act
-    result = check_policy(category="wrong_item", order=order, llm=mock_llm)
+    result = check_policy(category="changed_mind", order=order, llm=mock_llm)
 
     # Assert
     assert isinstance(result, PolicyCheckerOutput)
@@ -118,7 +118,7 @@ def test_check_policy_ambiguous_invokes_llm():
     mock_llm = make_mock_llm(expected_output)
 
     # Act
-    result = check_policy(category="wrong_item", order=order, llm=mock_llm)
+    result = check_policy(category="changed_mind", order=order, llm=mock_llm)
 
     # Assert
     assert isinstance(result, PolicyCheckerOutput)
@@ -147,7 +147,7 @@ def test_check_policy_ambiguous_resolved_by_llm():
     mock_llm = make_mock_llm(expected_output)
 
     # Act
-    result = check_policy(category="wrong_item", order=order, llm=mock_llm)
+    result = check_policy(category="changed_mind", order=order, llm=mock_llm)
 
     # Assert
     assert result.policy_status == "pass"
@@ -160,7 +160,7 @@ def test_policy_checker_node_contract():
     # Arrange: clear-cut passing order in state
     state = {
         "refund_id": "ref_node_1",
-        "category": "wrong_item",
+        "category": "changed_mind",
         "order": {
             "order_id": "ORD-NODE-1",
             "order_amount": 120.0,
@@ -175,7 +175,7 @@ def test_policy_checker_node_contract():
     # Assert
     assert node_result["policy_status"] == "pass"
     assert isinstance(node_result["matched_policy_rule"], dict)
-    assert node_result["matched_policy_rule"]["max_order_amount"] == 1000.0
+    assert node_result["matched_policy_rule"]["max_order_amount"] == 200.0
     assert "passed_rules" in node_result
     assert "failed_rules" in node_result
     assert node_result["failed_rules"] == []
@@ -186,7 +186,7 @@ def test_policy_checker_node_ambiguous_state():
     # Arrange: incomplete order triggering ambiguity
     state = {
         "refund_id": "ref_node_2",
-        "category": "wrong_item",
+        "category": "changed_mind",
         "order": {
             "order_id": "ORD-NODE-2",
             "order_amount": 120.0,
@@ -482,7 +482,7 @@ def test_policy_checker_node_delegates_with_only_order_id():
     # Arrange: state has order_id but order is None
     state = {
         "refund_id": "ref_node_order_id_only",
-        "category": "wrong_item",
+        "category": "changed_mind",
         "order": None,
         "order_id": "ORD-NODE-1",
     }
@@ -510,7 +510,7 @@ def test_check_policy_deterministic_pass_has_empty_tool_calls():
         "delivery_status": "delivered",
         "delivery_date": date.today().isoformat(),
     }
-    result = check_policy(category="wrong_item", order=order)
+    result = check_policy(category="changed_mind", order=order)
     assert result.policy_status == "pass"
     assert result.tool_calls == []
 
@@ -868,7 +868,7 @@ def test_check_policy_exception_on_ambiguous_order_reports_error_details():
     bound_mock.invoke.side_effect = RuntimeError("Bedrock model unavailable")
     mock_llm.bind_tools.return_value = bound_mock
 
-    result = check_policy(category="wrong_item", order=order, llm=mock_llm)
+    result = check_policy(category="changed_mind", order=order, llm=mock_llm)
 
     assert isinstance(result, PolicyCheckerOutput)
     assert result.policy_status == "ambiguous"
@@ -1008,7 +1008,7 @@ def test_check_policy_ord_1010_dual_tool_verification():
     bound_mock = MagicMock()
     bound_mock.invoke.side_effect = [tool_call_msg, synthesis_msg]
     mock_llm.bind_tools.return_value = bound_mock
-    result = check_policy(category="wrong_item", order=order, llm=mock_llm)
+    result = check_policy(category="missing_item", order=order, llm=mock_llm)
 
     assert isinstance(result, PolicyCheckerOutput)
     assert result.policy_status == "pass"
@@ -1061,7 +1061,7 @@ def test_check_policy_ord_1010_payment_dispute_evaluates_to_ambiguous():
     bound_mock = MagicMock()
     bound_mock.invoke.side_effect = [tool_call_msg, synthesis_msg]
     mock_llm.bind_tools.return_value = bound_mock
-    result = check_policy(category="wrong_item", order=order, llm=mock_llm)
+    result = check_policy(category="missing_item", order=order, llm=mock_llm)
 
     assert isinstance(result, PolicyCheckerOutput)
     assert result.policy_status == "ambiguous"
@@ -1653,7 +1653,7 @@ def test_check_policy_non_damage_categories_pass_deterministically_without_evide
         "delivery_date": date.today().isoformat(),
     }
     mock_llm = MagicMock()
-    for cat in ["wrong_item", "changed_mind"]:
+    for cat in ["changed_mind", "missing_item"]:
         result = check_policy(category=cat, order=order, llm=mock_llm)
         assert result.policy_status == "pass"
         assert result.failed_rules == []
@@ -1769,7 +1769,7 @@ def test_check_policy_high_value_prompt_mandate_assembly():
         })
     )
 
-    check_policy(category="wrong_item", order=high_value_order, llm=mock_llm)
+    check_policy(category="missing_item", order=high_value_order, llm=mock_llm)
 
     assert bound_mock.invoke.called
     invoke_messages = bound_mock.invoke.call_args[0][0]
@@ -1830,7 +1830,7 @@ def test_check_policy_high_value_intercepts_premature_pass_and_injects_reminder(
     bound_mock.invoke.side_effect = [premature_pass_msg, tool_call_msg, final_pass_msg]
     mock_llm.bind_tools.return_value = bound_mock
 
-    result = check_policy(category="wrong_item", order=high_value_order, llm=mock_llm)
+    result = check_policy(category="missing_item", order=high_value_order, llm=mock_llm)
 
     assert result.policy_status == "pass"
     assert len(result.tool_calls) == 2
@@ -1871,7 +1871,7 @@ def test_check_policy_high_value_exhausted_iterations_defaults_to_ambiguous():
     bound_mock.invoke.return_value = persistent_pass_msg
     mock_llm.bind_tools.return_value = bound_mock
 
-    result = check_policy(category="wrong_item", order=high_value_order, llm=mock_llm, max_tool_iterations=3)
+    result = check_policy(category="missing_item", order=high_value_order, llm=mock_llm, max_tool_iterations=3)
 
     assert result.policy_status == "ambiguous"
     assert "Mandatory dual external verification was incomplete for high-value order" in result.policy_reasoning
@@ -1892,9 +1892,10 @@ def test_check_policy_low_value_does_not_require_dual_tools():
         "delivery_date": date.today().isoformat(),
     }
     mock_llm = MagicMock()
-    result_bypassed = check_policy(category="wrong_item", order=low_value_order, llm=mock_llm)
+    result_bypassed = check_policy(category="changed_mind", order=low_value_order, llm=mock_llm)
     assert result_bypassed.policy_status == "pass"
     assert result_bypassed.tool_calls == []
+    mock_llm.invoke.assert_not_called()
     mock_llm.invoke.assert_not_called()
 
     # Subcase B: Category requiring single tool (late_delivery) succeeds with only carrier tool
@@ -1983,7 +1984,7 @@ def test_check_policy_generic_phrasing_does_not_trigger_product_mismatch(generic
         "delivery_date": date.today().isoformat(),
     }
     result = check_policy(
-        category="wrong_item",
+        category="changed_mind",
         order=order,
         customer_request_text=generic_text,
     )
@@ -2015,7 +2016,7 @@ def test_check_policy_partial_or_synonymous_product_naming_passes_verification(
         "delivery_date": date.today().isoformat(),
     }
     result = check_policy(
-        category="wrong_item",
+        category="changed_mind",
         order=order,
         customer_request_text=matching_text,
     )
@@ -2090,6 +2091,93 @@ def test_check_policy_non_damaged_exceeding_max_amount_escalates_immediately_wit
     assert "supervisor" in result.policy_reasoning.lower()
     assert "photo" not in result.policy_reasoning.lower()
     mock_llm.invoke.assert_not_called()
+
+
+def test_check_policy_wrong_item_without_evidence_requests_photos():
+    """AC: check_policy for category == 'wrong_item' without image evidence returns policy_status: 'ambiguous' with failed_rules=['wrong_item_verification'] and photo proof requirement reasoning."""
+    order = {
+        "order_id": "ORD-1001",
+        "order_amount": 250.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    mock_llm = MagicMock()
+
+    result = check_policy(category="wrong_item", order=order, llm=mock_llm, evidence=None)
+
+    assert result.policy_status == "ambiguous"
+    assert result.failed_rules == ["wrong_item_verification"]
+    assert "photo evidence" in result.policy_reasoning.lower()
+    assert "package label or packing slip" in result.policy_reasoning.lower()
+    assert result.policy_reasoning == "Wrong item claims require photo evidence of the incorrect merchandise and package label or packing slip before evaluation."
+    mock_llm.invoke.assert_not_called()
+
+
+def test_check_policy_wrong_item_expired_delivery_date_fails_immediately_without_evidence():
+    """AC: check_policy for category == 'wrong_item' with an expired delivery date returns policy_status: 'fail' with failed_rules=['refund_window_days'] immediately without requesting photos."""
+    order = {
+        "order_id": "ORD-1004",
+        "order_amount": 150.0,
+        "delivery_status": "delivered",
+        "delivery_date": "2020-01-01",  # Expired > 30 days
+    }
+    mock_llm = MagicMock()
+
+    result = check_policy(category="wrong_item", order=order, llm=mock_llm, evidence=None)
+
+    assert result.policy_status == "fail"
+    assert "refund_window_days" in result.failed_rules
+    assert "wrong_item_verification" not in result.failed_rules
+    assert "photo" not in result.policy_reasoning.lower()
+    mock_llm.invoke.assert_not_called()
+
+
+def test_check_policy_wrong_item_with_image_evidence_proceeds_to_evaluation():
+    """AC: When category == 'wrong_item' and image evidence is attached, proceeds past the mandatory evidence check to model inspection / policy evaluation."""
+    order = {
+        "order_id": "ORD-1001",
+        "order_amount": 250.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    expected_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=[],
+        policy_reasoning="Model inspection verified incorrect merchandise received.",
+    )
+    mock_llm = make_mock_llm(expected_output)
+
+    evidence = [
+        {
+            "filename": "wrong_item_photo.jpg",
+            "content_type": "image/jpeg",
+            "raw_bytes": b"\xff\xd8\xff\xe0testjpegimage",
+        }
+    ]
+
+    result = check_policy(category="wrong_item", order=order, llm=mock_llm, evidence=evidence)
+
+    assert result.policy_status == "pass"
+    assert "wrong_item_verification" not in result.failed_rules
+    # Verify LLM was invoked (proceeded past mandatory evidence check)
+    bound_model = mock_llm.bind_tools.return_value
+    assert bound_model.invoke.called
+
+
+def test_check_policy_non_wrong_item_categories_do_not_require_wrong_item_photos():
+    """AC: Non-wrong-item and non-damaged categories (e.g. changed_mind, late_delivery) continue to follow standard evaluation without requiring wrong item photos or failing wrong_item_verification."""
+    order = {
+        "order_id": "ORD-PASS-1",
+        "order_amount": 100.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    result = check_policy(category="changed_mind", order=order, evidence=None)
+
+    assert result.policy_status == "pass"
+    assert "wrong_item_verification" not in result.failed_rules
+
 
 
 

@@ -131,6 +131,12 @@ def _classify_text_to_output(text: str) -> ClassificationOutput:
             confidence_score=0.91,
             reasoning="Customer changed mind or ordered mistakenly.",
         )
+    elif "missing item" in eval_text:
+        return ClassificationOutput(
+            category="missing_item",
+            confidence_score=0.95,
+            reasoning="Customer reported missing item from package.",
+        )
     elif "late" in eval_text or "delay" in eval_text:
         return ClassificationOutput(
             category="late_delivery",
@@ -256,10 +262,10 @@ def test_seed_orders_data_verification(mock_dynamo_resource: MockDynamoResource)
 @pytest.mark.asyncio
 async def test_e2e_auto_approve_flow(mock_repo: RefundRepository):
     """AC 2: Verify full lifecycle for valid auto-approved refund request."""
-    # Arrange: ORD-1001 is delivered within window, $250 <= $1000 limit for wrong_item category
+    # Arrange: ORD-1008 is delivered within window, $99 <= $200 limit for changed_mind category
     payload = {
-        "order_id": "ORD-1001",
-        "customer_request_text": "I received the wrong item in my package, not the chair I ordered.",
+        "order_id": "ORD-1008",
+        "customer_request_text": "I changed my mind about this fitness watch and would like to return it.",
     }
     transport = ASGITransport(app=app)
 
@@ -270,7 +276,7 @@ async def test_e2e_auto_approve_flow(mock_repo: RefundRepository):
         post_data = post_response.json()
         refund_id = post_data["refund_id"]
         assert refund_id.startswith("ref_")
-        assert post_data["order_id"] == "ORD-1001"
+        assert post_data["order_id"] == "ORD-1008"
 
         # Act 2: Poll status until workflow finishes
         final_record = await poll_until_not_pending(client, refund_id)
@@ -282,7 +288,7 @@ async def test_e2e_auto_approve_flow(mock_repo: RefundRepository):
     assert final_record["confidence_score"] >= 0.7
     assert len(final_record["reasoning"]) > 0
     assert final_record["matched_policy_rule"] is not None
-    assert final_record["matched_policy_rule"]["max_order_amount"] == 1000.0
+    assert final_record["matched_policy_rule"]["max_order_amount"] == 200.0
 
 
 @pytest.mark.asyncio
@@ -413,7 +419,7 @@ async def test_e2e_clarification_lifecycle(mock_repo: RefundRepository):
 
         # 3. Customer submits clarification response via POST /refunds/{refund_id}/clarify
         clarify_payload = {
-            "response_text": "I received the wrong item in my package, it was not the ergonomic chair I ordered.",
+            "response_text": "The delivery was delayed and late, delivered well past the promised date.",
         }
         clarify_response = await client.post(
             f"/refunds/{refund_id}/clarify", json=clarify_payload
@@ -461,7 +467,7 @@ async def test_e2e_clarification_lifecycle_ord_1008(mock_repo: RefundRepository)
 
         # Step 2: Customer submits high-confidence clarifying response via POST /refunds/{refund_id}/clarify
         clarify_payload = {
-            "response_text": "I received the wrong item, an incorrect fitness watch model, different color and version than ordered.",
+            "response_text": "I changed my mind about the fitness watch, made a mistake ordering it.",
         }
         clarify_response = await client.post(
             f"/refunds/{refund_id}/clarify", json=clarify_payload
@@ -532,23 +538,23 @@ async def test_e2e_high_confidence_requests_bypass_clarification(mock_repo: Refu
     transport = ASGITransport(app=app)
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. ORD-1001 with high confidence request text
-        res_1001 = await client.post(
+        # 1. ORD-1008 with high confidence request text (changed_mind within limits)
+        res_1008 = await client.post(
             "/refunds",
             json={
-                "order_id": "ORD-1001",
-                "customer_request_text": "I received the wrong item in my package, not the ergonomic chair I ordered.",
+                "order_id": "ORD-1008",
+                "customer_request_text": "I changed my mind about this fitness watch and would like to return it.",
             },
         )
-        assert res_1001.status_code == 202
-        ref_id_1001 = res_1001.json()["refund_id"]
+        assert res_1008.status_code == 202
+        ref_id_1008 = res_1008.json()["refund_id"]
 
-        record_1001 = await poll_until_not_pending(client, ref_id_1001)
-        assert record_1001["status"] == "completed"
-        assert record_1001["decision"] == "auto_approve"
-        assert record_1001["confidence_score"] >= 0.70
-        assert record_1001["clarification_count"] == 0
-        assert record_1001["clarification_prompt"] is None
+        record_1008 = await poll_until_not_pending(client, ref_id_1008)
+        assert record_1008["status"] == "completed"
+        assert record_1008["decision"] == "auto_approve"
+        assert record_1008["confidence_score"] >= 0.70
+        assert record_1008["clarification_count"] == 0
+        assert record_1008["clarification_prompt"] is None
 
         # 2. ORD-1010 with high confidence request text (exceeds max_order_amount, escalates immediately without clarification)
         res_1010 = await client.post(
@@ -628,7 +634,7 @@ async def test_e2e_queue_listing_and_filtering(mock_repo: RefundRepository):
         # Submit 1 auto-approved request
         r1 = await client.post(
             "/refunds",
-            json={"order_id": "ORD-1001", "customer_request_text": "Wrong item received."},
+            json={"order_id": "ORD-1008", "customer_request_text": "I changed my mind about this item."},
         )
         # Submit 1 denied request
         r2 = await client.post(
@@ -715,24 +721,24 @@ async def test_langsmith_observability_tracing(monkeypatch: pytest.MonkeyPatch):
 
     # Act: execute workflow with tracing callback
     result = await run_refund_workflow(
-        refund_id="ref_trace_test_100",
-        order_id="ORD-1001",
-        customer_request_text="Wrong item received with tracing enabled.",
-        thread_id="thread_trace_100",
+        refund_id="ref_trace_test_fresh",
+        order_id="ORD-1008",
+        customer_request_text="Changed mind with tracing enabled.",
+        thread_id="thread_trace_fresh",
         callbacks=[spy_handler],
     )
 
     # Assert: result is completed and workflow ran
     assert result["status"] == "completed"
     assert result["decision"] == "auto_approve"
-    assert result["refund_id"] == "ref_trace_test_100"
+    assert result["refund_id"] == "ref_trace_test_fresh"
 
     # Verify tracing callback captured execution and attached metadata
     assert len(spy_handler.starts) > 0
     root_start = spy_handler.starts[0]
     meta = root_start.get("kwargs", {}).get("metadata", {})
-    assert meta.get("refund_id") == "ref_trace_test_100"
-    assert meta.get("order_id") == "ORD-1001"
+    assert meta.get("refund_id") == "ref_trace_test_fresh"
+    assert meta.get("order_id") == "ORD-1008"
     tags = root_start.get("kwargs", {}).get("tags", [])
     assert "refund-workflow" in tags
 
@@ -871,7 +877,7 @@ async def test_e2e_dual_tool_verification_flow_ord_1010(
 
     payload = {
         "order_id": "ORD-1010",
-        "customer_request_text": "High value mirrorless camera received was the wrong item.",
+        "customer_request_text": "High value mirrorless camera received with a missing item in package.",
     }
     transport = ASGITransport(app=app)
 
@@ -1016,7 +1022,7 @@ async def test_e2e_product_mismatch_pauses_and_resolves_upon_clarification(mock_
 
         # Step 3: Customer submits clarification confirming the correct ordered item
         clarify_payload = {
-            "response_text": "I received the wrong item in my package, an incorrect Smart Fitness Watch model.",
+            "response_text": "I made an error and changed my mind about the Smart Fitness Watch, I want to return it.",
         }
         clarify_res = await client.post(
             f"/refunds/{refund_id}/clarify", json=clarify_payload
@@ -1285,7 +1291,28 @@ async def test_e2e_high_value_non_damaged_escalates_directly_without_clarificati
         assert "supervisor" in final_record.get("reasoning", "").lower()
 
 
+@pytest.mark.asyncio
+async def test_e2e_wrong_item_without_photos_pauses_at_awaiting_clarification(
+    mock_repo: RefundRepository,
+):
+    """AC: Submitting a wrong_item refund request without photos pauses in status 'awaiting_clarification' with clarification_count == 1 and tailored photo proof prompt."""
+    payload = {
+        "order_id": "ORD-1001",
+        "customer_request_text": "I received the wrong item in my package, not the ergonomic chair I ordered.",
+    }
+    transport = ASGITransport(app=app)
 
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        post_res = await client.post("/refunds", json=payload)
+        assert post_res.status_code == 202
+        refund_id = post_res.json()["refund_id"]
 
+        paused_record = await poll_until_not_pending(client, refund_id)
 
-
+    assert paused_record["status"] == "awaiting_clarification"
+    assert paused_record["clarification_count"] == 1
+    assert paused_record["category"] == "wrong_item"
+    assert paused_record["decision"] is None
+    prompt = paused_record.get("clarification_prompt", "")
+    assert "photo" in prompt.lower()
+    assert "shipping label" in prompt.lower() or "packing slip" in prompt.lower()

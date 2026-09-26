@@ -55,11 +55,11 @@ def make_mock_clarification_llm(output: ClarificationOutput) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_workflow_auto_approve_flow():
-    # Arrange: ORD-1001 is a delivered recent order for $250 (within $1000 wrong_item limit)
+    # Arrange: ORD-1008 is a delivered recent order for $99 (within $200 changed_mind limit)
     mock_classification = ClassificationOutput(
-        category="wrong_item",
+        category="changed_mind",
         confidence_score=0.95,
-        reasoning="Customer clearly reported incorrect item received.",
+        reasoning="Customer changed mind about the item.",
     )
     mock_llm = make_mock_llm(mock_classification)
     checkpointer = MemorySaver()
@@ -70,18 +70,19 @@ async def test_workflow_auto_approve_flow():
         # Act: run workflow
         final_state = await run_refund_workflow(
             refund_id="ref_test_approve",
-            order_id="ORD-1001",
-            customer_request_text="I received the wrong item in the package.",
+            order_id="ORD-1008",
+            customer_request_text="I changed my mind about this fitness watch.",
             checkpointer=checkpointer,
         )
 
     # Assert
     assert final_state["decision"] == "auto_approve"
     assert final_state["status"] == "completed"
-    assert final_state["category"] == "wrong_item"
+    assert final_state["category"] == "changed_mind"
     assert final_state["policy_status"] == "pass"
     assert "approved" in final_state["reasoning"].lower()
     assert final_state["confidence_score"] == 0.95
+
 
 
 @pytest.mark.asyncio
@@ -259,7 +260,7 @@ async def test_workflow_boundary_confidence_routes_to_policy_checker():
     """AC 1077: Exact boundary confidence 0.70 routes to policy_checker rather than clarification."""
     # Arrange
     mock_classification = ClassificationOutput(
-        category="wrong_item",
+        category="changed_mind",
         confidence_score=0.70,
         reasoning="Adequately described issue.",
     )
@@ -272,8 +273,8 @@ async def test_workflow_boundary_confidence_routes_to_policy_checker():
         graph = build_refund_graph(checkpointer=checkpointer)
         initial_state = {
             "refund_id": "ref_test_boundary_70",
-            "order_id": "ORD-1001",
-            "customer_request_text": "I received the wrong chair.",
+            "order_id": "ORD-1008",
+            "customer_request_text": "I changed my mind about this fitness watch.",
             "status": "pending",
             "clarification_count": 0,
         }
@@ -292,9 +293,9 @@ async def test_workflow_high_confidence_with_count_2_routes_to_policy_checker():
     """AC 1078: High confidence (>= 0.70) with count 2 routes to policy_checker and reaches normal completion."""
     # Arrange
     mock_classification = ClassificationOutput(
-        category="wrong_item",
+        category="changed_mind",
         confidence_score=0.95,
-        reasoning="Clear explanation of wrong item.",
+        reasoning="Clear explanation of changed mind.",
     )
     mock_llm = make_mock_llm(mock_classification)
     checkpointer = MemorySaver()
@@ -305,8 +306,8 @@ async def test_workflow_high_confidence_with_count_2_routes_to_policy_checker():
         graph = build_refund_graph(checkpointer=checkpointer)
         initial_state = {
             "refund_id": "ref_test_high_conf_resumed",
-            "order_id": "ORD-1001",
-            "customer_request_text": "The wrong model chair was shipped.",
+            "order_id": "ORD-1008",
+            "customer_request_text": "I decided I don't need this fitness watch.",
             "status": "pending",
             "clarification_count": 2,
         }
@@ -467,7 +468,7 @@ def test_get_checkpointer_dynamo_exception_fallback_to_memory_saver():
 async def test_run_refund_workflow_defaults_to_memory_saver_when_app_env_test():
     # Arrange
     mock_classification = ClassificationOutput(
-        category="wrong_item",
+        category="changed_mind",
         confidence_score=0.95,
         reasoning="Valid report.",
     )
@@ -482,8 +483,8 @@ async def test_run_refund_workflow_defaults_to_memory_saver_when_app_env_test():
         # Act: Execute workflow without passing explicit checkpointer
         final_state = await run_refund_workflow(
             refund_id="ref_test_default_checkpointer",
-            order_id="ORD-1001",
-            customer_request_text="I received the wrong chair.",
+            order_id="ORD-1008",
+            customer_request_text="I changed my mind about this fitness watch.",
         )
 
         # Assert: Workflow completed and get_checkpointer was called with use_dynamodb=False
@@ -498,7 +499,7 @@ async def test_run_refund_workflow_uses_explicit_checkpointer_bypassing_factory(
     # Arrange
     explicit_checkpointer = MemorySaver()
     mock_classification = ClassificationOutput(
-        category="wrong_item",
+        category="changed_mind",
         confidence_score=0.95,
         reasoning="Valid report.",
     )
@@ -511,8 +512,8 @@ async def test_run_refund_workflow_uses_explicit_checkpointer_bypassing_factory(
         # Act: Execute workflow with explicit checkpointer
         final_state = await run_refund_workflow(
             refund_id="ref_test_explicit_checkpointer",
-            order_id="ORD-1001",
-            customer_request_text="I received the wrong chair.",
+            order_id="ORD-1008",
+            customer_request_text="I changed my mind about this fitness watch.",
             checkpointer=explicit_checkpointer,
         )
 
@@ -526,7 +527,7 @@ async def test_workflow_state_persisted_in_checkpointer():
     # Arrange
     checkpointer = MemorySaver()
     mock_classification = ClassificationOutput(
-        category="wrong_item",
+        category="changed_mind",
         confidence_score=0.95,
         reasoning="Valid report.",
     )
@@ -538,8 +539,8 @@ async def test_workflow_state_persisted_in_checkpointer():
         # Act: run workflow with specific thread ID
         _ = await run_refund_workflow(
             refund_id="ref_checkpoint_123",
-            order_id="ORD-1001",
-            customer_request_text="Wrong item shipped.",
+            order_id="ORD-1008",
+            customer_request_text="Changed my mind about watch.",
             thread_id="thread_abc_1",
             checkpointer=checkpointer,
         )
@@ -724,9 +725,9 @@ def test_intake_validate_node_populates_missing_order_data_flags():
 async def test_workflow_with_dynamodb_order_lookup():
     # Arrange: DynamoDB provides order data with Decimal amounts
     mock_classification = ClassificationOutput(
-        category="wrong_item",
+        category="missing_item",
         confidence_score=0.95,
-        reasoning="Wrong item shipped.",
+        reasoning="Item was missing from shipment.",
     )
     mock_llm = make_mock_llm(mock_classification)
     checkpointer = MemorySaver()
@@ -752,7 +753,7 @@ async def test_workflow_with_dynamodb_order_lookup():
         final_state = await run_refund_workflow(
             refund_id="ref_dynamo_test",
             order_id="ORD-LIVE-DYNAMO-1",
-            customer_request_text="I received the wrong monitor arm.",
+            customer_request_text="I did not receive the monitor arm in my delivery.",
             checkpointer=checkpointer,
             repository=mock_repo,
         )
@@ -819,11 +820,11 @@ async def test_workflow_late_delivery_tool_calling_auto_approve():
 @pytest.mark.asyncio
 async def test_workflow_clear_cut_pass_bypasses_tools():
     """AC 1277: Clear-cut passing request completes workflow without invoking LLM or tools."""
-    # Arrange: ORD-1001 is wrong_item, delivered recently, $250 <= $1000
+    # Arrange: ORD-1008 is changed_mind, delivered recently, $99 <= $200
     mock_classification = ClassificationOutput(
-        category="wrong_item",
+        category="changed_mind",
         confidence_score=0.95,
-        reasoning="Clear wrong item reported.",
+        reasoning="Clear changed mind reported.",
     )
     mock_classifier_llm = make_mock_llm(mock_classification)
     mock_policy_llm = MagicMock()
@@ -835,8 +836,8 @@ async def test_workflow_clear_cut_pass_bypasses_tools():
 
         final_state = await run_refund_workflow(
             refund_id="ref_test_bypass_tools",
-            order_id="ORD-1001",
-            customer_request_text="I received the wrong chair.",
+            order_id="ORD-1008",
+            customer_request_text="I changed my mind about this fitness watch.",
             checkpointer=checkpointer,
         )
 
@@ -852,9 +853,9 @@ async def test_workflow_clear_cut_pass_bypasses_tools():
 async def test_workflow_auto_approve_generates_and_persists_approval_email_text():
     """AC 1951: Verify that an auto-approved workflow run outputs approval_email_text in final state and persists it to DynamoDB."""
     mock_classification = ClassificationOutput(
-        category="wrong_item",
+        category="changed_mind",
         confidence_score=0.95,
-        reasoning="Customer reported wrong item with clear evidence.",
+        reasoning="Customer changed mind about the fitness watch.",
     )
     mock_llm = make_mock_llm(mock_classification)
     checkpointer = MemorySaver()
@@ -869,8 +870,8 @@ async def test_workflow_auto_approve_generates_and_persists_approval_email_text(
 
             final_state = await run_refund_workflow(
                 refund_id="ref_test_email_persistence",
-                order_id="ORD-1001",
-                customer_request_text="Received wrong chair.",
+                order_id="ORD-1008",
+                customer_request_text="Changed mind about watch.",
                 checkpointer=checkpointer,
             )
 
@@ -880,7 +881,7 @@ async def test_workflow_auto_approve_generates_and_persists_approval_email_text(
         assert "approval_email_text" in final_state
         assert final_state["approval_email_text"] is not None
         assert "Dear Customer," in final_state["approval_email_text"]
-        assert "ORD-1001" in final_state["approval_email_text"]
+        assert "ORD-1008" in final_state["approval_email_text"]
         assert "RMA" in final_state["approval_email_text"]
         assert "14-day" in final_state["approval_email_text"]
 
@@ -1160,7 +1161,7 @@ async def test_workflow_explicit_product_mismatch_pauses_for_clarification():
 async def test_workflow_explicit_product_mismatch_resumes_upon_resolution():
     """AC: Submitting a clarifying customer response resolving the product mismatch resumes the workflow to normal policy evaluation and completion."""
     mock_classification_1 = ClassificationOutput(
-        category="wrong_item",
+        category="changed_mind",
         confidence_score=0.95,
         reasoning="Customer reported mismatch with high confidence.",
     )
@@ -1174,7 +1175,7 @@ async def test_workflow_explicit_product_mismatch_resumes_upon_resolution():
         paused_state = await run_refund_workflow(
             refund_id="ref_test_product_mismatch_resume",
             order_id="ORD-1008",
-            customer_request_text="I want a refund for the OLED gaming monitor, the screen is cracked.",
+            customer_request_text="I want a refund for the OLED gaming monitor, I changed my mind.",
             checkpointer=checkpointer,
         )
 
@@ -1183,9 +1184,9 @@ async def test_workflow_explicit_product_mismatch_resumes_upon_resolution():
 
     # Step 2: customer clarifies resolving product mismatch to the ordered item
     mock_classification_2 = ClassificationOutput(
-        category="wrong_item",
+        category="changed_mind",
         confidence_score=0.95,
-        reasoning="Customer confirmed wrong fitness watch received.",
+        reasoning="Customer confirmed changed mind about the Smart Fitness Watch.",
     )
     mock_classifier_llm_2 = make_mock_llm(mock_classification_2)
 
@@ -1194,7 +1195,7 @@ async def test_workflow_explicit_product_mismatch_resumes_upon_resolution():
 
         resumed_state = await resume_refund_workflow(
             refund_id="ref_test_product_mismatch_resume",
-            response_text="I made an error in my initial description; I actually received the wrong color Smart Fitness Watch.",
+            response_text="I made an error in my initial description; I actually changed my mind about the Smart Fitness Watch.",
             order_id="ORD-1008",
             checkpointer=checkpointer,
         )
@@ -1461,10 +1462,68 @@ async def test_workflow_high_value_damaged_with_initial_evidence_escalates_on_fi
     assert final_state["evidence"][0]["filename"] == "monitor_damage.jpg"
 
 
+@pytest.mark.asyncio
+async def test_workflow_wrong_item_without_evidence_pauses_for_clarification():
+    """AC: A wrong_item claim without evidence pauses at awaiting_clarification with tailored photo prompt."""
+    mock_classification = ClassificationOutput(
+        category="wrong_item",
+        confidence_score=0.95,
+        reasoning="Customer received incorrect product.",
+    )
+    mock_llm = make_mock_llm(mock_classification)
+    checkpointer = MemorySaver()
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_llm)
+
+        final_state = await run_refund_workflow(
+            refund_id="ref_test_wrong_item_no_evidence",
+            order_id="ORD-1001",
+            customer_request_text="I received the wrong item in my package.",
+            checkpointer=checkpointer,
+        )
+
+    assert final_state["status"] == "awaiting_clarification"
+    assert final_state["needs_clarification"] is True
+    assert final_state["clarification_count"] == 1
+    assert final_state["category"] == "wrong_item"
+    assert final_state["policy_status"] == "ambiguous"
+    assert "wrong_item_verification" in final_state["failed_rules"]
+    assert final_state["clarification_prompt"] is not None
+    prompt_lower = final_state["clarification_prompt"].lower()
+    assert "photo" in prompt_lower
+    assert "shipping label" in prompt_lower or "packing slip" in prompt_lower
+    assert "incorrect" in prompt_lower or "wrong" in prompt_lower
 
 
+@pytest.mark.asyncio
+async def test_workflow_wrong_item_exhausted_clarifications_routes_to_decision():
+    """AC: A wrong_item claim with clarification_count >= 2 routes directly to decision 'escalate'."""
+    mock_classification = ClassificationOutput(
+        category="wrong_item",
+        confidence_score=0.95,
+        reasoning="Customer received wrong item.",
+    )
+    mock_llm = make_mock_llm(mock_classification)
+    checkpointer = MemorySaver()
 
+    graph = build_refund_graph(checkpointer=checkpointer)
+    initial_state = {
+        "refund_id": "ref_test_wrong_item_exhausted",
+        "order_id": "ORD-1001",
+        "customer_request_text": "Still received the wrong item.",
+        "status": "pending",
+        "clarification_count": 2,
+    }
+    config = {"configurable": {"thread_id": "thread_wrong_item_exhausted"}}
 
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("app.agents.classifier.get_bedrock_llm", lambda: mock_llm)
 
+        final_state = await graph.ainvoke(initial_state, config=config)
 
-
+    assert final_state["status"] == "escalated"
+    assert final_state["decision"] == "escalate"
+    assert final_state["policy_status"] == "ambiguous"
+    assert "wrong_item_verification" in final_state["failed_rules"]
+    assert final_state["clarification_count"] == 2

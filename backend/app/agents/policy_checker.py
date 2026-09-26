@@ -568,11 +568,13 @@ def check_policy(
     # Clear-cut pass bypasses LLM except for:
     # - late_delivery (requires external carrier verification)
     # - damaged category (unconditionally bypasses deterministic pass; requires mandatory photo evidence and multimodal inspection)
+    # - wrong_item category (unconditionally bypasses deterministic pass; requires mandatory photo evidence)
     # - high-value orders (order_amount >= 400.0, requires dual external verification)
     is_high_value = float(order.get("order_amount", 0.0) or 0.0) >= HIGH_VALUE_THRESHOLD
     should_bypass_pass = (
         category == "late_delivery"
         or category == "damaged"
+        or category == "wrong_item"
         or is_high_value
     )
     if eval_result.status == "pass" and not should_bypass_pass:
@@ -587,7 +589,7 @@ def check_policy(
 
     def _finalize_result(output: PolicyCheckerOutput) -> PolicyCheckerOutput:
         if (
-            category == "damaged"
+            category in ("damaged", "wrong_item")
             and "max_order_amount" in eval_result.failed_rules
             and output.policy_status != "fail"
         ):
@@ -618,7 +620,7 @@ def check_policy(
                 tool_calls=[],
             )
 
-    # 3. Mandatory Photo Evidence Examination for Damaged Category
+    # 3. Mandatory Photo Evidence Examination for Damaged and Wrong Item Categories
     # Prioritizes photo proof collection for damaged claims before max_order_amount escalation
     if category == "damaged" and not image_blocks:
         return PolicyCheckerOutput(
@@ -630,10 +632,20 @@ def check_policy(
             tool_calls=[],
         )
 
+    if category == "wrong_item" and not image_blocks:
+        return PolicyCheckerOutput(
+            policy_status="ambiguous",
+            matched_policy_rule=eval_result.matched_policy_rule,
+            passed_rules=eval_result.passed_rules,
+            failed_rules=["wrong_item_verification"],
+            policy_reasoning="Wrong item claims require photo evidence of the incorrect merchandise and package label or packing slip before evaluation.",
+            tool_calls=[],
+        )
+
     # 4. Deterministic Supervisor Escalation for Order Amount Violations
     # Non-damaged categories exceeding max_order_amount escalate immediately without requesting photos
     if eval_result.status == "ambiguous" and eval_result.failed_rules == ["max_order_amount"]:
-        if category != "damaged":
+        if category not in ("damaged", "wrong_item"):
             return PolicyCheckerOutput(
                 policy_status="ambiguous",
                 matched_policy_rule=eval_result.matched_policy_rule,

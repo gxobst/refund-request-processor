@@ -183,6 +183,16 @@ def clarification_node(state: dict[str, Any]) -> dict[str, Any]:
             f"and the exterior shipping packaging condition upon delivery. Please reply with or upload clear photos showing the damaged items and packaging.\n\n"
             f"Sincerely,\nCustomer Support Team"
         )
+    elif category == "wrong_item" and "wrong_item_verification" in failed_rules:
+        order_id = state.get("order_id") or (order.get("order_id") if order else "")
+        order_str = f" for order {order_id}" if order_id else ""
+        prompt = (
+            f"Dear Customer,\n\n"
+            f"Thank you for contacting us regarding your refund request{order_str}.\n\n"
+            f"To evaluate your wrong item claim, our policy requires clear photos showing both the incorrect product received "
+            f"and the package shipping label or packing slip. Please reply with or upload clear photos showing the incorrect product received and the shipping label or packing slip.\n\n"
+            f"Sincerely,\nCustomer Support Team"
+        )
     else:
         output = generate_clarification_prompt(
             customer_request_text=customer_text,
