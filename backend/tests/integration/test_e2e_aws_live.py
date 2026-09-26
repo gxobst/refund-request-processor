@@ -113,10 +113,10 @@ async def test_live_aws_full_workflow_execution():
     )
 
     try:
-        # Create initial record in live DynamoDB
+        # Create initial record in live DynamoDB with non-damage category to verify direct completion
         record = repo.create_refund_request(
             order_id="ORD-1001",
-            customer_request_text="Chair arrived with shattered plastic frame during delivery.",
+            customer_request_text="I changed my mind and no longer need this chair.",
         )
         assert record.refund_id is not None
 
@@ -135,6 +135,67 @@ async def test_live_aws_full_workflow_execution():
         updated = repo.get_refund_request(record.refund_id)
         assert updated is not None
         assert updated.decision == final_state["decision"]
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code == "ValidationException":
+            raise
+        pytest.skip(f"Live AWS operation skipped due to ClientError: {exc}")
+
+
+@pytest.mark.aws
+@pytest.mark.asyncio
+async def test_live_aws_damaged_without_evidence_pauses_for_clarification():
+    """Verify live workflow for damaged claim without evidence pauses at awaiting_clarification."""
+    if not _has_aws_credentials():
+        pytest.skip("AWS credentials not configured in environment.")
+
+    settings = get_settings()
+    dynamodb_kwargs: dict[str, Any] = {"region_name": settings.aws_region}
+    if settings.aws_access_key_id and settings.aws_secret_access_key:
+        dynamodb_kwargs["aws_access_key_id"] = settings.aws_access_key_id
+        dynamodb_kwargs["aws_secret_access_key"] = settings.aws_secret_access_key
+        if settings.aws_session_token:
+            dynamodb_kwargs["aws_session_token"] = settings.aws_session_token
+    if settings.dynamodb_endpoint_url:
+        dynamodb_kwargs["endpoint_url"] = settings.dynamodb_endpoint_url
+
+    dynamodb = boto3.resource("dynamodb", **dynamodb_kwargs)
+    table = dynamodb.Table(settings.dynamodb_table_refunds)
+    try:
+        table.load()
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code == "ValidationException":
+            raise
+        pytest.skip(f"Live DynamoDB table not accessible: {exc}")
+    except Exception as exc:
+        pytest.skip(f"Live DynamoDB connection failed: {exc}")
+
+    repo = RefundRepository(
+        dynamodb_resource=dynamodb, table_name=settings.dynamodb_table_refunds
+    )
+
+    try:
+        record = repo.create_refund_request(
+            order_id="ORD-1001",
+            customer_request_text="Chair arrived with shattered plastic frame during delivery.",
+        )
+        assert record.refund_id is not None
+
+        final_state = await run_refund_workflow(
+            refund_id=record.refund_id,
+            order_id="ORD-1001",
+            customer_request_text=record.customer_request_text,
+            repository=repo,
+        )
+
+        assert final_state["status"] == "awaiting_clarification"
+        assert final_state.get("clarification_prompt") is not None
+        assert final_state.get("clarification_count") == 1
+
+        updated = repo.get_refund_request(record.refund_id)
+        assert updated is not None
+        assert updated.status == "awaiting_clarification"
     except ClientError as exc:
         error_code = exc.response.get("Error", {}).get("Code", "")
         if error_code == "ValidationException":

@@ -115,7 +115,7 @@ async def test_live_submit_and_poll_refund():
                 "/refunds",
                 json={
                     "order_id": "ORD-1001",
-                    "customer_request_text": "The chair armrest arrived completely broken and cracked during delivery.",
+                    "customer_request_text": "I changed my mind and no longer need this chair, please refund.",
                 },
             )
             assert post_response.status_code == 202
@@ -151,6 +151,49 @@ async def test_live_submit_and_poll_refund():
         assert db_record is not None
         assert db_record.status == refund_record["status"]
         assert db_record.decision == refund_record["decision"]
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code", "")
+        if error_code == "ValidationException":
+            raise
+        pytest.skip(f"Live AWS Bedrock operation skipped due to ClientError: {exc}")
+
+
+@pytest.mark.asyncio
+async def test_live_submit_damaged_without_evidence_pauses_for_clarification():
+    """Verify POST /refunds for damaged item without evidence pauses at awaiting_clarification."""
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            post_response = await client.post(
+                "/refunds",
+                json={
+                    "order_id": "ORD-1001",
+                    "customer_request_text": "The chair armrest arrived completely broken and cracked during delivery.",
+                },
+            )
+            assert post_response.status_code == 202
+            post_data = post_response.json()
+            refund_id = post_data["refund_id"]
+            assert refund_id
+
+            max_wait = 30.0
+            poll_interval = 1.0
+            elapsed = 0.0
+            refund_record = None
+
+            while elapsed < max_wait:
+                get_response = await client.get(f"/refunds/{refund_id}")
+                assert get_response.status_code == 200
+                refund_record = get_response.json()
+                if refund_record.get("status") != "pending":
+                    break
+                await asyncio.sleep(poll_interval)
+                elapsed += poll_interval
+
+        assert refund_record is not None
+        assert refund_record["status"] == "awaiting_clarification"
+        assert bool(refund_record.get("clarification_prompt"))
+        assert refund_record.get("clarification_count") == 1
     except ClientError as exc:
         error_code = exc.response.get("Error", {}).get("Code", "")
         if error_code == "ValidationException":
