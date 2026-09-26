@@ -32,14 +32,16 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
 | **TC-04** | Expired Return Window Denial & Denial Email | Date window violation (> 30 days) triggers denial + automated denial email | `ORD-1004` | `deny` / `completed` |
 | **TC-05** | Single Tool Carrier Verification | Autonomous `query_carrier_tracking` tool call for delayed delivery | `ORD-1005` | `auto_approve` / `completed` |
 | **TC-06** | Mandatory Dual Tool Verification (FedEx & Stripe) | High-value order (≥ $400) mandates both carrier & payment tool audit records | `ORD-1010` | `auto_approve` / `completed` |
-| **TC-07** | Clarification Loop Lifecycle | Low confidence (< 0.70) pause -> customer response -> resolution | `ORD-1008` | `awaiting_clarification` -> `auto_approve` |
+| **TC-07** | Clarification Loop Lifecycle | Low confidence (< 0.70) pause (persists `category` & diagnostics) -> customer response -> resolution | `ORD-1008` | `awaiting_clarification` -> `auto_approve` |
 | **TC-08** | Clarification Exhaustion to Escalation | 2-cycle clarification exhaustion (low confidence < 0.70) -> human escalation | `ORD-1009` | `awaiting_clarification` (cycles 1 & 2) -> `escalate` / `escalated` |
 | **TC-09** | Supervisor Manual Override | Supervisor manual override on escalated TC-08 refund (`approve` or `deny`) | `ORD-1009` | `approve` or `deny` / `completed` |
-| **TC-10** | Multipart Damage Evidence Upload | Interactive file picker upload (JPEG/PNG/WebP ≤ 5MB; video rejected) | Any active refund | HTTP 201 (`evidence` array populated) |
+| **TC-10** | Multipart Damage Evidence Upload | Interactive file picker upload (Swagger UI WebKit boundary support, JPEG/PNG/WebP ≤ 5MB; video rejected) | Any active refund | HTTP 201 (`evidence` array populated) |
 | **TC-11** | Multimodal Image Inspection | Multimodal Bedrock vision agent verifies damage in attached photo | `ORD-1001` | `auto_approve` (damage verified) |
-| **TC-12** | Initial Refund Creation with Attached Image | Multipart `POST /refunds` with upfront image proof evaluates immediately | `ORD-1001` | HTTP 202 (`evidence` populated on intake) |
+| **TC-12** | Initial Refund Creation with Attached Image | Multipart `POST /refunds` with upfront image proof (case-sensitive boundary support) | `ORD-1001` | HTTP 202 (`evidence` populated on intake) |
 | **TC-13** | Queue Listing and Filtering | DynamoDB querying with status filter (`completed`, `escalated`, etc.) | N/A | HTTP 200 (filtered list) |
-| **TC-14** | Input Validation & Error Boundaries | Order ID regex (`^ORD-\d{4}$`), blank fields, 404s, video rejection, 5MB limit | N/A | HTTP 400, 404, 413, 422 |
+| **TC-14** | Input Validation & Error Boundaries | Order ID regex (`^ORD-\d{4}$`), blank fields, 404s, video rejection, 5MB limit, request-proof validation | N/A | HTTP 400, 404, 413, 422 |
+| **TC-15** | Supervisor Proof Request from Escalation Queue | Human supervisor requests targeted photo proof via `POST /refunds/{id}/request-proof` | `ORD-1009` | `escalated` -> `awaiting_clarification` (HTTP 200) |
+| **TC-16** | Product Mismatch Detection & Escalation | Customer request product conflicts with ordered item (e.g. camera for fitness watch) | `ORD-1008` | `escalate` / `escalated` (`policy_status: "ambiguous"`) |
 
 ---
 
@@ -200,6 +202,10 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
   ```
 - **Step 2 (`GET /refunds/{refund_id}`) Expected Output**:
   - `status`: `"awaiting_clarification"`
+  - `decision`: `null` *(expected: policy evaluation is paused until clarification is submitted)*
+  - `category`: `"changed_mind"` (or `"ambiguous"`) *(persisted from classifier agent)*
+  - `confidence_score`: `< 0.70` (e.g. `0.52`) *(persisted diagnostic score)*
+  - `reasoning`: Non-null classification diagnosis explaining ambiguity or low confidence.
   - `clarification_count`: `1`
   - `clarification_prompt`: Formatted customer inquiry email asking for specific reasons and photo proof.
 - **Step 3 (`POST /refunds/{refund_id}/clarify`) Input (Swagger Form / JSON)**:
@@ -373,11 +379,18 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
   }
   ```
 
+> [!NOTE]
+> **Swagger UI & Browser Boundary Support**: The server preserves case sensitivity in request headers. Browser-generated WebKit boundary tokens (e.g. `boundary=----WebKitFormBoundary...`) are parsed accurately without returning false `No file uploaded in multipart request` errors.
+
 ---
 
 ### TC-11: Multimodal Vision Inspection of Customer Damage Photo
 - **Endpoint**: `POST /refunds` followed by `POST /refunds/{refund_id}/evidence`
 - **Goal**: When a claim is categorized as `damaged` and an image is attached, verify that deterministic pass is bypassed and the multimodal Bedrock agent inspects image bytes for visible damage.
+- **Multimodal Evaluation Behavior**:
+  - The multimodal vision agent reads the uploaded image content bytes directly and checks if the photo confirms the reported damage.
+  - If damage is clearly identified and matches the claim, it proceeds directly to approval.
+  - If the model is uncertain or the image does not show identifiable damage (low confidence), it routes the request to `status: "escalated"` for supervisor review.
 - **Step 1 (`POST /refunds`)**:
   ```json
   {
@@ -415,6 +428,10 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
     "created_at": "..."
   }
   ```
+
+> [!NOTE]
+> **Swagger UI Field Parsing**: Case-preserved multipart parsing ensures text fields (`order_id`, `customer_request_text`) and binary image files are parsed simultaneously without triggering `Field 'order_id' cannot be blank or empty` or `No file uploaded` validation errors.
+
 - **Step 2 Verification (`GET /refunds/{refund_id}`)**:
   - `evidence`: Array is populated immediately on intake with the uploaded file metadata.
   - `status`: `"completed"`
@@ -451,3 +468,76 @@ Verify robust HTTP error responses across inputs, formats, and file restrictions
 | **Video File Rejection** | `POST /refunds/{id}/evidence` | Upload `.mp4` or `.mov` video file | `400 Bad Request` | Video formats disallowed; strictly images only |
 | **Oversized Image File** | `POST /refunds/{id}/evidence` | Upload image > 5MB | `413 Payload Too Large` | Rejection of file exceeding 5MB ceiling |
 | **Disallowed Extension** | `POST /refunds/{id}/evidence` | Upload `.exe`, `.pdf`, or `.txt` file | `400 Bad Request` | Disallowed file extension |
+| **Proof Request on Non-Escalated Refund** | `POST /refunds/{id}/request-proof` | Target refund in `completed` or `pending` status | `400 Bad Request` | Detail: `"Refund request '...' is not escalated"` |
+| **Blank Proof Prompt** | `POST /refunds/{id}/request-proof` | `{"proof_prompt": "   "}` | `422 Unprocessable Entity` | Blank proof prompt rejected |
+| **Proof Request Unknown ID** | `POST /refunds/ref_missing/request-proof` | Unknown refund ID | `404 Not Found` | Detail: `"Refund request '...' not found"` |
+
+---
+
+### TC-15: Supervisor Proof Request from Escalation Queue
+- **Endpoint**: `POST /refunds/{refund_id}/request-proof` $\rightarrow$ `GET /refunds/{refund_id}` $\rightarrow$ `POST /refunds/{refund_id}/evidence` (or `POST /refunds/{refund_id}/clarify`)
+- **Goal**: Confirm that a human supervisor reviewing an escalated refund (e.g. resulting from TC-03 or TC-08) can request targeted customer proof (e.g., photo evidence of serial number or package labels). The system transitions the refund from `status: "escalated"` to `status: "awaiting_clarification"`, resets `decision: null`, generates a polite customer notification email with evidence upload instructions (JPEG, PNG, WebP ≤ 5MB), and enables customer evidence submission.
+- **Pre-condition**:
+  - Target refund must be in `status: "escalated"` (use `<escalated_refund_id>` from TC-03 or TC-08).
+- **Step 1 (`POST /refunds/{refund_id}/request-proof`) Input**:
+  - In Swagger UI, expand `POST /refunds/{refund_id}/request-proof`.
+  - Enter `refund_id`: `<escalated_refund_id>`.
+  - Request Body:
+    ```json
+    {
+      "proof_prompt": "Please upload a clear close-up photograph of the manufacturer serial number sticker on the back of the device, as well as the outer shipping box condition.",
+      "customer_name": "Jane Doe"
+    }
+    ```
+- **Step 1 Expected Output**: `200 OK`
+  ```json
+  {
+    "refund_id": "<escalated_refund_id>",
+    "order_id": "ORD-...",
+    "status": "awaiting_clarification",
+    "decision": null,
+    "clarification_prompt": "Please upload a clear close-up photograph of the manufacturer serial number sticker on the back of the device, as well as the outer shipping box condition.",
+    "clarification_email_text": "Dear Jane Doe,\n\nWe are currently reviewing your refund request for order ORD-... regarding your recent purchase.\n\nTo help us complete our review, our support team has requested additional proof:\n\"Please upload a clear close-up photograph of the manufacturer serial number sticker on the back of the device, as well as the outer shipping box condition.\"\n\nHow to submit your proof:\n- Upload clear photos directly via our customer portal or reply to this request.\n- Supported formats: JPEG, PNG, WebP (up to 5MB per file).\n- Please ensure all markings and serial labels are fully legible.\n\nOnce we receive your additional information, our team will proceed with your claim.\n\nSincerely,\nCustomer Support Team",
+    "clarification_count": 3
+  }
+  ```
+- **Step 2 Customer Evidence Submission**:
+  - Customer can now upload the requested photo using `POST /refunds/{refund_id}/evidence` (via the Swagger file selector).
+  - Or respond with text details using `POST /refunds/{refund_id}/clarify`.
+  - The workflow resumes processing upon submission.
+
+---
+
+### TC-16: Product Mismatch Detection & Escalation
+- **Endpoint**: `POST /refunds` followed by polling `GET /refunds/{refund_id}`
+- **Goal**: Verify that when a customer refund request explicitly describes a product conflicting with the item recorded in the order database (e.g., claiming a refund for an "OLED gaming monitor" or "mirrorless camera" when order `ORD-1008` is actually for a "Smart Fitness Watch"), the system detects the discrepancy. Automated approval is overridden, and the request is routed to `policy_status: "ambiguous"` and `status: "escalated"` (`decision: "escalate"`) for human supervisor review.
+- **Step 1 (`POST /refunds`) Input**:
+  ```json
+  {
+    "order_id": "ORD-1008",
+    "customer_request_text": "I ordered this mirrorless camera but received the wrong lens bundle. I would like to return it for a refund."
+  }
+  ```
+- **Step 1 Expected Output**: `202 Accepted`
+  ```json
+  {
+    "refund_id": "ref_...",
+    "order_id": "ORD-1008",
+    "status": "pending",
+    "created_at": "..."
+  }
+  ```
+- **Step 2 Verification (`GET /refunds/{refund_id}`)**:
+  - Wait 2–3 seconds for the agent evaluation.
+  - **Expected Status**: `200 OK`
+  - **Expected Fields**:
+    - `status`: `"escalated"`
+    - `decision`: `"escalate"`
+    - `policy_status`: `"ambiguous"`
+    - `reasoning`: Explicitly identifies the product conflict (e.g. `"Customer request describes 'camera' which does not match ordered item 'Smart Fitness Watch'"`).
+    - `approval_email_text`: `null`
+    - `denial_email_text`: `null`
+- **Expected Edge-Case Behaviors**:
+  - **Generic Phrasing Passes**: Generic phrasing (e.g. *"The item arrived damaged"*, *"My package was crushed"*, *"The product is defective"*) is treated neutrally and does NOT trigger a mismatch.
+  - **Partial/Colloquial Names Pass**: Partial titles (e.g. *"the fitness watch strap broke"*, *"chair armrest snapped"*) correctly match and proceed with standard policy evaluation.
+
