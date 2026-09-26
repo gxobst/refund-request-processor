@@ -393,6 +393,19 @@ async def test_e2e_escalation_flow_low_confidence(mock_repo: RefundRepository):
 @pytest.mark.asyncio
 async def test_e2e_clarification_lifecycle(mock_repo: RefundRepository):
     """Verify end-to-end customer clarification lifecycle from pause to resumption and auto-approval."""
+    # Seed ORD-1001 with order_amount <= $200 so changed_mind clarification passes deterministic policy limits
+    orders_table = mock_repo.dynamodb_resource.Table("mock-orders")
+    orders_table.put_item(
+        Item={
+            "order_id": "ORD-1001",
+            "item": "Ergonomic Office Chair",
+            "purchase_date": "2026-09-10",
+            "delivery_date": "2026-09-12",
+            "order_amount": Decimal("150.0"),
+            "delivery_status": "delivered",
+        }
+    )
+
     payload = {
         "order_id": "ORD-1001",
         "customer_request_text": "I am unsure what happened, low confidence description.",
@@ -424,7 +437,7 @@ async def test_e2e_clarification_lifecycle(mock_repo: RefundRepository):
 
         # 3. Customer submits clarification response via POST /refunds/{refund_id}/clarify
         clarify_payload = {
-            "response_text": "The delivery was delayed and late, delivered well past the promised date.",
+            "response_text": "I changed my mind about this chair. It is unopened and in original packaging, so I no longer need it.",
         }
         clarify_response = await client.post(
             f"/refunds/{refund_id}/clarify", json=clarify_payload
@@ -447,7 +460,7 @@ async def test_e2e_clarification_lifecycle(mock_repo: RefundRepository):
     assert final_record["clarification_response"] == clarify_payload["response_text"]
     assert len(final_record["clarification_history"]) == 1
     assert final_record["clarification_history"][0]["response"] == clarify_payload["response_text"]
-    assert "wrong_item" in final_record["reasoning"].lower() or "approved" in final_record["reasoning"].lower()
+    assert "changed_mind" in final_record["reasoning"].lower() or "approved" in final_record["reasoning"].lower()
 
 
 @pytest.mark.asyncio
