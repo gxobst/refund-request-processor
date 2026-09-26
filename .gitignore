@@ -1,7 +1,5 @@
 # Documentation & Internal Specs
-_docs/*
-!_docs/MANUAL_TESTING_GUIDE.md
-!_docs/plan.md
+_docs/
 
 # Environment variables
 .env
