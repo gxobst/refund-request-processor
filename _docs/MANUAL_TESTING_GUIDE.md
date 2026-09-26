@@ -227,63 +227,82 @@ This guide provides end-to-end test scenarios designed to verify all capabilitie
 ---
 
 ### TC-08: Clarification Exhaustion to Human Escalation
-- **Endpoint**: `POST /refunds` $\rightarrow$ `POST /refunds/{id}/clarify` (Cycle 1) $\rightarrow$ `POST /refunds/{id}/clarify` (Cycle 2) $\rightarrow$ `GET /refunds/{id}`
-- **Goal**: Validate that repeated unhelpful or vague clarification answers increment `clarification_count` across a complete two-stage clarification cycle and escalate to manual supervisor review once the maximum attempts threshold (`>= 2`) is exhausted.
-- **Step 1 (`POST /refunds`) - Initial Ambiguous Intake**:
+- **Endpoint**: `POST /refunds` (Intake) $\rightarrow$ `POST /refunds/{id}/clarify` (Answer 1) $\rightarrow$ `POST /refunds/{id}/clarify` (Answer 2) $\rightarrow$ `GET /refunds/{id}`
+- **Goal**: Validate that repeated unhelpful or vague clarification answers increment `clarification_count` across the full two-cycle clarification allowance, and escalate to manual supervisor review once the maximum attempts threshold (`clarification_count >= 2`) is exhausted.
+
+> [!IMPORTANT]
+> **Understanding the 3-Turn / 2-Cycle Clarification Sequence**:
+> - **Turn 1 (Intake)**: Initial vague refund request pauses at `awaiting_clarification` (`clarification_count: 1`). The system sends Question #1 to the customer.
+> - **Turn 2 (Customer Answer #1)**: Submitting the 1st vague `/clarify` response opens Cycle 2. The system sends Question #2, remaining in **`status: "awaiting_clarification"`** with **`clarification_count: 2`**. *(It does NOT escalate yet because the customer is given a second chance to answer).*
+> - **Turn 3 (Customer Answer #2 - Exhaustion)**: Submitting the 2nd vague `/clarify` response exhausts all allowed clarification attempts (`clarification_count >= 2`). The system routes to **`status: "escalated"`** and **`decision: "escalate"`** for supervisor review.
+
+#### Step 1: Initial Ambiguous Intake (Turn 1)
+- **Action**: In Swagger UI, expand `POST /refunds`.
+- **Request Body**:
+  ```json
+  {
+    "order_id": "ORD-1009",
+    "customer_request_text": "I am unsure what happened, low confidence description of wireless earbuds for order ORD-1009."
+  }
+  ```
+- **Expected Status**: `202 Accepted`
+- *(Copy the returned `refund_id` for subsequent steps)*.
+- **Verification (`GET /refunds/{refund_id}`)**:
+  - `status`: `"awaiting_clarification"`
+  - `decision`: `null`
+  - `clarification_count`: `1`
+  - `clarification_prompt`: Formatted customer inquiry email prompting for clarification (Question #1).
+
+#### Step 2: First Clarification Response - Enters Cycle 2 (Turn 2)
+- **Action**: In Swagger UI, expand `POST /refunds/{refund_id}/clarify`.
+- **Input**:
+  - `refund_id`: `<refund_id>`
   - Request Body:
-    ```json
-    {
-      "order_id": "ORD-1009",
-      "customer_request_text": "I am unsure what happened, low confidence description of wireless earbuds for order ORD-1009."
-    }
-    ```
-  - **Expected Status**: `202 Accepted`
-  - *(Copy the returned `refund_id` for subsequent steps)*.
-  - **Verification (`GET /refunds/{refund_id}`)**:
-    - `status`: `"awaiting_clarification"`
-    - `clarification_count`: `1`
-    - `clarification_prompt`: Formatted customer inquiry email prompting for clarification.
-- **Step 2 (`POST /refunds/{refund_id}/clarify`) - Clarification Cycle 1 (First Vague Response)**:
-  - Submit the first ambiguous clarification response:
     ```json
     {
       "response_text": "Still unsure about what happened, low confidence details."
     }
     ```
-  - **Expected Status**: `200 OK` (`status: "pending"`).
-  - **Verification (`GET /refunds/{refund_id}`)**:
-    - `status`: `"awaiting_clarification"`
-    - `clarification_count`: `2`
-    - `clarification_prompt`: Formatted customer inquiry email prompting for clarification again.
-- **Step 3 (`POST /refunds/{refund_id}/clarify`) - Clarification Cycle 2 (Second Vague Response - Exhaustion)**:
-  - Submit the second ambiguous clarification response (exhausting maximum clarification attempts):
+- **Expected Status**: `200 OK` (returns record with `status: "pending"`).
+- **Verification (`GET /refunds/{refund_id}`)** *(wait 2-3 seconds for background worker)*:
+  - `status`: `"awaiting_clarification"` *(Note: Still awaiting clarification because the customer is granted attempt #2)*
+  - `decision`: `null`
+  - `clarification_count`: `2`
+  - `clarification_prompt`: Formatted customer inquiry email prompting for clarification again (Question #2).
+
+#### Step 3: Second Clarification Response - Exhausts Attempts (Turn 3)
+- **Action**: In Swagger UI, submit a second vague answer to `POST /refunds/{refund_id}/clarify`.
+- **Input**:
+  - `refund_id`: `<refund_id>`
+  - Request Body:
     ```json
     {
       "response_text": "Still unsure and low confidence description."
     }
     ```
-  - **Expected Status**: `200 OK` (`status: "pending"`).
-- **Step 4 (`GET /refunds/{refund_id}`) - Escalation Verification**:
-  - Wait 2–3 seconds and execute `GET /refunds/{refund_id}`.
-  - **Expected Status**: `200 OK`
-  - **Expected Output**:
-    ```json
-    {
-      "refund_id": "ref_...",
-      "order_id": "ORD-1009",
-      "customer_request_text": "I am unsure what happened, low confidence description of wireless earbuds for order ORD-1009.\n[Clarification]: Still unsure about what happened, low confidence details.\n[Clarification]: Still unsure and low confidence description.",
-      "status": "escalated",
-      "decision": "escalate",
-      "clarification_count": 2,
-      "clarification_response": "Still unsure and low confidence description.",
-      "reasoning": "Confidence score 0.52 below threshold (0.70) after reaching maximum clarification cycles (2). Escalating to human review queue.",
-      "approval_email_text": null,
-      "denial_email_text": null,
-      "created_at": "...",
-      "updated_at": "..."
-    }
-    ```
-  - *(Save this escalated `refund_id` for use in TC-09)*.
+- **Expected Status**: `200 OK` (returns record with `status: "pending"`).
+
+#### Step 4: Verify Final Escalation
+- **Action**: Wait 2–3 seconds and execute `GET /refunds/{refund_id}`.
+- **Expected Status**: `200 OK`
+- **Expected Output**:
+  ```json
+  {
+    "refund_id": "ref_...",
+    "order_id": "ORD-1009",
+    "customer_request_text": "I am unsure what happened, low confidence description of wireless earbuds for order ORD-1009.\n[Clarification]: Still unsure about what happened, low confidence details.\n[Clarification]: Still unsure and low confidence description.",
+    "status": "escalated",
+    "decision": "escalate",
+    "clarification_count": 2,
+    "clarification_response": "Still unsure and low confidence description.",
+    "reasoning": "Confidence score 0.30 below threshold (0.70) after reaching maximum clarification cycles (2). Escalating to human review queue.",
+    "approval_email_text": null,
+    "denial_email_text": null,
+    "created_at": "...",
+    "updated_at": "..."
+  }
+  ```
+- *(Save this escalated `refund_id` for use in TC-09 and TC-15)*.
 
 ---
 

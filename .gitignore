@@ -1,5 +1,6 @@
 # Documentation & Internal Specs
-_docs/
+_docs/*
+!_docs/MANUAL_TESTING_GUIDE.md
 
 # Environment variables
 .env
@@ -21,6 +22,10 @@ build/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Local Uploads
+backend/uploads/
+uploads/
 
 # Node & Frontend
 node_modules/
