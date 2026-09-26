@@ -149,13 +149,25 @@ def clarification_node(state: dict[str, Any]) -> dict[str, Any]:
     customer_text = state.get("customer_request_text", "")
     category = state.get("category")
     order = state.get("order")
+    failed_rules = state.get("failed_rules") or []
 
-    output = generate_clarification_prompt(
-        customer_request_text=customer_text,
-        category=category,
-        order=order,
-    )
-    prompt = output.clarification_prompt
+    if category == "damaged" and "physical_damage_verification" in failed_rules:
+        order_id = state.get("order_id") or (order.get("order_id") if order else "")
+        order_str = f" for order {order_id}" if order_id else ""
+        prompt = (
+            f"Dear Customer,\n\n"
+            f"Thank you for contacting us regarding your refund request{order_str}.\n\n"
+            f"To evaluate your damage claim, our policy requires photo proof of both the damaged merchandise "
+            f"and the exterior shipping packaging condition upon delivery. Please reply with or upload clear photos showing the damaged items and packaging.\n\n"
+            f"Sincerely,\nCustomer Support Team"
+        )
+    else:
+        output = generate_clarification_prompt(
+            customer_request_text=customer_text,
+            category=category,
+            order=order,
+        )
+        prompt = output.clarification_prompt
 
     current_count = (
         state.get("clarification_count")

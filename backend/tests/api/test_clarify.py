@@ -269,9 +269,9 @@ async def test_resume_refund_workflow_with_checkpointer(monkeypatch: pytest.Monk
 
     # Step 2: Resume with high confidence classification on the clarified text
     high_conf = ClassificationOutput(
-        category="damaged",
+        category="wrong_item",
         confidence_score=0.95,
-        reasoning="Customer provided clear evidence of damage occurred in transit.",
+        reasoning="Customer provided clear evidence that the wrong item was delivered.",
     )
     mock_llm_high = MagicMock()
     mock_llm_high.with_structured_output.return_value = RunnableLambda(lambda _: high_conf)
@@ -306,9 +306,9 @@ async def test_resume_refund_workflow_fallback_to_repository(monkeypatch: pytest
     )
 
     high_conf = ClassificationOutput(
-        category="damaged",
+        category="wrong_item",
         confidence_score=0.92,
-        reasoning="Clear explanation of damaged item.",
+        reasoning="Clear explanation of wrong item received.",
     )
     mock_llm = MagicMock()
     mock_llm.with_structured_output.return_value = RunnableLambda(lambda _: high_conf)

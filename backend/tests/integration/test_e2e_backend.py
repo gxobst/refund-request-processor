@@ -256,10 +256,10 @@ def test_seed_orders_data_verification(mock_dynamo_resource: MockDynamoResource)
 @pytest.mark.asyncio
 async def test_e2e_auto_approve_flow(mock_repo: RefundRepository):
     """AC 2: Verify full lifecycle for valid auto-approved refund request."""
-    # Arrange: ORD-1001 is delivered within window, $250 <= $500 limit for damaged category
+    # Arrange: ORD-1001 is delivered within window, $250 <= $1000 limit for wrong_item category
     payload = {
         "order_id": "ORD-1001",
-        "customer_request_text": "The chair arrived with a broken armrest during shipping.",
+        "customer_request_text": "I received the wrong item in my package, not the chair I ordered.",
     }
     transport = ASGITransport(app=app)
 
@@ -282,7 +282,7 @@ async def test_e2e_auto_approve_flow(mock_repo: RefundRepository):
     assert final_record["confidence_score"] >= 0.7
     assert len(final_record["reasoning"]) > 0
     assert final_record["matched_policy_rule"] is not None
-    assert final_record["matched_policy_rule"]["max_order_amount"] == 500.0
+    assert final_record["matched_policy_rule"]["max_order_amount"] == 1000.0
 
 
 @pytest.mark.asyncio
@@ -413,7 +413,7 @@ async def test_e2e_clarification_lifecycle(mock_repo: RefundRepository):
 
         # 3. Customer submits clarification response via POST /refunds/{refund_id}/clarify
         clarify_payload = {
-            "response_text": "The chair arrived broken with a snapped armrest in transit.",
+            "response_text": "I received the wrong item in my package, it was not the ergonomic chair I ordered.",
         }
         clarify_response = await client.post(
             f"/refunds/{refund_id}/clarify", json=clarify_payload
@@ -430,7 +430,7 @@ async def test_e2e_clarification_lifecycle(mock_repo: RefundRepository):
     assert final_record["decision"] == "auto_approve"
     assert final_record["confidence_score"] >= 0.70
     assert final_record["clarification_response"] == clarify_payload["response_text"]
-    assert "damaged" in final_record["reasoning"].lower() or "approved" in final_record["reasoning"].lower()
+    assert "wrong_item" in final_record["reasoning"].lower() or "approved" in final_record["reasoning"].lower()
 
 
 @pytest.mark.asyncio
@@ -461,7 +461,7 @@ async def test_e2e_clarification_lifecycle_ord_1008(mock_repo: RefundRepository)
 
         # Step 2: Customer submits high-confidence clarifying response via POST /refunds/{refund_id}/clarify
         clarify_payload = {
-            "response_text": "The smart fitness watch screen is cracked and damaged during shipping.",
+            "response_text": "I received the wrong item, an incorrect fitness watch model, different color and version than ordered.",
         }
         clarify_response = await client.post(
             f"/refunds/{refund_id}/clarify", json=clarify_payload
@@ -478,7 +478,7 @@ async def test_e2e_clarification_lifecycle_ord_1008(mock_repo: RefundRepository)
     assert final_record["decision"] == "auto_approve"
     assert final_record["confidence_score"] >= 0.70
     assert final_record["clarification_response"] == clarify_payload["response_text"]
-    assert "damaged" in final_record["reasoning"].lower() or "approved" in final_record["reasoning"].lower()
+    assert "wrong_item" in final_record["reasoning"].lower() or "approved" in final_record["reasoning"].lower()
 
 
 @pytest.mark.asyncio
@@ -537,7 +537,7 @@ async def test_e2e_high_confidence_requests_bypass_clarification(mock_repo: Refu
             "/refunds",
             json={
                 "order_id": "ORD-1001",
-                "customer_request_text": "The chair arrived with a broken armrest during shipping.",
+                "customer_request_text": "I received the wrong item in my package, not the ergonomic chair I ordered.",
             },
         )
         assert res_1001.status_code == 202
@@ -628,7 +628,7 @@ async def test_e2e_queue_listing_and_filtering(mock_repo: RefundRepository):
         # Submit 1 auto-approved request
         r1 = await client.post(
             "/refunds",
-            json={"order_id": "ORD-1001", "customer_request_text": "Damaged chair."},
+            json={"order_id": "ORD-1001", "customer_request_text": "Wrong item received."},
         )
         # Submit 1 denied request
         r2 = await client.post(
@@ -717,7 +717,7 @@ async def test_langsmith_observability_tracing(monkeypatch: pytest.MonkeyPatch):
     result = await run_refund_workflow(
         refund_id="ref_trace_test_100",
         order_id="ORD-1001",
-        customer_request_text="Damaged product request with tracing enabled.",
+        customer_request_text="Wrong item received with tracing enabled.",
         thread_id="thread_trace_100",
         callbacks=[spy_handler],
     )
@@ -752,7 +752,12 @@ class MockToolCallingModel:
     def invoke(self, messages: list[Any], **kwargs: Any) -> AIMessage:
         if self.responses:
             return self.responses.pop(0)
-        return AIMessage(content="Evaluation complete.", tool_calls=[])
+        json_str = (
+            self.final_output.model_dump_json()
+            if hasattr(self.final_output, "model_dump_json")
+            else ""
+        )
+        return AIMessage(content=f"```json\n{json_str}\n```", tool_calls=[])
 
     def with_structured_output(self, schema: Any, **kwargs: Any) -> Any:
         return RunnableLambda(lambda _: self.final_output)
@@ -866,7 +871,7 @@ async def test_e2e_dual_tool_verification_flow_ord_1010(
 
     payload = {
         "order_id": "ORD-1010",
-        "customer_request_text": "High value mirrorless camera arrived with damaged packaging and broken lens.",
+        "customer_request_text": "High value mirrorless camera received was the wrong item.",
     }
     transport = ASGITransport(app=app)
 
@@ -1025,6 +1030,80 @@ async def test_e2e_product_mismatch_escalates(mock_repo: RefundRepository):
     assert get_record["status"] == "escalated"
     assert get_record["decision"] == "escalate"
     assert "product mismatch" in get_record["reasoning"].lower()
+
+
+@pytest.mark.asyncio
+async def test_e2e_damaged_without_evidence_pauses_and_resumes_with_evidence(
+    mock_repo: RefundRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """AC: Damaged refund claim without photos pauses at awaiting_clarification and resumes upon customer evidence upload + clarification."""
+    storage_service = EvidenceStorageService(local_dir=tmp_path, storage_backend="local")
+    app.dependency_overrides[get_evidence_storage_service] = lambda: storage_service
+    monkeypatch.setattr("app.services.storage.get_evidence_storage_service", lambda: storage_service)
+
+    expected_policy_output = PolicyCheckerOutput(
+        policy_status="pass",
+        passed_rules=["refund_window_days", "eligible_delivery_statuses", "max_order_amount"],
+        failed_rules=[],
+        policy_reasoning="Multimodal model verified physical damage on the chair armrest.",
+    )
+    mock_policy_llm = MockToolCallingModel(
+        responses=[], final_output=expected_policy_output
+    )
+    monkeypatch.setattr(
+        "app.agents.policy_checker.get_bedrock_llm", lambda: mock_policy_llm
+    )
+
+    payload = {
+        "order_id": "ORD-1001",
+        "customer_request_text": "The chair arrived broken with a snapped armrest during transit.",
+    }
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Step 1: Submit damaged refund request without photo evidence
+        post_res = await client.post("/refunds", json=payload)
+        assert post_res.status_code == 202
+        refund_id = post_res.json()["refund_id"]
+
+        # Step 2: Poll status until workflow pauses at awaiting_clarification
+        paused_record = await poll_until_not_pending(client, refund_id)
+        assert paused_record["status"] == "awaiting_clarification"
+        assert paused_record["category"] == "damaged"
+        assert paused_record["clarification_count"] == 1
+        assert paused_record["decision"] is None
+        prompt = paused_record.get("clarification_prompt", "")
+        assert "photo" in prompt.lower()
+        assert "packaging" in prompt.lower() or "damage" in prompt.lower()
+
+        # Step 3: Customer uploads damage photo evidence via POST /refunds/{refund_id}/evidence
+        file_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+        evidence_res = await client.post(
+            f"/refunds/{refund_id}/evidence",
+            files={"file": ("broken_chair.jpg", file_bytes, "image/jpeg")},
+        )
+        assert evidence_res.status_code == 201
+        evidence_data = evidence_res.json()
+        assert len(evidence_data["evidence"]) == 1
+
+        # Step 4: Customer submits clarification response via POST /refunds/{refund_id}/clarify
+        clarify_payload = {
+            "response_text": "Here is the photo of the broken armrest and exterior shipping box.",
+        }
+        clarify_res = await client.post(
+            f"/refunds/{refund_id}/clarify", json=clarify_payload
+        )
+        assert clarify_res.status_code == 200
+
+        # Step 5: Background workflow resumes, multimodal inspection passes, reaches completed
+        final_record = await poll_until_not_pending(client, refund_id)
+        assert final_record["status"] == "completed"
+        assert final_record["decision"] == "auto_approve"
+        assert final_record["category"] == "damaged"
+        assert len(final_record.get("evidence", [])) == 1
+
+    app.dependency_overrides.pop(get_evidence_storage_service, None)
+
 
 
 

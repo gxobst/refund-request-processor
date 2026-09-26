@@ -84,12 +84,17 @@ async def run_refund_workflow(
 
 async def resume_refund_workflow(
     refund_id: str,
-    response_text: str,
+    response_text: str | None = None,
     thread_id: str | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     repository: Any = None,
     use_dynamodb: bool | None = None,
     callbacks: list[Any] | None = None,
+    *,
+    evidence: list[dict[str, Any] | Any] | None = None,
+    order_id: str | None = None,
+    clarification_response: str | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """Resume the multi-agent refund evaluation workflow upon customer clarification.
 
@@ -102,12 +107,21 @@ async def resume_refund_workflow(
         use_dynamodb: Optional bool indicating whether to enable DynamoDB checkpointing.
             Defaults to True in non-test environments if checkpointer is None.
         callbacks: Optional list of callback handlers for tracing.
+        evidence: Optional list of additional evidence items to attach.
+        order_id: Optional order ID override.
+        clarification_response: Optional alias for response_text.
 
     Returns:
         Final state dictionary containing decision, reasoning, and status.
     """
     if repository is not None:
         set_current_repository(repository)
+
+    effective_response_text = (
+        response_text
+        if response_text is not None
+        else (clarification_response or "")
+    )
 
     if checkpointer is not None:
         effective_checkpointer = checkpointer
@@ -150,26 +164,45 @@ async def resume_refund_workflow(
             "clarification_count": 1,
         }
 
-    order_id = existing_state.get("order_id", "")
-    config["metadata"] = {"refund_id": refund_id, "order_id": order_id}
+    merged_evidence = list(existing_state.get("evidence") or [])
+    if repository is not None:
+        rec = repository.get_refund_request(refund_id)
+        if rec and rec.evidence:
+            for ev in rec.evidence:
+                dumped = ev.model_dump() if hasattr(ev, "model_dump") else ev
+                if dumped not in merged_evidence:
+                    merged_evidence.append(dumped)
+    if evidence:
+        for ev in evidence:
+            dumped = ev.model_dump() if hasattr(ev, "model_dump") else ev
+            if dumped not in merged_evidence:
+                merged_evidence.append(dumped)
+
+    effective_order_id = order_id or existing_state.get("order_id", "")
+    config["metadata"] = {"refund_id": refund_id, "order_id": effective_order_id}
     config["tags"] = ["refund-workflow"]
     if callbacks is not None:
         config["callbacks"] = callbacks
 
     original_text = existing_state.get("customer_request_text", "")
     combined_text = (
-        f"{original_text}\n[Clarification]: {response_text}"
+        f"{original_text}\n[Clarification]: {effective_response_text}"
         if original_text
-        else f"[Clarification]: {response_text}"
+        else f"[Clarification]: {effective_response_text}"
     )
 
     state_update: dict[str, Any] = {
         **existing_state,
         "customer_request_text": combined_text,
-        "clarification_response": response_text,
+        "clarification_response": effective_response_text,
         "status": "pending",
         "needs_clarification": False,
+        "evidence": merged_evidence,
     }
+    if effective_order_id:
+        state_update["order_id"] = effective_order_id
+        if not state_update.get("order"):
+            state_update["order"] = _lookup_order_data(effective_order_id)
 
     await graph.aupdate_state(config, state_update, as_node="intake")
     final_state = await graph.ainvoke(None, config=config)

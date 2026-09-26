@@ -50,11 +50,31 @@ def route_classifier(state: RefundWorkflowState) -> str:
 def route_policy_check(state: RefundWorkflowState) -> str:
     """Conditional router following policy checking.
 
-    Routes ambiguous and deterministic results to the decision node for
-    automated resolution or escalation handling.
+    When category == "damaged" and policy_status == "ambiguous" with
+    "physical_damage_verification" in failed_rules:
+    - Returns 'clarification' if clarification_count < 2.
+    - Returns 'decision' if clarification_count >= 2 (escalating directly to supervisor review).
+    Otherwise returns 'decision'.
     """
-    if state.get("policy_status") == "ambiguous":
+    if state.get("missing_order_data"):
         return "decision"
+
+    category = state.get("category")
+    policy_status = state.get("policy_status")
+    failed_rules = state.get("failed_rules") or []
+
+    if (
+        category == "damaged"
+        and policy_status == "ambiguous"
+        and "physical_damage_verification" in failed_rules
+    ):
+        count = state.get("clarification_count")
+        if count is None:
+            count = 0
+        if count < 2:
+            return "clarification"
+        return "decision"
+
     return "decision"
 
 
@@ -101,7 +121,10 @@ def build_refund_graph(
     builder.add_conditional_edges(
         "policy_checker",
         route_policy_check,
-        {"decision": "decision"},
+        {
+            "clarification": "clarification",
+            "decision": "decision",
+        },
     )
 
     builder.add_edge("decision", "save_dynamo")

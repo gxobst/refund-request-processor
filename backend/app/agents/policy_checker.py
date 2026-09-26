@@ -567,14 +567,13 @@ def check_policy(
     # 1. Deterministic Pass Bypass
     # Clear-cut pass bypasses LLM except for:
     # - late_delivery (requires external carrier verification)
+    # - damaged category (unconditionally bypasses deterministic pass; requires mandatory photo evidence and multimodal inspection)
     # - high-value orders (order_amount >= 400.0, requires dual external verification)
-    # - damaged category when valid image evidence is provided (requires multimodal LLM inspection)
     is_high_value = float(order.get("order_amount", 0.0) or 0.0) >= HIGH_VALUE_THRESHOLD
-    has_active_image_evidence = bool(image_blocks)
     should_bypass_pass = (
         category == "late_delivery"
+        or category == "damaged"
         or is_high_value
-        or (category == "damaged" and has_active_image_evidence)
     )
     if eval_result.status == "pass" and not should_bypass_pass:
         return PolicyCheckerOutput(
@@ -616,7 +615,18 @@ def check_policy(
                 tool_calls=[],
             )
 
-    # 3. LLM External Verification and Ambiguity Resolution
+    # 4. Mandatory Photo Evidence Examination for Damaged Category
+    if category == "damaged" and not image_blocks:
+        return PolicyCheckerOutput(
+            policy_status="ambiguous",
+            matched_policy_rule=eval_result.matched_policy_rule,
+            passed_rules=eval_result.passed_rules,
+            failed_rules=["physical_damage_verification"],
+            policy_reasoning="Damage claims require photo evidence of the damaged merchandise and packaging before evaluation.",
+            tool_calls=[],
+        )
+
+    # 5. LLM External Verification and Ambiguity Resolution
     executed_tool_calls: list[dict[str, Any]] = []
     executed_tool_names: set[str] = set()
     active_tools = tools if tools is not None else [query_carrier_tracking, query_payment_transaction]

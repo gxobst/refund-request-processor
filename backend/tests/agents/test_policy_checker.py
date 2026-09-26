@@ -38,7 +38,7 @@ def test_check_policy_deterministic_pass_bypasses_llm():
     mock_llm = MagicMock()
 
     # Act
-    result = check_policy(category="damaged", order=order, llm=mock_llm)
+    result = check_policy(category="wrong_item", order=order, llm=mock_llm)
 
     # Assert
     assert isinstance(result, PolicyCheckerOutput)
@@ -118,7 +118,7 @@ def test_check_policy_ambiguous_invokes_llm():
     mock_llm = make_mock_llm(expected_output)
 
     # Act
-    result = check_policy(category="damaged", order=order, llm=mock_llm)
+    result = check_policy(category="wrong_item", order=order, llm=mock_llm)
 
     # Assert
     assert isinstance(result, PolicyCheckerOutput)
@@ -147,7 +147,7 @@ def test_check_policy_ambiguous_resolved_by_llm():
     mock_llm = make_mock_llm(expected_output)
 
     # Act
-    result = check_policy(category="damaged", order=order, llm=mock_llm)
+    result = check_policy(category="wrong_item", order=order, llm=mock_llm)
 
     # Assert
     assert result.policy_status == "pass"
@@ -160,7 +160,7 @@ def test_policy_checker_node_contract():
     # Arrange: clear-cut passing order in state
     state = {
         "refund_id": "ref_node_1",
-        "category": "damaged",
+        "category": "wrong_item",
         "order": {
             "order_id": "ORD-NODE-1",
             "order_amount": 120.0,
@@ -175,7 +175,7 @@ def test_policy_checker_node_contract():
     # Assert
     assert node_result["policy_status"] == "pass"
     assert isinstance(node_result["matched_policy_rule"], dict)
-    assert node_result["matched_policy_rule"]["max_order_amount"] == 500.0
+    assert node_result["matched_policy_rule"]["max_order_amount"] == 1000.0
     assert "passed_rules" in node_result
     assert "failed_rules" in node_result
     assert node_result["failed_rules"] == []
@@ -186,7 +186,7 @@ def test_policy_checker_node_ambiguous_state():
     # Arrange: incomplete order triggering ambiguity
     state = {
         "refund_id": "ref_node_2",
-        "category": "damaged",
+        "category": "wrong_item",
         "order": {
             "order_id": "ORD-NODE-2",
             "order_amount": 120.0,
@@ -299,7 +299,7 @@ def test_check_policy_dispute_status_under_review_returns_ambiguous_or_fail():
     mock_llm = MockToolCallingLLM(responses=[tool_call_msg], final_output=expected_output)
 
     # Act
-    result = check_policy(category="damaged", order=order, llm=mock_llm)
+    result = check_policy(category="late_delivery", order=order, llm=mock_llm)
 
     # Assert
     assert result.policy_status in ("ambiguous", "fail")
@@ -341,7 +341,7 @@ def test_check_policy_parallel_tool_calls_in_single_turn():
     mock_llm = MockToolCallingLLM(responses=[tool_call_msg], final_output=expected_output)
 
     # Act
-    result = check_policy(category="damaged", order=order, llm=mock_llm)
+    result = check_policy(category="late_delivery", order=order, llm=mock_llm)
 
     # Assert
     assert result.policy_status == "pass"
@@ -375,7 +375,7 @@ def test_check_policy_unknown_tool_handled_gracefully():
     mock_llm = MockToolCallingLLM(responses=[tool_call_msg], final_output=expected_output)
 
     # Act
-    result = check_policy(category="damaged", order=order, llm=mock_llm)
+    result = check_policy(category="late_delivery", order=order, llm=mock_llm)
 
     # Assert: should not raise exception, and error ToolMessage should be passed to model
     assert isinstance(result, PolicyCheckerOutput)
@@ -415,7 +415,7 @@ def test_check_policy_tool_execution_exception_handled_safely():
     mock_llm = MockToolCallingLLM(responses=[tool_call_msg], final_output=expected_output)
 
     # Act: execute with failing tool
-    result = check_policy(category="damaged", order=order, llm=mock_llm, tools=[failing_tool])
+    result = check_policy(category="late_delivery", order=order, llm=mock_llm, tools=[failing_tool])
 
     # Assert: error caught and ToolMessage constructed
     assert isinstance(result, PolicyCheckerOutput)
@@ -471,7 +471,7 @@ def test_check_policy_max_tool_iterations_enforced():
     loop_llm = InfiniteLoopLLM(expected_output)
 
     # Act: max_tool_iterations=3
-    result = check_policy(category="damaged", order=order, llm=loop_llm, max_tool_iterations=3)
+    result = check_policy(category="late_delivery", order=order, llm=loop_llm, max_tool_iterations=3)
 
     # Assert: invoke loop stopped exactly at 3 iterations
     assert loop_llm.tool_loop_invocations == 3
@@ -482,7 +482,7 @@ def test_policy_checker_node_delegates_with_only_order_id():
     # Arrange: state has order_id but order is None
     state = {
         "refund_id": "ref_node_order_id_only",
-        "category": "damaged",
+        "category": "wrong_item",
         "order": None,
         "order_id": "ORD-NODE-1",
     }
@@ -510,7 +510,7 @@ def test_check_policy_deterministic_pass_has_empty_tool_calls():
         "delivery_status": "delivered",
         "delivery_date": date.today().isoformat(),
     }
-    result = check_policy(category="damaged", order=order)
+    result = check_policy(category="wrong_item", order=order)
     assert result.policy_status == "pass"
     assert result.tool_calls == []
 
@@ -575,7 +575,7 @@ def test_check_policy_invoking_payment_tool_records_tool_calls_audit():
     )
     mock_llm = MockToolCallingLLM(responses=[tool_call_msg], final_output=expected_output)
 
-    result = check_policy(category="damaged", order=order, llm=mock_llm)
+    result = check_policy(category="late_delivery", order=order, llm=mock_llm)
 
     assert len(result.tool_calls) == 1
     audit = result.tool_calls[0]
@@ -868,7 +868,7 @@ def test_check_policy_exception_on_ambiguous_order_reports_error_details():
     bound_mock.invoke.side_effect = RuntimeError("Bedrock model unavailable")
     mock_llm.bind_tools.return_value = bound_mock
 
-    result = check_policy(category="damaged", order=order, llm=mock_llm)
+    result = check_policy(category="wrong_item", order=order, llm=mock_llm)
 
     assert isinstance(result, PolicyCheckerOutput)
     assert result.policy_status == "ambiguous"
@@ -1008,7 +1008,7 @@ def test_check_policy_ord_1010_dual_tool_verification():
     bound_mock = MagicMock()
     bound_mock.invoke.side_effect = [tool_call_msg, synthesis_msg]
     mock_llm.bind_tools.return_value = bound_mock
-    result = check_policy(category="damaged", order=order, llm=mock_llm)
+    result = check_policy(category="wrong_item", order=order, llm=mock_llm)
 
     assert isinstance(result, PolicyCheckerOutput)
     assert result.policy_status == "pass"
@@ -1061,7 +1061,7 @@ def test_check_policy_ord_1010_payment_dispute_evaluates_to_ambiguous():
     bound_mock = MagicMock()
     bound_mock.invoke.side_effect = [tool_call_msg, synthesis_msg]
     mock_llm.bind_tools.return_value = bound_mock
-    result = check_policy(category="damaged", order=order, llm=mock_llm)
+    result = check_policy(category="wrong_item", order=order, llm=mock_llm)
 
     assert isinstance(result, PolicyCheckerOutput)
     assert result.policy_status == "ambiguous"
@@ -1611,8 +1611,8 @@ def test_check_policy_image_retrieval_file_not_found_returns_ambiguous():
     mock_llm.invoke.assert_not_called()
 
 
-def test_check_policy_damaged_without_evidence_preserves_deterministic_pass():
-    """AC 2218: check_policy without evidence arguments preserves deterministic pass behavior."""
+def test_check_policy_damaged_without_evidence_returns_ambiguous_and_never_passes():
+    """AC: category == 'damaged' without evidence returns policy_status: 'ambiguous' with failed_rules=['physical_damage_verification'] and never returns 'pass'."""
     order = {
         "order_id": "ORD-DMG-007",
         "order_amount": 100.0,
@@ -1623,17 +1623,40 @@ def test_check_policy_damaged_without_evidence_preserves_deterministic_pass():
 
     # Call with evidence=None
     result_none = check_policy(category="damaged", order=order, llm=mock_llm, evidence=None)
-    assert result_none.policy_status == "pass"
+    assert result_none.policy_status == "ambiguous"
+    assert result_none.policy_status != "pass"
+    assert result_none.failed_rules == ["physical_damage_verification"]
+    assert "photo evidence" in result_none.policy_reasoning.lower()
     mock_llm.invoke.assert_not_called()
 
     # Call with evidence=[]
     result_empty = check_policy(category="damaged", order=order, llm=mock_llm, evidence=[])
-    assert result_empty.policy_status == "pass"
+    assert result_empty.policy_status == "ambiguous"
+    assert result_empty.policy_status != "pass"
+    assert result_empty.failed_rules == ["physical_damage_verification"]
     mock_llm.invoke.assert_not_called()
 
     # Call without evidence parameter
     result_omitted = check_policy(category="damaged", order=order, llm=mock_llm)
-    assert result_omitted.policy_status == "pass"
+    assert result_omitted.policy_status == "ambiguous"
+    assert result_omitted.policy_status != "pass"
+    assert result_omitted.failed_rules == ["physical_damage_verification"]
+    mock_llm.invoke.assert_not_called()
+
+
+def test_check_policy_non_damage_categories_pass_deterministically_without_evidence():
+    """AC: Non-damage categories within policy limits pass deterministically without requiring image evidence."""
+    order = {
+        "order_id": "ORD-NON-DMG-001",
+        "order_amount": 100.0,
+        "delivery_status": "delivered",
+        "delivery_date": date.today().isoformat(),
+    }
+    mock_llm = MagicMock()
+    for cat in ["wrong_item", "changed_mind"]:
+        result = check_policy(category=cat, order=order, llm=mock_llm)
+        assert result.policy_status == "pass"
+        assert result.failed_rules == []
     mock_llm.invoke.assert_not_called()
 
 
@@ -1746,7 +1769,7 @@ def test_check_policy_high_value_prompt_mandate_assembly():
         })
     )
 
-    check_policy(category="damaged", order=high_value_order, llm=mock_llm)
+    check_policy(category="wrong_item", order=high_value_order, llm=mock_llm)
 
     assert bound_mock.invoke.called
     invoke_messages = bound_mock.invoke.call_args[0][0]
@@ -1807,7 +1830,7 @@ def test_check_policy_high_value_intercepts_premature_pass_and_injects_reminder(
     bound_mock.invoke.side_effect = [premature_pass_msg, tool_call_msg, final_pass_msg]
     mock_llm.bind_tools.return_value = bound_mock
 
-    result = check_policy(category="damaged", order=high_value_order, llm=mock_llm)
+    result = check_policy(category="wrong_item", order=high_value_order, llm=mock_llm)
 
     assert result.policy_status == "pass"
     assert len(result.tool_calls) == 2
@@ -1848,7 +1871,7 @@ def test_check_policy_high_value_exhausted_iterations_defaults_to_ambiguous():
     bound_mock.invoke.return_value = persistent_pass_msg
     mock_llm.bind_tools.return_value = bound_mock
 
-    result = check_policy(category="damaged", order=high_value_order, llm=mock_llm, max_tool_iterations=3)
+    result = check_policy(category="wrong_item", order=high_value_order, llm=mock_llm, max_tool_iterations=3)
 
     assert result.policy_status == "ambiguous"
     assert "Mandatory dual external verification was incomplete for high-value order" in result.policy_reasoning
@@ -1869,7 +1892,7 @@ def test_check_policy_low_value_does_not_require_dual_tools():
         "delivery_date": date.today().isoformat(),
     }
     mock_llm = MagicMock()
-    result_bypassed = check_policy(category="damaged", order=low_value_order, llm=mock_llm)
+    result_bypassed = check_policy(category="wrong_item", order=low_value_order, llm=mock_llm)
     assert result_bypassed.policy_status == "pass"
     assert result_bypassed.tool_calls == []
     mock_llm.invoke.assert_not_called()
@@ -1960,7 +1983,7 @@ def test_check_policy_generic_phrasing_does_not_trigger_product_mismatch(generic
         "delivery_date": date.today().isoformat(),
     }
     result = check_policy(
-        category="damaged",
+        category="wrong_item",
         order=order,
         customer_request_text=generic_text,
     )
@@ -1992,7 +2015,7 @@ def test_check_policy_partial_or_synonymous_product_naming_passes_verification(
         "delivery_date": date.today().isoformat(),
     }
     result = check_policy(
-        category="damaged",
+        category="wrong_item",
         order=order,
         customer_request_text=matching_text,
     )
