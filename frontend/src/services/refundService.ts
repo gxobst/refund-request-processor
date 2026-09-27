@@ -12,6 +12,21 @@ export interface SubmitRefundParams {
   file?: File | Blob | null
 }
 
+export interface OverrideRefundPayload {
+  overrideDecision: 'approve' | 'deny'
+  overrideReason: string
+}
+
+export interface SubmitClarificationPayload {
+  responseText: string
+  evidenceFile?: File | Blob | null
+}
+
+export interface RequestReviewerProofPayload {
+  proofPrompt: string
+  customerName?: string | null
+}
+
 /**
  * Retrieves the refund evaluation queue with optional status and limit filters.
  */
@@ -57,7 +72,87 @@ export async function submitRefund(params: SubmitRefundParams): Promise<RefundCr
   return apiClient.post<RefundCreateResponse>(path, payload)
 }
 
+/**
+ * Retrieves detailed record and agent reasoning for a specific refund request.
+ */
+export async function getRefundById(refundId: string): Promise<RefundRecord> {
+  const path = `/v1/refunds/${encodeURIComponent(refundId)}`
+  return apiClient.get<RefundRecord>(path)
+}
+
+/**
+ * Applies a binding human operator / supervisor override decision to an escalated refund.
+ */
+export async function overrideRefundDecision(
+  refundId: string,
+  payload: OverrideRefundPayload,
+): Promise<RefundRecord> {
+  const path = `/v1/refunds/${encodeURIComponent(refundId)}/override`
+  const body = {
+    override_decision: payload.overrideDecision,
+    override_reason: payload.overrideReason,
+  }
+  return apiClient.post<RefundRecord>(path, body)
+}
+
+/**
+ * Submits customer clarification response text and optional evidence image.
+ */
+export async function submitClarification(
+  refundId: string,
+  payload: SubmitClarificationPayload,
+): Promise<RefundRecord> {
+  const path = `/v1/refunds/${encodeURIComponent(refundId)}/clarify`
+
+  if (payload.evidenceFile) {
+    const formData = new FormData()
+    formData.append('response_text', payload.responseText)
+    formData.append('evidence_file', payload.evidenceFile)
+    return apiClient.postMultipart<RefundRecord>(path, formData)
+  }
+
+  const body = {
+    response_text: payload.responseText,
+  }
+  return apiClient.post<RefundRecord>(path, body)
+}
+
+/**
+ * Uploads a customer proof image (JPEG, PNG, WebP <= 5MB) for a refund.
+ */
+export async function uploadEvidence(
+  refundId: string,
+  file: File | Blob,
+): Promise<RefundRecord> {
+  const path = `/v1/refunds/${encodeURIComponent(refundId)}/evidence`
+  const formData = new FormData()
+  formData.append('file', file)
+  return apiClient.postMultipart<RefundRecord>(path, formData)
+}
+
+/**
+ * Submits a supervisor proof inquiry prompt for an escalated refund.
+ */
+export async function requestReviewerProof(
+  refundId: string,
+  payload: RequestReviewerProofPayload,
+): Promise<RefundRecord> {
+  const path = `/v1/refunds/${encodeURIComponent(refundId)}/request-proof`
+  const body: Record<string, unknown> = {
+    proof_prompt: payload.proofPrompt,
+  }
+  if (payload.customerName !== undefined && payload.customerName !== null) {
+    body.customer_name = payload.customerName
+  }
+  return apiClient.post<RefundRecord>(path, body)
+}
+
 export const refundService = {
   listRefunds,
   submitRefund,
+  getRefundById,
+  overrideRefundDecision,
+  submitClarification,
+  uploadEvidence,
+  requestReviewerProof,
 }

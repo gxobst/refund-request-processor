@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { listRefunds, submitRefund, refundService } from './refundService'
+import {
+  listRefunds,
+  submitRefund,
+  getRefundById,
+  overrideRefundDecision,
+  submitClarification,
+  uploadEvidence,
+  requestReviewerProof,
+  refundService,
+} from './refundService'
 import { apiClient, ApiError } from './apiClient'
 import type { RefundRecord, RefundCreateResponse } from '../types/api'
 
@@ -27,19 +36,18 @@ describe('refundService', () => {
     vi.clearAllMocks()
   })
 
+  const baseRecord: RefundRecord = {
+    refundId: 'ref_123',
+    orderId: 'ORD-1001',
+    customerRequestText: 'Item damaged',
+    status: 'pending',
+    createdAt: '2026-09-28T00:00:00Z',
+    updatedAt: '2026-09-28T00:00:00Z',
+  }
+
   describe('listRefunds', () => {
     it('queries /v1/refunds without query parameters when none provided', async () => {
-      const mockRecords: RefundRecord[] = [
-        {
-          refundId: 'ref_1',
-          orderId: 'ORD-1001',
-          customerRequestText: 'Damaged item',
-          status: 'completed',
-          decision: 'auto_approve',
-          createdAt: '2026-09-28T00:00:00Z',
-          updatedAt: '2026-09-28T00:01:00Z',
-        },
-      ]
+      const mockRecords: RefundRecord[] = [baseRecord]
       vi.mocked(apiClient.get).mockResolvedValueOnce(mockRecords)
 
       const result = await listRefunds()
@@ -49,17 +57,7 @@ describe('refundService', () => {
     })
 
     it('queries /v1/refunds with formatted status and limit query parameters', async () => {
-      const mockRecords: RefundRecord[] = [
-        {
-          refundId: 'ref_2',
-          orderId: 'ORD-1002',
-          customerRequestText: 'Vague request',
-          status: 'awaiting_clarification',
-          decision: null,
-          createdAt: '2026-09-28T00:00:00Z',
-          updatedAt: '2026-09-28T00:01:00Z',
-        },
-      ]
+      const mockRecords: RefundRecord[] = [{ ...baseRecord, status: 'awaiting_clarification' }]
       vi.mocked(apiClient.get).mockResolvedValueOnce(mockRecords)
 
       const result = await listRefunds({ status: 'awaiting_clarification', limit: 10 })
@@ -134,13 +132,6 @@ describe('refundService', () => {
         status: 422,
         detail: 'One or more fields failed validation.',
       } as any)
-      ;(validationError as any).problem = {
-        type: 'urn:problem:validation-error',
-        title: 'Validation Error',
-        status: 422,
-        detail: 'One or more fields failed validation.',
-        invalidParams: [{ name: 'orderId', reason: 'Field cannot be blank or empty.' }],
-      }
       vi.mocked(apiClient.post).mockRejectedValueOnce(validationError)
 
       await expect(
@@ -168,10 +159,228 @@ describe('refundService', () => {
     })
   })
 
+  describe('getRefundById', () => {
+    it('queries /v1/refunds/{refundId} with encoded URL and returns matching RefundRecord', async () => {
+      const mockRecord: RefundRecord = {
+        ...baseRecord,
+        refundId: 'ref_special#1',
+        status: 'completed',
+        decision: 'auto_approve',
+      }
+      vi.mocked(apiClient.get).mockResolvedValueOnce(mockRecord)
+
+      const result = await getRefundById('ref_special#1')
+
+      expect(apiClient.get).toHaveBeenCalledWith('/v1/refunds/ref_special%231')
+      expect(result).toEqual(mockRecord)
+    })
+
+    it('throws ApiError on HTTP 404 when refund ID does not exist', async () => {
+      const notFoundError = new ApiError({
+        type: 'urn:problem:404',
+        title: 'Not Found',
+        status: 404,
+        detail: "Refund request 'ref_nonexistent' not found.",
+      } as any)
+      vi.mocked(apiClient.get).mockRejectedValueOnce(notFoundError)
+
+      await expect(getRefundById('ref_nonexistent')).rejects.toThrow(ApiError)
+    })
+  })
+
+  describe('overrideRefundDecision', () => {
+    it('posts override payload to /v1/refunds/{refundId}/override and returns completed record', async () => {
+      const mockRecord: RefundRecord = {
+        ...baseRecord,
+        status: 'completed',
+        decision: 'approve',
+        overrideDecision: 'approve',
+        overrideReason: 'VIP courtesy approval',
+      }
+      vi.mocked(apiClient.post).mockResolvedValueOnce(mockRecord)
+
+      const result = await overrideRefundDecision('ref_123', {
+        overrideDecision: 'approve',
+        overrideReason: 'VIP courtesy approval',
+      })
+
+      expect(apiClient.post).toHaveBeenCalledWith('/v1/refunds/ref_123/override', {
+        override_decision: 'approve',
+        override_reason: 'VIP courtesy approval',
+      })
+      expect(result).toEqual(mockRecord)
+    })
+
+    it('propagates ApiError on HTTP 400 when refund is not escalated', async () => {
+      const badRequestError = new ApiError({
+        type: 'urn:problem:400',
+        title: 'Bad Request',
+        status: 400,
+        detail: "Refund request 'ref_123' is not in escalated status.",
+      } as any)
+      vi.mocked(apiClient.post).mockRejectedValueOnce(badRequestError)
+
+      await expect(
+        overrideRefundDecision('ref_123', {
+          overrideDecision: 'deny',
+          overrideReason: 'Fraud suspected',
+        }),
+      ).rejects.toThrow(ApiError)
+    })
+  })
+
+  describe('submitClarification', () => {
+    it('dispatches JSON without file and returns pending resumed record', async () => {
+      const mockRecord: RefundRecord = {
+        ...baseRecord,
+        status: 'pending',
+        clarificationResponse: 'Here are details',
+      }
+      vi.mocked(apiClient.post).mockResolvedValueOnce(mockRecord)
+
+      const result = await submitClarification('ref_123', {
+        responseText: 'Here are details',
+      })
+
+      expect(apiClient.post).toHaveBeenCalledWith('/v1/refunds/ref_123/clarify', {
+        response_text: 'Here are details',
+      })
+      expect(apiClient.postMultipart).not.toHaveBeenCalled()
+      expect(result).toEqual(mockRecord)
+    })
+
+    it('dispatches multipart FormData when file is provided and returns pending resumed record', async () => {
+      const mockFile = new File(['proof'], 'label.png', { type: 'image/png' })
+      const mockRecord: RefundRecord = {
+        ...baseRecord,
+        status: 'pending',
+        clarificationResponse: 'Attached image',
+      }
+      vi.mocked(apiClient.postMultipart).mockResolvedValueOnce(mockRecord)
+
+      const result = await submitClarification('ref_123', {
+        responseText: 'Attached image',
+        evidenceFile: mockFile,
+      })
+
+      expect(apiClient.postMultipart).toHaveBeenCalledWith(
+        '/v1/refunds/ref_123/clarify',
+        expect.any(FormData),
+      )
+      const calledFormData = vi.mocked(apiClient.postMultipart).mock.calls[0][1] as FormData
+      expect(calledFormData.get('response_text')).toBe('Attached image')
+      expect(calledFormData.get('evidence_file')).toBe(mockFile)
+      expect(result).toEqual(mockRecord)
+    })
+  })
+
+  describe('uploadEvidence', () => {
+    it('dispatches multipart FormData to /v1/refunds/{refundId}/evidence and returns updated record', async () => {
+      const mockFile = new File(['evidence'], 'box.jpg', { type: 'image/jpeg' })
+      const mockRecord: RefundRecord = {
+        ...baseRecord,
+        evidence: [
+          {
+            evidenceId: 'evi_1',
+            storageKey: 'evidence/ref_123/box.jpg',
+            filename: 'box.jpg',
+            contentType: 'image/jpeg',
+            sizeBytes: 1024,
+            url: '/uploads/box.jpg',
+            createdAt: '2026-09-28T00:00:00Z',
+          },
+        ],
+      }
+      vi.mocked(apiClient.postMultipart).mockResolvedValueOnce(mockRecord)
+
+      const result = await uploadEvidence('ref_123', mockFile)
+
+      expect(apiClient.postMultipart).toHaveBeenCalledWith(
+        '/v1/refunds/ref_123/evidence',
+        expect.any(FormData),
+      )
+      const calledFormData = vi.mocked(apiClient.postMultipart).mock.calls[0][1] as FormData
+      expect(calledFormData.get('file')).toBe(mockFile)
+      expect(result).toEqual(mockRecord)
+    })
+
+    it('propagates ApiError on HTTP 413 when file exceeds 5MB limit', async () => {
+      const oversizedError = new ApiError({
+        type: 'urn:problem:413',
+        title: 'Payload Too Large',
+        status: 413,
+        detail: 'Evidence file exceeds 5MB limit',
+      } as any)
+      vi.mocked(apiClient.postMultipart).mockRejectedValueOnce(oversizedError)
+
+      const bigFile = new File(['big'], 'huge.png', { type: 'image/png' })
+      await expect(uploadEvidence('ref_123', bigFile)).rejects.toThrow(ApiError)
+    })
+
+    it('propagates ApiError on HTTP 400 for disallowed MIME type', async () => {
+      const badMimeError = new ApiError({
+        type: 'urn:problem:400',
+        title: 'Bad Request',
+        status: 400,
+        detail: 'Disallowed file type. Only JPEG, PNG, and WebP images are accepted.',
+      } as any)
+      vi.mocked(apiClient.postMultipart).mockRejectedValueOnce(badMimeError)
+
+      const videoFile = new File(['video'], 'movie.mp4', { type: 'video/mp4' })
+      await expect(uploadEvidence('ref_123', videoFile)).rejects.toThrow(ApiError)
+    })
+  })
+
+  describe('requestReviewerProof', () => {
+    it('posts proof prompt to /v1/refunds/{refundId}/request-proof with customer_name when provided', async () => {
+      const mockRecord: RefundRecord = {
+        ...baseRecord,
+        status: 'awaiting_clarification',
+        clarificationPrompt: 'Please upload serial number label',
+        clarificationEmailText: 'Dear John Doe...',
+      }
+      vi.mocked(apiClient.post).mockResolvedValueOnce(mockRecord)
+
+      const result = await requestReviewerProof('ref_123', {
+        proofPrompt: 'Please upload serial number label',
+        customerName: 'John Doe',
+      })
+
+      expect(apiClient.post).toHaveBeenCalledWith('/v1/refunds/ref_123/request-proof', {
+        proof_prompt: 'Please upload serial number label',
+        customer_name: 'John Doe',
+      })
+      expect(result).toEqual(mockRecord)
+    })
+
+    it('posts proof prompt to /v1/refunds/{refundId}/request-proof omitting customer_name when null/undefined', async () => {
+      const mockRecord: RefundRecord = {
+        ...baseRecord,
+        status: 'awaiting_clarification',
+        clarificationPrompt: 'Please upload serial number label',
+      }
+      vi.mocked(apiClient.post).mockResolvedValueOnce(mockRecord)
+
+      const result = await requestReviewerProof('ref_123', {
+        proofPrompt: 'Please upload serial number label',
+      })
+
+      expect(apiClient.post).toHaveBeenCalledWith('/v1/refunds/ref_123/request-proof', {
+        proof_prompt: 'Please upload serial number label',
+      })
+      expect(result).toEqual(mockRecord)
+    })
+  })
+
   describe('refundService object export', () => {
-    it('exposes listRefunds and submitRefund methods', () => {
+    it('exposes all refund methods on unified refundService object', () => {
       expect(refundService.listRefunds).toBe(listRefunds)
       expect(refundService.submitRefund).toBe(submitRefund)
+      expect(refundService.getRefundById).toBe(getRefundById)
+      expect(refundService.overrideRefundDecision).toBe(overrideRefundDecision)
+      expect(refundService.submitClarification).toBe(submitClarification)
+      expect(refundService.uploadEvidence).toBe(uploadEvidence)
+      expect(refundService.requestReviewerProof).toBe(requestReviewerProof)
     })
   })
 })
