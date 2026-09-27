@@ -8,7 +8,8 @@ info:
   description: |
     Automated back-office e-commerce refund evaluation engine powered by LangGraph,
     AWS Bedrock (Amazon Nova 2), and DynamoDB. Provides asynchronous multi-agent
-    evaluation, queue status polling, and human-in-the-loop manual decision overrides.
+    evaluation, queue status polling, multimodal evidence verification, and human-in-the-loop
+    clarifications and decision overrides.
 servers:
   - url: http://127.0.0.1:8000
     description: Local development server
@@ -77,7 +78,7 @@ paths:
       operationId: listRefundRequests
       summary: List refund requests
       description: |
-        Retrieve a paginated list of refund requests from the evaluation queue with optional
+        Retrieve a list of refund requests from the evaluation queue with optional
         status filtering. Records are ordered by creation timestamp descending.
       tags:
         - Refunds
@@ -115,13 +116,23 @@ paths:
                   customerRequestText: "The chair armrest arrived completely broken and cracked during delivery."
                   status: completed
                   decision: auto_approve
-                  reasoning: "Refund automatically approved. Category 'damaged' satisfied all policy rules (All policy rules passed.)."
+                  reasoning: "Refund automatically approved. Category 'damaged' satisfied all policy rules."
                   matchedPolicyRule:
                     category: damaged
                     policyName: standard_30_day_damaged
                     action: auto_approve
                     returnRequired: false
                   confidenceScore: 0.95
+                  category: damaged
+                  clarificationPrompt: null
+                  clarificationResponse: null
+                  clarificationCount: 0
+                  clarificationHistory: []
+                  evidence: []
+                  toolCalls: []
+                  approvalEmailText: "Dear Customer,\n\nYour refund request has been approved. Your RMA number is RMA-1007-AB12CD.\n\nSincerely,\nCustomer Support Team"
+                  denialEmailText: null
+                  clarificationEmailText: null
                   createdAt: "2026-09-23T14:10:00Z"
                   updatedAt: "2026-09-23T14:10:05Z"
                   overrideDecision: null
@@ -140,12 +151,13 @@ paths:
       description: |
         Accept an incoming customer refund request, persist a pending record in DynamoDB,
         and schedule asynchronous multi-agent evaluation via LangGraph and AWS Bedrock.
+        Supports JSON payload or multipart form data with an optional initial evidence photo.
       tags:
         - Refunds
       x-source: backend/app/api/refunds.py:submit_refund_request
       requestBody:
         required: true
-        description: Customer order identifier and refund request explanation.
+        description: Customer order identifier, explanation, and optional evidence image.
         content:
           application/json:
             schema:
@@ -153,6 +165,27 @@ paths:
             example:
               orderId: ORD-1001
               customerRequestText: "The ceramic vase arrived shattered inside the package with no protective bubble wrap."
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - orderId
+                - customerRequestText
+              properties:
+                orderId:
+                  type: string
+                  pattern: '^ORD-\d{4}$'
+                  description: Identifier of the order to evaluate.
+                  example: ORD-1001
+                customerRequestText:
+                  type: string
+                  minLength: 1
+                  description: Customer refund explanation.
+                  example: "The ceramic vase arrived shattered inside the package."
+                file:
+                  type: string
+                  format: binary
+                  description: Optional supporting proof photo (JPEG, PNG, WebP up to 5MB).
       responses:
         '202':
           description: Refund request accepted for background processing.
@@ -167,6 +200,8 @@ paths:
                 createdAt: "2026-09-23T14:15:30Z"
         '400':
           $ref: '#/components/responses/ProblemBadRequest'
+        '413':
+          $ref: '#/components/responses/ProblemPayloadTooLarge'
         '422':
           $ref: '#/components/responses/ProblemUnprocessableEntity'
         '500':
@@ -177,8 +212,8 @@ paths:
       operationId: getRefundRequestById
       summary: Get refund request details
       description: |
-        Retrieve the latest status, agent classification, policy check outcome, and decision
-        for a specific refund request.
+        Retrieve the latest status, agent classification, policy check outcome, evidence attachments,
+        and final decision for a specific refund request.
       tags:
         - Refunds
       x-source: backend/app/api/refunds.py:get_refund_request_by_id
@@ -204,13 +239,27 @@ paths:
                   action: manual_review
                   returnRequired: true
                 confidenceScore: 0.88
+                category: wrong_item
+                clarificationPrompt: null
+                clarificationResponse: null
+                clarificationCount: 0
+                clarificationHistory: []
+                evidence: []
+                toolCalls: []
+                approvalEmailText: null
+                denialEmailText: null
+                clarificationEmailText: null
                 createdAt: "2026-09-23T14:10:00Z"
                 updatedAt: "2026-09-23T14:10:04Z"
                 overrideDecision: null
                 overrideReason: null
                 overriddenAt: null
+        '400':
+          $ref: '#/components/responses/ProblemBadRequest'
         '404':
           $ref: '#/components/responses/ProblemNotFound'
+        '422':
+          $ref: '#/components/responses/ProblemUnprocessableEntity'
         '500':
           $ref: '#/components/responses/ProblemInternalServerError'
 
@@ -257,6 +306,16 @@ paths:
                   action: manual_review
                   returnRequired: true
                 confidenceScore: 0.88
+                category: wrong_item
+                clarificationPrompt: null
+                clarificationResponse: null
+                clarificationCount: 0
+                clarificationHistory: []
+                evidence: []
+                toolCalls: []
+                approvalEmailText: null
+                denialEmailText: null
+                clarificationEmailText: null
                 createdAt: "2026-09-23T14:10:00Z"
                 updatedAt: "2026-09-23T14:25:12Z"
                 overrideDecision: approve
@@ -277,22 +336,38 @@ paths:
       summary: Submit customer clarification
       description: |
         Provide customer clarification response for a refund request that is paused in
-        `awaiting_clarification` status. Appends clarification details and automatically
-        resumes the multi-agent workflow in the background.
+        `awaiting_clarification` status. Supports plain JSON text responses or multipart form
+        data with an optional attached evidence image. Automatically resumes multi-agent evaluation
+        in the background.
       tags:
         - Refunds
-      x-source: backend/app/api/refunds.py:submit_clarification
+      x-source: backend/app/api/refunds.py:clarify_refund_request
       parameters:
         - $ref: '#/components/parameters/RefundIdPathParam'
       requestBody:
         required: true
-        description: Customer clarification response text.
+        description: Customer clarification response text and optional evidence image.
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/RefundClarificationRequest'
             example:
               responseText: "The package was left at the front porch in heavy rain, soaked through."
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - responseText
+              properties:
+                responseText:
+                  type: string
+                  minLength: 1
+                  description: Customer clarification explanation.
+                  example: "Item arrived damaged with ripped outer box."
+                evidenceFile:
+                  type: string
+                  format: binary
+                  description: Optional supporting proof photo (JPEG, PNG, WebP up to 5MB).
       responses:
         '200':
           description: Clarification accepted and workflow resumed.
@@ -309,12 +384,176 @@ paths:
                 reasoning: null
                 matchedPolicyRule: null
                 confidenceScore: null
+                category: wrong_item
                 clarificationPrompt: "Could you please specify if the packaging was unopened?"
                 clarificationResponse: "The package was left at the front porch in heavy rain, soaked through."
                 clarificationCount: 1
+                clarificationHistory:
+                  - cycle: 1
+                    prompt: "Could you please specify if the packaging was unopened?"
+                    response: "The package was left at the front porch in heavy rain, soaked through."
+                    timestamp: "2026-09-23T14:15:30Z"
+                    evidenceIds: []
+                evidence: []
                 toolCalls: []
+                approvalEmailText: null
+                denialEmailText: null
+                clarificationEmailText: null
                 createdAt: "2026-09-23T14:10:00Z"
                 updatedAt: "2026-09-23T14:15:30Z"
+                overrideDecision: null
+                overrideReason: null
+                overriddenAt: null
+        '400':
+          $ref: '#/components/responses/ProblemBadRequest'
+        '404':
+          $ref: '#/components/responses/ProblemNotFound'
+        '413':
+          $ref: '#/components/responses/ProblemPayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/ProblemUnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/ProblemInternalServerError'
+
+  /v1/refunds/{refundId}/evidence:
+    post:
+      operationId: uploadRefundEvidence
+      summary: Upload photo evidence for a refund request
+      description: |
+        Upload a customer proof image (JPEG, PNG, WebP up to 5MB) for a refund request.
+        If the refund request is currently paused in `awaiting_clarification` status, uploading
+        evidence automatically enqueues background workflow resumption without requiring a separate
+        call to `/clarify`.
+      tags:
+        - Refunds
+      x-source: backend/app/api/refunds.py:upload_refund_evidence
+      parameters:
+        - $ref: '#/components/parameters/RefundIdPathParam'
+      requestBody:
+        required: true
+        description: Multipart image file to attach as proof.
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Evidence photo file (JPEG, PNG, WebP up to 5MB).
+      responses:
+        '201':
+          description: Photo evidence successfully uploaded and attached to refund record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundDetail'
+              example:
+                refundId: ref_543c86069f0f
+                orderId: ORD-1007
+                customerRequestText: "Received wrong shoe size (ordered 10, received 8.5)."
+                status: pending
+                decision: null
+                reasoning: null
+                matchedPolicyRule: null
+                confidenceScore: null
+                category: wrong_item
+                clarificationPrompt: "Please provide a clear photo of the shoe box label."
+                clarificationResponse: null
+                clarificationCount: 1
+                clarificationHistory:
+                  - cycle: 1
+                    prompt: "Please provide a clear photo of the shoe box label."
+                    response: null
+                    timestamp: "2026-09-23T14:15:30Z"
+                    evidenceIds:
+                      - evi_a1b2c3d4
+                evidence:
+                  - evidenceId: evi_a1b2c3d4
+                    storageKey: refunds/ref_543c86069f0f/box_label.jpg
+                    filename: box_label.jpg
+                    contentType: image/jpeg
+                    sizeBytes: 154230
+                    url: /uploads/refunds/ref_543c86069f0f/box_label.jpg
+                    createdAt: "2026-09-23T14:16:00Z"
+                toolCalls: []
+                approvalEmailText: null
+                denialEmailText: null
+                clarificationEmailText: null
+                createdAt: "2026-09-23T14:10:00Z"
+                updatedAt: "2026-09-23T14:16:00Z"
+                overrideDecision: null
+                overrideReason: null
+                overriddenAt: null
+        '400':
+          $ref: '#/components/responses/ProblemBadRequest'
+        '404':
+          $ref: '#/components/responses/ProblemNotFound'
+        '413':
+          $ref: '#/components/responses/ProblemPayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/ProblemUnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/ProblemInternalServerError'
+
+  /v1/refunds/{refundId}/request-proof:
+    post:
+      operationId: requestReviewerProof
+      summary: Submit reviewer proof request for an escalated refund
+      description: |
+        Accept an inquiry prompt from a human supervisor for an escalated refund request,
+        generate a formal customer notification email instructing supported upload formats,
+        and transition the refund record from `escalated` back to `awaiting_clarification`.
+      tags:
+        - Refunds
+      x-source: backend/app/api/refunds.py:request_reviewer_proof_endpoint
+      parameters:
+        - $ref: '#/components/parameters/RefundIdPathParam'
+      requestBody:
+        required: true
+        description: Reviewer proof prompt and optional customer greeting name.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewerProofRequest'
+            example:
+              proofPrompt: "Please provide a clear photo of the serial number sticker on the base of the device."
+              customerName: "Alex Morgan"
+      responses:
+        '200':
+          description: Reviewer proof request recorded and transitioned to awaiting_clarification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundDetail'
+              example:
+                refundId: ref_543c86069f0f
+                orderId: ORD-1007
+                customerRequestText: "Device stopped charging after two weeks."
+                status: awaiting_clarification
+                decision: null
+                reasoning: null
+                matchedPolicyRule: null
+                confidenceScore: null
+                category: damaged
+                clarificationPrompt: "Please provide a clear photo of the serial number sticker on the base of the device."
+                clarificationResponse: null
+                clarificationCount: 1
+                clarificationHistory:
+                  - cycle: 1
+                    prompt: "Please provide a clear photo of the serial number sticker on the base of the device."
+                    response: null
+                    timestamp: "2026-09-23T14:30:00Z"
+                    evidenceIds: []
+                evidence: []
+                toolCalls: []
+                approvalEmailText: null
+                denialEmailText: null
+                clarificationEmailText: "Dear Alex Morgan,\n\nOur quality review team requires additional proof regarding order ORD-1007.\nPlease provide a clear photo of the serial number sticker on the base of the device.\n\nAccepted formats: JPEG, PNG, WebP up to 5MB."
+                createdAt: "2026-09-23T14:10:00Z"
+                updatedAt: "2026-09-23T14:30:00Z"
                 overrideDecision: null
                 overrideReason: null
                 overriddenAt: null
@@ -365,6 +604,20 @@ components:
             status: 404
             detail: "Refund request 'ref_nonexistent123' not found."
             instance: "/v1/refunds/ref_nonexistent123"
+
+    ProblemPayloadTooLarge:
+      description: Payload Too Large - Uploaded evidence exceeds maximum file size limit (5MB).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+          example:
+            type: "urn:problem:payload-too-large"
+            title: "Payload Too Large"
+            status: 413
+            detail: "File size exceeds maximum allowed limit of 5.0 MB."
+            instance: "/v1/refunds/ref_543c86069f0f/evidence"
+      x-source: backend/app/api/refunds.py:HTTP_413_STATUS
 
     ProblemUnprocessableEntity:
       description: Unprocessable Content - Request payload failed schema validation rules.
@@ -434,7 +687,7 @@ components:
         Lifecycle evaluation status of the refund request:
         * `pending`: In queue or actively being evaluated by multi-agent workflow.
         * `completed`: Decision reached (automated or manually overridden).
-        * `escalated`: Escalated to human operator review due to low confidence or policy ambiguity.
+        * `escalated`: Escalated to human operator review due to low confidence, policy ambiguity, or order amount threshold.
         * `awaiting_clarification`: Paused awaiting customer details or photo clarification.
       example: pending
       x-source: backend/app/schemas/refund.py:RefundStatus
@@ -450,10 +703,22 @@ components:
         Outcome decision for the refund request:
         * `auto_approve`: Automatically approved by policy evaluation.
         * `deny`: Ineligible under policy rules.
-        * `escalate`: Transferred to human queue.
+        * `escalate`: Transferred to human review queue.
         * `approve`: Manually approved by human operator override.
       example: auto_approve
       x-source: backend/app/schemas/refund.py:RefundDecision
+
+    RefundCategory:
+      type: string
+      enum:
+        - damaged
+        - wrong_item
+        - changed_mind
+        - late_delivery
+        - missing_item
+      description: Classified reason category determining policy rules and evidence mandates.
+      example: damaged
+      x-source: backend/app/schemas/refund.py:RefundRecord.category
 
     OverrideDecisionType:
       type: string
@@ -472,14 +737,14 @@ components:
       properties:
         orderId:
           type: string
-          minLength: 1
+          pattern: '^ORD-\d{4}$'
           description: Associated purchase order identifier.
           example: ORD-1001
         customerRequestText:
           type: string
           minLength: 1
           description: Customer-submitted explanation or reason for requesting a refund.
-          example: "The dining table leg arrived cracked in half inside the delivery carton."
+          example: "The ceramic vase arrived shattered inside the package with no protective bubble wrap."
       x-source: backend/app/schemas/refund.py:RefundCreateRequest
 
     RefundCreateResponse:
@@ -535,6 +800,143 @@ components:
           x-tentative: true
       x-source: backend/app/schemas/refund.py:RefundOverrideRequest
 
+    ReviewerProofRequest:
+      type: object
+      required:
+        - proofPrompt
+      properties:
+        proofPrompt:
+          type: string
+          minLength: 1
+          description: Targeted proof request prompt sent to the customer.
+          example: "Please provide a clear photo of the serial number sticker on the base of the device."
+        customerName:
+          type:
+            - string
+            - 'null'
+          description: Optional customer name for email greeting.
+          example: "Alex Morgan"
+          x-tentative: true
+      x-source: backend/app/schemas/refund.py:ReviewerProofRequest
+
+    EvidenceItem:
+      type: object
+      required:
+        - evidenceId
+        - storageKey
+        - filename
+        - contentType
+        - sizeBytes
+        - url
+        - createdAt
+      properties:
+        evidenceId:
+          type: string
+          description: Unique identifier for the uploaded evidence item.
+          example: evi_a1b2c3d4
+        storageKey:
+          type: string
+          description: S3 or local filesystem storage key path.
+          example: refunds/ref_543c86069f0f/box_label.jpg
+        filename:
+          type: string
+          description: Original filename of the uploaded asset.
+          example: box_label.jpg
+        contentType:
+          type: string
+          description: MIME content type of the image.
+          example: image/jpeg
+        sizeBytes:
+          type: integer
+          minimum: 0
+          description: File size in bytes.
+          example: 154230
+        url:
+          type: string
+          description: Accessible URL for viewing or downloading the evidence file.
+          example: /uploads/refunds/ref_543c86069f0f/box_label.jpg
+        createdAt:
+          type: string
+          format: date-time
+          description: ISO-8601 creation timestamp.
+          example: "2026-09-23T14:16:00Z"
+      x-source: backend/app/schemas/refund.py:EvidenceItem
+
+    ClarificationTurn:
+      type: object
+      required:
+        - cycle
+        - timestamp
+        - evidenceIds
+      properties:
+        cycle:
+          type: integer
+          minimum: 1
+          description: Clarification cycle number (1-indexed).
+          example: 1
+        prompt:
+          type:
+            - string
+            - 'null'
+          description: Clarification prompt sent to the customer.
+          example: "Please provide a clear photo of the shoe box label."
+        response:
+          type:
+            - string
+            - 'null'
+          description: Customer response text submitted during this turn.
+          example: "Here is the photo of the box label showing size 8.5."
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO-8601 timestamp when this clarification turn occurred.
+          example: "2026-09-23T14:15:30Z"
+        evidenceIds:
+          type: array
+          items:
+            type: string
+          description: Evidence IDs attached during this clarification turn.
+          example:
+            - evi_a1b2c3d4
+      x-source: backend/app/schemas/refund.py:ClarificationTurn
+
+    ToolCallAudit:
+      type: object
+      required:
+        - toolName
+        - inputArgs
+        - timestamp
+      properties:
+        toolName:
+          type: string
+          description: External verification tool executed (e.g. `query_carrier_tracking` or `query_payment_transaction`).
+          example: query_carrier_tracking
+        inputArgs:
+          type: object
+          additionalProperties: true
+          description: Arguments supplied to the tool invocation.
+          example:
+            trackingNumber: TRK-987654
+        rawOutput:
+          type: object
+          additionalProperties: true
+          description: Raw response payload received from the external vendor service.
+          example:
+            status: delivered
+            deliveryTimestamp: "2026-09-20T10:30:00Z"
+          x-tentative: true
+        durationSeconds:
+          type: number
+          format: float
+          description: Execution duration in seconds.
+          example: 0.42
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO-8601 timestamp when tool execution completed.
+          example: "2026-09-23T14:10:02Z"
+      x-source: backend/app/schemas/refund.py:RefundRecord.tool_calls
+
     MatchedPolicyRule:
       type: object
       description: Evaluated policy rule details matched against the purchase order.
@@ -574,11 +976,12 @@ components:
           example: ref_543c86069f0f
         orderId:
           type: string
+          pattern: '^ORD-\d{4}$'
           description: Associated purchase order identifier.
           example: ORD-1007
         customerRequestText:
           type: string
-          description: Original customer explanation.
+          description: Original customer refund explanation.
           example: "The chair armrest arrived completely broken and cracked during delivery."
         status:
           $ref: '#/components/schemas/RefundStatus'
@@ -609,6 +1012,12 @@ components:
           description: Model confidence score (0.0 to 1.0), or null if resolved without LLM.
           example: 0.95
           x-tentative: true
+        category:
+          anyOf:
+            - $ref: '#/components/schemas/RefundCategory'
+            - type: 'null'
+          description: Classified refund category.
+          example: damaged
         createdAt:
           type: string
           format: date-time
@@ -657,19 +1066,47 @@ components:
           minimum: 0
           description: Number of clarification cycles attempted.
           example: 0
+        clarificationHistory:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClarificationTurn'
+          description: Structured turn-by-turn audit history of clarification and proof request cycles.
+          example: []
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvidenceItem'
+          description: Customer-uploaded proof attachments (images).
+          example: []
         toolCalls:
           type: array
           items:
-            type: object
-            additionalProperties: true
+            $ref: '#/components/schemas/ToolCallAudit'
           description: Chronological audit log of external tool invocations, inputs, and results.
           example: []
-          x-tentative: true
+        approvalEmailText:
+          type:
+            - string
+            - 'null'
+          description: Customer confirmation and product return instructions email text generated for approved refunds.
+          example: "Dear Customer,\n\nYour refund request has been approved..."
+        denialEmailText:
+          type:
+            - string
+            - 'null'
+          description: Customer notification email text explaining policy denial reasoning.
+          example: null
+        clarificationEmailText:
+          type:
+            - string
+            - 'null'
+          description: Customer notification email text requesting evidence or clarification.
+          example: null
       x-source: backend/app/schemas/refund.py:RefundRecord
 
     ProblemDetails:
       type: object
-      description: RFC 7807 problem details object describing an error condition.
+      description: RFC 7807 / RFC 9457 problem details object describing an error condition.
       required:
         - type
         - title
