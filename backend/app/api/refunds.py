@@ -3,7 +3,7 @@ from email.policy import default
 import io
 from pathlib import Path
 import re
-from typing import Any, Literal
+from typing import Any
 import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from starlette.datastructures import UploadFile
@@ -19,6 +19,7 @@ from app.schemas.refund import (
     RefundCreateResponse,
     RefundOverrideRequest,
     RefundRecord,
+    RefundStatus,
     ReviewerProofRequest,
 )
 from app.services.storage import EvidenceStorageService, get_evidence_storage_service
@@ -77,7 +78,7 @@ def get_repository() -> RefundRepository:
     summary="List refund requests with optional status filtering",
 )
 async def list_refund_requests(
-    status: Literal["pending", "completed", "escalated"] | None = Query(default=None),
+    status: RefundStatus | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
     repo: RefundRepository = Depends(get_repository),
 ) -> list[RefundRecord]:
