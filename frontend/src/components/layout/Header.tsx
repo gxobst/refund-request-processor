@@ -64,9 +64,9 @@ export function Header({
           </div>
           <div>
             <div className="flex items-center space-x-2">
-              <span className="font-semibold text-slate-900 tracking-tight text-sm sm:text-base">
+              <h1 className="font-semibold text-slate-900 tracking-tight text-sm sm:text-base">
                 AI Refund Request Processor
-              </span>
+              </h1>
               <span className="hidden sm:inline-flex items-center rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600 border border-slate-200">
                 Back Office
               </span>

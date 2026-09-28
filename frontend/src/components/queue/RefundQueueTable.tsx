@@ -100,12 +100,15 @@ function getCategory(record: RefundRecord): string {
 }
 
 function getDecision(record: RefundRecord): string | null {
-  return (
-    record.overrideDecision ||
-    record.decision ||
-    ((record as Record<string, unknown>).decision as string) ||
-    null
-  )
+  const rec = record as Record<string, unknown>
+  const override = (record.overrideDecision || rec.override_decision) as string | undefined
+  if (override === 'approve' || override === 'manual_approved') return 'manual_approved'
+  if (override === 'deny' || override === 'manual_denied') return 'manual_denied'
+
+  const decision = record.decision || (rec.decision as string)
+  if (decision === 'approve') return 'manual_approved'
+
+  return decision || null
 }
 
 function getConfidenceScore(record: RefundRecord): number | null | undefined {
