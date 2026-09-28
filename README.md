@@ -25,7 +25,13 @@ Run pure PowerShell script from root:
 # Start both Backend (FastAPI :8000) and Frontend (Vite :5173)
 .\start.ps1
 
-# Or open them in separate dedicated PowerShell windows
+# Force restart services if ports are already listening
+.\start.ps1 -Restart
+
+# Stop running services on ports 8000 and 5173
+.\start.ps1 -Mode stop
+
+# Open them in separate dedicated PowerShell windows
 .\start.ps1 -NewWindows
 
 # Run setup (install deps & seed mock database)

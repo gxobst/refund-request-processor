@@ -44,7 +44,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("all", "backend", "frontend", "setup", "seed", "test", "test-backend", "test-frontend", "build", "help")]
+    [ValidateSet("all", "backend", "frontend", "setup", "seed", "test", "test-backend", "test-frontend", "build", "stop", "help")]
     [string]$Mode = "all",
 
     [Parameter()]
@@ -55,6 +55,12 @@ param(
 
     [Parameter()]
     [int]$FrontendPort = 5173,
+
+    [Parameter()]
+    [switch]$Restart,
+
+    [Parameter()]
+    [switch]$Force,
 
     [Parameter()]
     [switch]$NewWindows,
@@ -102,6 +108,58 @@ function Assert-CommandAvailable([string]$CommandName, [string]$InstallHint) {
     }
 }
 
+# Inspect if a port is currently listening and return process details
+function Get-PortOwner([int]$Port) {
+    try {
+        $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($conn -and $conn.OwningProcess) {
+            $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+            $cmdLine = ""
+            try {
+                $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($conn.OwningProcess)" -ErrorAction SilentlyContinue).CommandLine
+            } catch {}
+            return [PSCustomObject]@{
+                Port = $Port
+                ProcessId = $conn.OwningProcess
+                ProcessName = if ($proc) { $proc.ProcessName } else { "Unknown" }
+                CommandLine = $cmdLine
+            }
+        }
+    } catch {}
+    return $null
+}
+
+# Test if an HTTP endpoint returns a healthy response
+function Test-HttpHealthy([string]$Url, [int]$TimeoutSeconds = 2) {
+    try {
+        $res = Invoke-RestMethod -Uri $Url -Method Get -TimeoutSec $TimeoutSeconds -ErrorAction SilentlyContinue
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# Cleanly free a port if occupied
+function Ensure-PortClean([int]$Port, [string]$ServiceName) {
+    $owner = Get-PortOwner -Port $Port
+    if (-not $owner) {
+        return $true
+    }
+
+    Write-Host " [PORT-CHECK] Port $Port ($ServiceName) is held by PID $($owner.ProcessId) ($($owner.ProcessName))." -ForegroundColor Yellow
+    Write-Host "              Terminating existing process to prevent WinError 10013 socket conflict..." -ForegroundColor Cyan
+    Stop-ProcessTree -ParentId $owner.ProcessId
+    Start-Sleep -Seconds 1
+
+    $remaining = Get-PortOwner -Port $Port
+    if ($remaining) {
+        Stop-Process -Id $remaining.ProcessId -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+    }
+    Write-Host "              Port $Port is now clear." -ForegroundColor Green
+    return $true
+}
+
 # Display Help
 if ($Mode -eq "help") {
     Write-Host ""
@@ -110,12 +168,13 @@ if ($Mode -eq "help") {
     Write-Host "=================================================================" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Usage:" -ForegroundColor Yellow
-    Write-Host "  .\start.ps1 [-Mode <mode>] [-HostAddress <ip>] [-BackendPort <port>] [-FrontendPort <port>] [-NewWindows] [-NoBrowser]"
+    Write-Host "  .\start.ps1 [-Mode <mode>] [-HostAddress <ip>] [-BackendPort <port>] [-FrontendPort <port>] [-Restart] [-NewWindows] [-NoBrowser]"
     Write-Host ""
     Write-Host "Available Modes:" -ForegroundColor Yellow
     Write-Host "  all            (Default) Launch both FastAPI backend and Vite frontend" -ForegroundColor Green
     Write-Host "  backend        Run only the FastAPI backend server (port 8000)" -ForegroundColor Green
     Write-Host "  frontend       Run only the Vite frontend dev server (port 5173)" -ForegroundColor Green
+    Write-Host "  stop           Stop any active backend or frontend processes" -ForegroundColor Green
     Write-Host "  setup          Install uv/python deps, npm packages, and seed DynamoDB" -ForegroundColor Green
     Write-Host "  seed           Seed mock order records into DynamoDB" -ForegroundColor Green
     Write-Host "  test           Run all backend (pytest) and frontend (vitest) tests" -ForegroundColor Green
@@ -124,12 +183,19 @@ if ($Mode -eq "help") {
     Write-Host "  build          Build production frontend bundle into frontend/dist" -ForegroundColor Green
     Write-Host "  help           Display this help screen" -ForegroundColor Green
     Write-Host ""
+    Write-Host "Flags:" -ForegroundColor Yellow
+    Write-Host "  -Restart       Terminate existing listeners on ports 8000/5173 before starting" -ForegroundColor Cyan
+    Write-Host "  -Force         Force cleanup of occupied ports" -ForegroundColor Cyan
+    Write-Host "  -NewWindows    Launch backend and frontend in separate dedicated windows" -ForegroundColor Cyan
+    Write-Host "  -NoBrowser     Do not automatically open browser on startup" -ForegroundColor Cyan
+    Write-Host ""
     Write-Host "Examples:" -ForegroundColor Yellow
-    Write-Host "  .\start.ps1                         # Start backend + frontend"
+    Write-Host "  .\start.ps1                         # Start backend + frontend (auto-detects if running)"
+    Write-Host "  .\start.ps1 -Restart                # Stop existing instances and start fresh"
+    Write-Host "  .\start.ps1 -Mode stop              # Stop any running instances on ports 8000/5173"
     Write-Host "  .\start.ps1 -NewWindows             # Start backend + frontend in separate windows"
     Write-Host "  .\start.ps1 -Mode backend           # Start only backend"
     Write-Host "  .\start.ps1 -Mode setup             # Install dependencies and seed mock DB"
-    Write-Host "  .\start.ps1 -Mode test              # Run full test suite"
     Write-Host ""
     exit 0
 }
@@ -234,8 +300,48 @@ if ($Mode -eq "build") {
     exit 0
 }
 
+# Mode: Stop
+if ($Mode -eq "stop") {
+    Write-Host "=================================================================" -ForegroundColor Cyan
+    Write-Host "               STOPPING REFUND PROCESSOR SERVICES                " -ForegroundColor Cyan
+    Write-Host "=================================================================" -ForegroundColor Cyan
+
+    $backendOwner = Get-PortOwner -Port $BackendPort
+    if ($backendOwner) {
+        Write-Host "Stopping Backend on port $BackendPort (PID $($backendOwner.ProcessId), $($backendOwner.ProcessName))..." -ForegroundColor Yellow
+        Stop-ProcessTree -ParentId $backendOwner.ProcessId
+        Write-Host "  Backend stopped." -ForegroundColor Green
+    } else {
+        Write-Host "  No active process on backend port $BackendPort." -ForegroundColor DarkGray
+    }
+
+    $frontendOwner = Get-PortOwner -Port $FrontendPort
+    if ($frontendOwner) {
+        Write-Host "Stopping Frontend on port $FrontendPort (PID $($frontendOwner.ProcessId), $($frontendOwner.ProcessName))..." -ForegroundColor Yellow
+        Stop-ProcessTree -ParentId $frontendOwner.ProcessId
+        Write-Host "  Frontend stopped." -ForegroundColor Green
+    } else {
+        Write-Host "  No active process on frontend port $FrontendPort." -ForegroundColor DarkGray
+    }
+
+    Write-Host "[SUCCESS] Cleanup complete." -ForegroundColor Green
+    exit 0
+}
+
 # Mode: Backend Only
 if ($Mode -eq "backend") {
+    $backendOwner = Get-PortOwner -Port $BackendPort
+    if ($backendOwner) {
+        $backendHealthy = Test-HttpHealthy "http://$HostAddress`:$BackendPort/health"
+        if ($backendHealthy -and -not $Restart -and -not $Force) {
+            Write-Host "[INFO] Backend server is already running and healthy on port $BackendPort (PID $($backendOwner.ProcessId))." -ForegroundColor Green
+            Write-Host "       URL: http://$HostAddress`:$BackendPort/docs" -ForegroundColor Green
+            Write-Host "       Pass '-Restart' to terminate and restart it." -ForegroundColor Yellow
+            exit 0
+        }
+        Ensure-PortClean -Port $BackendPort -ServiceName "Backend API"
+    }
+
     Write-Host "=================================================================" -ForegroundColor Cyan
     Write-Host "             STARTING FASTAPI BACKEND SERVER                     " -ForegroundColor Cyan
     Write-Host "=================================================================" -ForegroundColor Cyan
@@ -257,6 +363,18 @@ if ($Mode -eq "backend") {
 
 # Mode: Frontend Only
 if ($Mode -eq "frontend") {
+    $frontendOwner = Get-PortOwner -Port $FrontendPort
+    if ($frontendOwner) {
+        $frontendHealthy = Test-HttpHealthy "http://$HostAddress`:$FrontendPort"
+        if ($frontendHealthy -and -not $Restart -and -not $Force) {
+            Write-Host "[INFO] Frontend server is already running on port $FrontendPort (PID $($frontendOwner.ProcessId))." -ForegroundColor Green
+            Write-Host "       URL: http://$HostAddress`:$FrontendPort" -ForegroundColor Green
+            Write-Host "       Pass '-Restart' to terminate and restart it." -ForegroundColor Yellow
+            exit 0
+        }
+        Ensure-PortClean -Port $FrontendPort -ServiceName "Frontend UI"
+    }
+
     Write-Host "=================================================================" -ForegroundColor Cyan
     Write-Host "               STARTING VITE FRONTEND SERVER                     " -ForegroundColor Cyan
     Write-Host "=================================================================" -ForegroundColor Cyan
@@ -284,6 +402,36 @@ if ($Mode -eq "all") {
         Write-Host "Frontend node_modules not detected. Installing..." -ForegroundColor Yellow
         Push-Location $FrontendDir
         try { npm install } finally { Pop-Location }
+    }
+
+    # Pre-flight port checks to prevent WinError 10013 socket collisions
+    $backendOwner = Get-PortOwner -Port $BackendPort
+    $frontendOwner = Get-PortOwner -Port $FrontendPort
+
+    $backendHealthy = if ($backendOwner) { Test-HttpHealthy "http://$HostAddress`:$BackendPort/health" } else { $false }
+    $frontendHealthy = if ($frontendOwner) { Test-HttpHealthy "http://$HostAddress`:$FrontendPort" } else { $false }
+
+    if ($backendOwner -and $frontendOwner -and $backendHealthy -and $frontendHealthy -and -not $Restart -and -not $Force) {
+        Write-Host "=================================================================" -ForegroundColor Cyan
+        Write-Host "  SERVICES ARE ALREADY RUNNING & HEALTHY (NO RESTART NEEDED)     " -ForegroundColor Green
+        Write-Host "=================================================================" -ForegroundColor Cyan
+        Write-Host "  Backend API:   http://$HostAddress`:$BackendPort (PID: $($backendOwner.ProcessId))" -ForegroundColor Green
+        Write-Host "  API Docs:      http://$HostAddress`:$BackendPort/docs" -ForegroundColor Green
+        Write-Host "  Frontend UI:   http://$HostAddress`:$FrontendPort (PID: $($frontendOwner.ProcessId))" -ForegroundColor Green
+        Write-Host "=================================================================" -ForegroundColor Cyan
+        Write-Host "Tip: Run '.\start.ps1 -Restart' to restart or '.\start.ps1 -Mode stop' to stop them.`n" -ForegroundColor Yellow
+
+        if (-not $NoBrowser) {
+            Start-Process "http://$HostAddress`:$FrontendPort" -ErrorAction SilentlyContinue
+        }
+        exit 0
+    }
+
+    if ($backendOwner) {
+        Ensure-PortClean -Port $BackendPort -ServiceName "Backend API"
+    }
+    if ($frontendOwner) {
+        Ensure-PortClean -Port $FrontendPort -ServiceName "Frontend UI"
     }
 
     Write-Host "=================================================================" -ForegroundColor Cyan

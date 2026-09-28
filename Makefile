@@ -23,6 +23,9 @@ dev: ## Instructions to run both backend and frontend concurrently
 	@echo "  Option 1 (PowerShell): .\\start.ps1"
 	@echo "  Option 2 (Terminals):  run 'make backend' in Terminal 1 and 'make frontend' in Terminal 2"
 
+stop: ## Stop running services (PowerShell: .\\start.ps1 -Mode stop)
+	@pwsh -File .\start.ps1 -Mode stop
+
 seed: ## Seed mock orders in DynamoDB table
 	cd backend && uv run python -m app.db.seed
 
