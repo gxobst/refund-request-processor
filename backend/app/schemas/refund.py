@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Any, Literal
 import uuid
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.order import ORDER_ID_PATTERN
 
@@ -182,6 +182,19 @@ class RefundOverrideRequest(BaseModel):
     reason: str = Field(
         ..., min_length=1, description="Operator explanation justifying the override."
     )
+    override_reason: str | None = Field(
+        default=None, description="Alias for operator explanation justifying the override."
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_reason_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            val = data.get("override_reason") or data.get("overrideReason") or data.get("reason")
+            if val is not None:
+                data["reason"] = val
+                data["override_reason"] = val
+        return data
 
     @field_validator("reason")
     @classmethod
