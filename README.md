@@ -17,15 +17,49 @@ A back-office e-commerce tool that receives a refund request, evaluates it with 
 - `backend/`: FastAPI + LangGraph backend service, DynamoDB repositories, Bedrock agents, and test suite.
 - `frontend/`: Web dashboard (React / Vite).
 
-## Backend Quickstart
-```bash
-cd backend
-uv sync
-uv run uvicorn app.main:app --reload
+## Quickstart
+
+### Option 1: PowerShell (Windows)
+Run pure PowerShell script from root:
+```powershell
+# Start both Backend (FastAPI :8000) and Frontend (Vite :5173)
+.\start.ps1
+
+# Or open them in separate dedicated PowerShell windows
+.\start.ps1 -NewWindows
+
+# Run setup (install deps & seed mock database)
+.\start.ps1 -Mode setup
+
+# Run test suites (pytest + vitest)
+.\start.ps1 -Mode test
+
+# View all options
+.\start.ps1 -Mode help
 ```
 
-Run tests:
+### Option 2: Make (macOS / Linux / WSL / Git Bash)
 ```bash
-cd backend
-uv run pytest -m "not aws"
+# Setup dependencies and seed mock database
+make setup
+
+# Start backend server
+make backend
+
+# Start frontend server
+make frontend
+
+# Run full test suite
+make test
+
+# View all available targets
+make help
 ```
+
+## Project Structure
+- `backend/`: FastAPI + LangGraph backend service, DynamoDB repositories, Bedrock agents, and test suite.
+- `frontend/`: Web dashboard (React / TypeScript / Vite / Tailwind CSS).
+- `start.ps1`: Pure PowerShell launcher for full-stack, backend, frontend, seeding, and tests.
+- `Makefile`: Make targets for Unix / WSL / cross-platform environments.
+- `openapi.yaml`: OpenAPI 3.1.0 contract specification.
+
