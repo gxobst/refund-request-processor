@@ -73,7 +73,16 @@ function getDefaultTitle(status: number): string {
  * Constructs an absolute API request URL from the configured base URL and endpoint path.
  */
 export function buildUrl(path: string): string {
-  const baseUrl = (import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/+$/, '')
+  let baseUrl = (import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/+$/, '')
+
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    if (window.location.hostname === '127.0.0.1' && baseUrl.includes('localhost')) {
+      baseUrl = baseUrl.replace('localhost', '127.0.0.1')
+    } else if (window.location.hostname === 'localhost' && baseUrl.includes('127.0.0.1')) {
+      baseUrl = baseUrl.replace('127.0.0.1', 'localhost')
+    }
+  }
+
   const cleanPath = path.startsWith('/') ? path : `/${path}`
   return `${baseUrl}${cleanPath}`
 }
