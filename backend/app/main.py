@@ -18,6 +18,9 @@ async def lifespan(app: FastAPI):
     yield
 
 
+import os
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title="AI Refund Request Processor",
     description="Back-office e-commerce refund evaluation tool powered by LangGraph and AWS Bedrock",
@@ -25,6 +28,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+cors_origins = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins or ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(refunds_router, prefix="/v1")
 app.include_router(refunds_router)
 
 
