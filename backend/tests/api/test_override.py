@@ -181,6 +181,134 @@ async def test_list_refunds_invalid_status_returns_422(mock_repo: MockRefundRepo
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize("route_prefix", ["/refunds", "/v1/refunds"])
+@pytest.mark.asyncio
+async def test_list_refunds_filter_awaiting_clarification(
+    route_prefix: str, mock_repo: MockRefundRepository
+):
+    # Arrange: seed records across all four valid statuses
+    mock_repo.seed_record("ref-p1", "ORD-1001", "pending")
+    mock_repo.seed_record("ref-c1", "ORD-1002", "completed")
+    mock_repo.seed_record("ref-e1", "ORD-1003", "escalated")
+    mock_repo.seed_record("ref-ac1", "ORD-1004", "awaiting_clarification")
+    mock_repo.seed_record("ref-ac2", "ORD-1005", "awaiting_clarification")
+
+    transport = ASGITransport(app=app)
+
+    # Act
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"{route_prefix}?status=awaiting_clarification")
+
+    # Assert
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    assert all(item["status"] == "awaiting_clarification" for item in data)
+    assert {item["refund_id"] for item in data} == {"ref-ac1", "ref-ac2"}
+    assert not any(item["status"] in ("pending", "completed", "escalated") for item in data)
+
+
+@pytest.mark.parametrize("route_prefix", ["/refunds", "/v1/refunds"])
+@pytest.mark.parametrize(
+    "status_filter", ["pending", "completed", "escalated", "awaiting_clarification"]
+)
+@pytest.mark.asyncio
+async def test_list_refunds_filter_each_valid_status(
+    route_prefix: str, status_filter: str, mock_repo: MockRefundRepository
+):
+    # Arrange: seed records across all four valid statuses
+    mock_repo.seed_record("ref-pen", "ORD-0001", "pending")
+    mock_repo.seed_record("ref-com", "ORD-0002", "completed")
+    mock_repo.seed_record("ref-esc", "ORD-0003", "escalated")
+    mock_repo.seed_record("ref-cla", "ORD-0004", "awaiting_clarification")
+
+    transport = ASGITransport(app=app)
+
+    # Act
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"{route_prefix}?status={status_filter}")
+
+    # Assert
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["status"] == status_filter
+    other_statuses = {"pending", "completed", "escalated", "awaiting_clarification"} - {status_filter}
+    assert all(item["status"] not in other_statuses for item in data)
+
+
+@pytest.mark.parametrize("route_prefix", ["/refunds", "/v1/refunds"])
+@pytest.mark.asyncio
+async def test_list_refunds_filter_zero_matching_records_returns_empty_list(
+    route_prefix: str, mock_repo: MockRefundRepository
+):
+    # Arrange: seed records only for pending and completed
+    mock_repo.seed_record("ref-1", "ORD-0001", "pending")
+    mock_repo.seed_record("ref-2", "ORD-0002", "completed")
+
+    transport = ASGITransport(app=app)
+
+    # Act & Assert for statuses with 0 matching records
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res_clarification = await client.get(f"{route_prefix}?status=awaiting_clarification")
+        res_escalated = await client.get(f"{route_prefix}?status=escalated")
+
+    assert res_clarification.status_code == 200
+    assert res_clarification.json() == []
+
+    assert res_escalated.status_code == 200
+    assert res_escalated.json() == []
+
+
+@pytest.mark.parametrize("route_prefix", ["/refunds", "/v1/refunds"])
+@pytest.mark.asyncio
+async def test_list_refunds_unparameterized_returns_all_records(
+    route_prefix: str, mock_repo: MockRefundRepository
+):
+    # Arrange: seed records across all four statuses
+    mock_repo.seed_record("ref-1", "ORD-0001", "pending")
+    mock_repo.seed_record("ref-2", "ORD-0002", "completed")
+    mock_repo.seed_record("ref-3", "ORD-0003", "escalated")
+    mock_repo.seed_record("ref-4", "ORD-0004", "awaiting_clarification")
+
+    transport = ASGITransport(app=app)
+
+    # Act
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(route_prefix)
+
+    # Assert
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 4
+    returned_statuses = {item["status"] for item in data}
+    assert returned_statuses == {"pending", "completed", "escalated", "awaiting_clarification"}
+
+
+@pytest.mark.parametrize("route_prefix", ["/refunds", "/v1/refunds"])
+@pytest.mark.parametrize(
+    "invalid_status",
+    [
+        "invalid_status",
+        "unknown",
+        "cancelled",
+        "approved",
+        "rejected",
+        "AWAITING_CLARIFICATION_INVALID",
+    ],
+)
+@pytest.mark.asyncio
+async def test_list_refunds_invalid_status_returns_422_on_all_routes(
+    route_prefix: str, invalid_status: str, mock_repo: MockRefundRepository
+):
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"{route_prefix}?status={invalid_status}")
+
+    assert response.status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_list_refunds_with_limit(mock_repo: MockRefundRepository):
     for i in range(5):
