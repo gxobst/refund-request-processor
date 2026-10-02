@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.policies import router as policies_router
 from app.api.refunds import router as refunds_router
 from app.core.config import setup_langsmith_environment
 
@@ -56,6 +57,8 @@ app.add_middleware(
 
 app.include_router(refunds_router, prefix="/v1")
 app.include_router(refunds_router)
+app.include_router(policies_router, prefix="/v1")
+app.include_router(policies_router)
 
 
 

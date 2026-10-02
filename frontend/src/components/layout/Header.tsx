@@ -1,4 +1,4 @@
-import { ShieldCheck, RefreshCw } from 'lucide-react'
+import { ShieldCheck, RefreshCw, Sliders } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export type SystemHealthStatus = 'operational' | 'degraded' | 'offline'
@@ -11,6 +11,7 @@ export interface HeaderProps {
   isRefreshing?: boolean
   className?: string
   sseConnected?: boolean
+  onOpenPolicyRules?: () => void
 }
 
 export function Header({
@@ -21,6 +22,7 @@ export function Header({
   isRefreshing = false,
   className,
   sseConnected = false,
+  onOpenPolicyRules,
 }: HeaderProps) {
   const healthBadgeConfig: Record<
     SystemHealthStatus,
@@ -125,6 +127,24 @@ export function Header({
             />
             <span>{currentHealth.label}</span>
           </div>
+
+          {/* Policy Rules Button */}
+          {onOpenPolicyRules && (
+            <button
+              type="button"
+              onClick={onOpenPolicyRules}
+              data-testid="policy-rules-button"
+              aria-label="Policy Rules"
+              className={cn(
+                'inline-flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium rounded-md',
+                'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900',
+                'transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400'
+              )}
+            >
+              <Sliders className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+              <span>Policy Rules</span>
+            </button>
+          )}
 
           {/* Optional Manual Refresh Button */}
           {onManualRefresh && (

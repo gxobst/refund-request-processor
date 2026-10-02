@@ -10,7 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from app.agents.llm import get_bedrock_llm
 from app.policy.engine import evaluate_policy
-from app.policy.loader import load_policies
+from app.policy.loader import get_active_policies, load_policies
 from app.policy.schema import PolicyConfig
 from app.schemas.policy_checker import PolicyCheckerOutput
 from app.tools import ALL_TOOLS, query_carrier_tracking, query_payment_transaction
@@ -530,7 +530,7 @@ def check_policy(
     Returns:
         PolicyCheckerOutput instance.
     """
-    active_policies = policies if policies is not None else load_policies()
+    active_policies = policies if policies is not None else get_active_policies()
     eval_result = evaluate_policy(category=category, order=order, policy=active_policies)
 
     # Resolve ordered item title from order dict or mock orders catalog

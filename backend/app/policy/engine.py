@@ -4,6 +4,7 @@ from datetime import date, datetime
 from typing import Any
 from pydantic import BaseModel
 
+from app.policy.loader import get_active_policies
 from app.policy.schema import CategoryPolicy, PolicyConfig, PolicyEvaluationResult
 
 
@@ -35,7 +36,7 @@ def _parse_date(val: Any) -> date | None:
 def evaluate_policy(
     category: str,
     order: dict[str, Any] | BaseModel,
-    policy: CategoryPolicy | PolicyConfig | dict[str, Any],
+    policy: CategoryPolicy | PolicyConfig | dict[str, Any] | None = None,
     evaluation_date: date | datetime | str | None = None,
 ) -> PolicyEvaluationResult:
     """Evaluate a refund request against category policy rules deterministically.
@@ -44,12 +45,16 @@ def evaluate_policy(
         category: Refund reason category string.
         order: Order data dict or Pydantic model.
         policy: CategoryPolicy instance, complete PolicyConfig, or policy dictionary.
+            Defaults to active in-memory configuration from get_active_policies().
         evaluation_date: Date to evaluate against. Defaults to date.today().
 
     Returns:
         PolicyEvaluationResult with status ('pass', 'fail', 'ambiguous'),
         passed_rules, failed_rules, details, and matched_policy_rule.
     """
+    if policy is None:
+        policy = get_active_policies()
+
     # 1. Resolve matching policy rule
     matched_rule: CategoryPolicy | dict[str, Any] | None = None
 

@@ -20,6 +20,7 @@ import {
   RequestProofModal,
   CustomerClarificationModal,
 } from '@/components/modals'
+import { PolicyRuleViewerModal } from '@/components/admin'
 import { Button } from '@/components/ui/Button'
 import type { RefundRecord } from '@/types/api'
 
@@ -40,6 +41,7 @@ function AppContent() {
   const [isRequestProofModalOpen, setIsRequestProofModalOpen] = React.useState(false)
   const [isClarificationModalOpen, setIsClarificationModalOpen] = React.useState(false)
   const [clarificationRefundId, setClarificationRefundId] = React.useState<string | null>(null)
+  const [isPolicyModalOpen, setIsPolicyModalOpen] = React.useState(false)
 
   // Detect URL routing for customer clarification portal (?clarify=<refundId> or /clarify/<refundId>)
   React.useEffect(() => {
@@ -114,6 +116,7 @@ function AppContent() {
         isPolling,
         pollingIntervalSeconds: 3,
         sseConnected: sseActive,
+        onOpenPolicyRules: () => setIsPolicyModalOpen(true),
       }}
     >
       <div className="space-y-6">
@@ -189,6 +192,11 @@ function AppContent() {
             setIsClarificationModalOpen(false)
             setClarificationRefundId(null)
           }}
+        />
+
+        <PolicyRuleViewerModal
+          isOpen={isPolicyModalOpen}
+          onClose={() => setIsPolicyModalOpen(false)}
         />
       </div>
     </AppLayout>

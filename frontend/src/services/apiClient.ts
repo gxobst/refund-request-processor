@@ -283,6 +283,21 @@ export const apiClient = {
       body: formData,
     }),
 
+  put: <T>(path: string, data?: unknown, options?: RequestInit): Promise<T> => {
+    const body =
+      data !== undefined
+        ? typeof data === 'string'
+          ? data
+          : JSON.stringify(data)
+        : undefined
+
+    return request<T>(path, {
+      ...options,
+      method: 'PUT',
+      body,
+    })
+  },
+
   delete: <T>(path: string, options?: RequestInit): Promise<T> =>
     request<T>(path, { ...options, method: 'DELETE' }),
 
