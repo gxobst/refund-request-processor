@@ -7,6 +7,7 @@ import uuid
 import boto3
 
 from app.core.config import get_settings
+from app.schemas.analytics import AnalyticsMetricsResponse, DecisionBreakdown, StatusBreakdown
 from app.schemas.refund import ClarificationTurn, EvidenceItem, RefundRecord
 
 
@@ -75,6 +76,7 @@ class RefundRepository:
             self.dynamodb_resource = boto3.resource("dynamodb", **kwargs)
 
         self.table = self.dynamodb_resource.Table(self.table_name)
+        self._table = self.table
 
     def create_refund_request(
         self,
@@ -523,5 +525,98 @@ class RefundRepository:
         item = _convert_floats_to_decimal(updated_dict)
         self.table.put_item(Item=item)
         return RefundRecord.model_validate(updated_dict)
+
+    def get_analytics_metrics(self) -> AnalyticsMetricsResponse:
+        """Scan DynamoDB refund records and compute aggregate operational and AI metrics."""
+        table = getattr(self, "_table", self.table)
+        response = table.scan()
+        raw_items = response.get("Items", []) if isinstance(response, dict) else (response or [])
+
+        total_requests = len(raw_items)
+        if total_requests == 0:
+            return AnalyticsMetricsResponse(
+                total_requests=0,
+                status_breakdown=StatusBreakdown(),
+                decision_breakdown=DecisionBreakdown(),
+                auto_approval_rate=0.0,
+                override_rate=0.0,
+                average_confidence=0.0,
+                category_breakdown={},
+            )
+
+        status_counts = {
+            "pending": 0,
+            "completed": 0,
+            "escalated": 0,
+            "awaiting_clarification": 0,
+        }
+        decision_counts = {
+            "auto_approve": 0,
+            "deny": 0,
+            "escalate": 0,
+            "pending": 0,
+        }
+        category_breakdown: dict[str, int] = {}
+        completed_records_count = 0
+        completed_overridden_count = 0
+        confidence_scores: list[float] = []
+
+        for item in raw_items:
+            # Status breakdown
+            raw_status = str(item.get("status") or "").strip().lower()
+            if raw_status in status_counts:
+                status_counts[raw_status] += 1
+
+            # Decision breakdown (unfinalized, missing, or pending mapped to pending)
+            raw_decision = str(item.get("decision") or "").strip().lower()
+            if raw_decision in ("auto_approve", "deny", "escalate"):
+                decision_counts[raw_decision] += 1
+            else:
+                decision_counts["pending"] += 1
+
+            # Category breakdown (missing, null, or empty category mapped to "unclassified")
+            raw_category = item.get("category")
+            if raw_category is not None and str(raw_category).strip():
+                cat_key = str(raw_category).strip()
+            else:
+                cat_key = "unclassified"
+            category_breakdown[cat_key] = category_breakdown.get(cat_key, 0) + 1
+
+            # Completed records for override rate calculation
+            if raw_status == "completed":
+                completed_records_count += 1
+                if item.get("override_decision") is not None or item.get("overridden_at") is not None:
+                    completed_overridden_count += 1
+
+            # AI confidence score (convert Decimal to float if present)
+            raw_conf = item.get("confidence_score")
+            if raw_conf is not None:
+                try:
+                    confidence_scores.append(float(raw_conf))
+                except (ValueError, TypeError):
+                    pass
+
+        auto_approval_rate = round(decision_counts["auto_approve"] / total_requests, 4)
+        override_rate = (
+            round(completed_overridden_count / completed_records_count, 4)
+            if completed_records_count > 0
+            else 0.0
+        )
+        average_confidence = (
+            round(sum(confidence_scores) / len(confidence_scores), 4)
+            if confidence_scores
+            else 0.0
+        )
+
+        return AnalyticsMetricsResponse(
+            total_requests=total_requests,
+            status_breakdown=StatusBreakdown(**status_counts),
+            decision_breakdown=DecisionBreakdown(**decision_counts),
+            auto_approval_rate=auto_approval_rate,
+            override_rate=override_rate,
+            average_confidence=average_confidence,
+            category_breakdown=category_breakdown,
+        )
+
 
 

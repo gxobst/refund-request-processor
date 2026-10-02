@@ -1,5 +1,10 @@
 """Pydantic schemas for the application."""
 
+from app.schemas.analytics import (
+    AnalyticsMetricsResponse,
+    DecisionBreakdown,
+    StatusBreakdown,
+)
 from app.schemas.classifier import ClassificationOutput, RefundCategoryType
 from app.schemas.decision import DecisionOutput, DecisionType
 from app.schemas.order import MockOrder
@@ -18,6 +23,9 @@ from app.schemas.refund import (
 )
 
 __all__ = [
+    "AnalyticsMetricsResponse",
+    "DecisionBreakdown",
+    "StatusBreakdown",
     "ClarificationTurn",
     "MockOrder",
     "RefundRecord",

@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.analytics import router as analytics_router
 from app.api.policies import router as policies_router
 from app.api.refunds import router as refunds_router
 from app.core.config import setup_langsmith_environment
@@ -59,6 +60,8 @@ app.include_router(refunds_router, prefix="/v1")
 app.include_router(refunds_router)
 app.include_router(policies_router, prefix="/v1")
 app.include_router(policies_router)
+app.include_router(analytics_router, prefix="/v1")
+app.include_router(analytics_router)
 
 
 

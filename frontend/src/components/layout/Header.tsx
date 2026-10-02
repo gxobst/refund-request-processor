@@ -1,4 +1,4 @@
-import { ShieldCheck, RefreshCw, Sliders } from 'lucide-react'
+import { ShieldCheck, RefreshCw, Sliders, BarChart3 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export type SystemHealthStatus = 'operational' | 'degraded' | 'offline'
@@ -12,6 +12,7 @@ export interface HeaderProps {
   className?: string
   sseConnected?: boolean
   onOpenPolicyRules?: () => void
+  onOpenAnalytics?: () => void
 }
 
 export function Header({
@@ -23,6 +24,7 @@ export function Header({
   className,
   sseConnected = false,
   onOpenPolicyRules,
+  onOpenAnalytics,
 }: HeaderProps) {
   const healthBadgeConfig: Record<
     SystemHealthStatus,
@@ -143,6 +145,24 @@ export function Header({
             >
               <Sliders className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
               <span>Policy Rules</span>
+            </button>
+          )}
+
+          {/* Analytics Dashboard Button */}
+          {onOpenAnalytics && (
+            <button
+              type="button"
+              onClick={onOpenAnalytics}
+              data-testid="analytics-button"
+              aria-label="Open Analytics Dashboard"
+              className={cn(
+                'inline-flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium rounded-md',
+                'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900',
+                'transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400'
+              )}
+            >
+              <BarChart3 className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+              <span>Analytics</span>
             </button>
           )}
 
