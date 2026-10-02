@@ -1,17 +1,21 @@
+import asyncio
 from email.parser import BytesParser
 from email.policy import default
 import io
+import json
 from pathlib import Path
 import re
 from typing import Any
 import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from starlette.datastructures import UploadFile
+from starlette.responses import StreamingResponse
 
 from app.agents.proof_notifier import generate_reviewer_proof_email
 from app.db.repository import RefundNotFoundError, RefundRepository
 from app.graph.runner import resume_refund_workflow, run_refund_workflow
 from app.schemas.order import ORDER_ID_PATTERN
+from app.services.broadcaster import broadcaster
 from app.schemas.refund import (
     EvidenceItem,
     RefundClarificationRequest,
@@ -282,7 +286,17 @@ async def submit_refund_request(
         evidence=record.evidence,
     )
 
-    # 3. Return accepted response
+    # 3. Broadcast refund creation update
+    await broadcaster.publish(
+        "refund_update",
+        {
+            "refund_id": record.refund_id,
+            "order_id": record.order_id,
+            "status": "pending",
+        },
+    )
+
+    # 4. Return accepted response
     return RefundCreateResponse(
         refund_id=record.refund_id,
         order_id=record.order_id,
@@ -314,7 +328,63 @@ async def override_refund_decision(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Refund request '{refund_id}' not found",
         )
+    await broadcaster.publish(
+        "refund_update",
+        {
+            "refund_id": refund_id,
+            "status": updated.status,
+            "override_decision": payload.override_decision,
+            "reasoning": payload.reason,
+        },
+    )
     return updated
+
+
+@router.get(
+    "/events",
+    status_code=status.HTTP_200_OK,
+    summary="Subscribe to real-time refund server-sent events (SSE)",
+)
+async def subscribe_refund_events(
+    request: Request,
+    limit: int | None = Query(default=None, ge=1),
+) -> StreamingResponse:
+    """Stream real-time refund update events to connected SSE clients."""
+    async def event_generator():
+        queue = await broadcaster.subscribe()
+        yielded_count = 0
+        try:
+            # Send initial ping event to establish connection and keep proxies from timing out
+            yield "event: ping\ndata: {}\n\n"
+            yielded_count += 1
+            if limit is not None and yielded_count >= limit:
+                return
+
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    event_name = item.get("event", "message")
+                    data_json = json.dumps(item.get("data", {}))
+                    yield f"event: {event_name}\ndata: {data_json}\n\n"
+                    yielded_count += 1
+                    if limit is not None and yielded_count >= limit:
+                        return
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        except (asyncio.CancelledError, GeneratorExit):
+            pass
+        finally:
+            await broadcaster.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get(
@@ -601,6 +671,14 @@ async def clarify_refund_request(
         refund_id=refund_id,
         clarification_response=response_text,
     )
+    await broadcaster.publish(
+        "refund_update",
+        {
+            "refund_id": refund_id,
+            "order_id": record.order_id,
+            "status": updated.status,
+        },
+    )
     background_tasks.add_task(
         resume_refund_workflow,
         refund_id=record.refund_id,
@@ -656,6 +734,14 @@ async def request_reviewer_proof_endpoint(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+    await broadcaster.publish(
+        "refund_update",
+        {
+            "refund_id": refund_id,
+            "order_id": record.order_id,
+            "status": updated.status,
+        },
+    )
     return updated
 
 

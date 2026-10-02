@@ -17,6 +17,7 @@ export interface RefundQueueTableProps {
   onSelectRefund?: (refundId: string) => void
   initialStatus?: string
   className?: string
+  sseConnected?: boolean
 }
 
 export type StatusTabId =
@@ -128,6 +129,7 @@ export function RefundQueueTable({
   onSelectRefund,
   initialStatus = 'all',
   className,
+  sseConnected = false,
 }: RefundQueueTableProps) {
   const [activeTab, setActiveTab] = React.useState<StatusTabId>(() => {
     const matched = STATUS_TABS.find((t) => t.id === initialStatus || t.statusFilter === initialStatus)
@@ -152,8 +154,9 @@ export function RefundQueueTable({
         : undefined
       return listRefunds(params)
     },
-    // Dynamic polling: poll every 3000ms if any item has pending status; otherwise disable
+    // Dynamic polling: poll every 3000ms if any item has pending status; disable if SSE active
     refetchInterval: (query) => {
+      if (sseConnected) return false
       const dataset = query.state.data
       if (!dataset || dataset.length === 0) return false
       const hasPending = dataset.some((r) => {
@@ -176,7 +179,7 @@ export function RefundQueueTable({
     })
   }, [refunds])
 
-  const isPollingActive = hasPendingItems && !isLoading && !error
+  const isPollingActive = !sseConnected && hasPendingItems && !isLoading && !error
 
   // Extract error message & details if RFC 9457 ProblemDetails
   const problemDetails = React.useMemo(() => {
@@ -249,7 +252,15 @@ export function RefundQueueTable({
             data-testid="table-polling-indicator"
             className="flex items-center space-x-1.5 text-xs text-slate-600 font-medium"
           >
-            {isPollingActive ? (
+            {sseConnected ? (
+              <>
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                </span>
+                <span className="text-emerald-700 font-semibold">Live - SSE connected</span>
+              </>
+            ) : isPollingActive ? (
               <>
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75" />

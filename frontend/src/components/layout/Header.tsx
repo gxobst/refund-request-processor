@@ -10,6 +10,7 @@ export interface HeaderProps {
   onManualRefresh?: () => void
   isRefreshing?: boolean
   className?: string
+  sseConnected?: boolean
 }
 
 export function Header({
@@ -19,6 +20,7 @@ export function Header({
   onManualRefresh,
   isRefreshing = false,
   className,
+  sseConnected = false,
 }: HeaderProps) {
   const healthBadgeConfig: Record<
     SystemHealthStatus,
@@ -81,7 +83,16 @@ export function Header({
             data-testid="polling-status"
             className="flex items-center space-x-1.5 text-xs text-slate-600 font-medium"
           >
-            {isPolling ? (
+            {sseConnected ? (
+              <>
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                </span>
+                <span className="hidden sm:inline">Live - SSE connected</span>
+                <span className="sm:hidden">Live</span>
+              </>
+            ) : isPolling ? (
               <>
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75" />

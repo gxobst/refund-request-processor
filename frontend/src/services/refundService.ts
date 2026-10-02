@@ -1,5 +1,20 @@
-import { apiClient } from './apiClient'
+import { apiClient, buildUrl } from './apiClient'
 import type { RefundRecord, RefundStatus, RefundCreateResponse } from '../types/api'
+
+export interface RefundEventPayload {
+  refund_id?: string
+  refundId?: string
+  order_id?: string
+  orderId?: string
+  status?: RefundStatus
+  decision?: string
+  override_decision?: string
+  overrideDecision?: string
+  reasoning?: string
+  confidence_score?: number
+  confidenceScore?: number
+  [key: string]: unknown
+}
 
 export interface ListRefundsParams {
   status?: RefundStatus
@@ -147,6 +162,62 @@ export async function requestReviewerProof(
   return apiClient.post<RefundRecord>(path, body)
 }
 
+/**
+ * Subscribes to real-time refund server-sent events (SSE).
+ *
+ * @param onEvent Callback invoked when a refund_update event or message is received.
+ * @param onError Optional callback invoked on EventSource error.
+ * @param onOpen Optional callback invoked when the connection is opened.
+ * @returns A cleanup function that closes the EventSource connection.
+ */
+export function subscribeToRefundEvents(
+  onEvent: (event: RefundEventPayload) => void,
+  onError?: (err: Event) => void,
+  onOpen?: () => void,
+): () => void {
+  if (typeof window === 'undefined' || typeof EventSource === 'undefined') {
+    return () => {}
+  }
+
+  const url = buildUrl('/v1/refunds/events')
+  const eventSource = new EventSource(url)
+
+  if (onOpen) {
+    eventSource.onopen = () => {
+      onOpen()
+    }
+  }
+
+  const handleMessage = (e: MessageEvent) => {
+    try {
+      const data = JSON.parse(e.data) as RefundEventPayload
+      onEvent(data)
+    } catch {
+      // Ignore non-JSON or ping payloads
+    }
+  }
+
+  eventSource.addEventListener('refund_update', handleMessage)
+  eventSource.onmessage = handleMessage
+
+  eventSource.addEventListener('ping', () => {
+    if (onOpen) {
+      onOpen()
+    }
+  })
+
+  if (onError) {
+    eventSource.onerror = (err) => {
+      onError(err)
+    }
+  }
+
+  return () => {
+    eventSource.removeEventListener('refund_update', handleMessage)
+    eventSource.close()
+  }
+}
+
 export const refundService = {
   listRefunds,
   submitRefund,
@@ -155,4 +226,5 @@ export const refundService = {
   submitClarification,
   uploadEvidence,
   requestReviewerProof,
+  subscribeToRefundEvents,
 }

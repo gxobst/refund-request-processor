@@ -7,6 +7,7 @@ import {
 } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
 import { listRefunds, getRefundById } from '@/services/refundService'
+import { useRefundEvents } from '@/hooks/useRefundEvents'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { RefundQueueTable } from '@/components/queue/RefundQueueTable'
 import { RefundDetailDrawer } from '@/components/detail/RefundDetailDrawer'
@@ -55,11 +56,15 @@ function AppContent() {
     }
   }, [])
 
-  // Fetch all refunds to determine polling state (if any pending)
+  const { isConnected, isFallback } = useRefundEvents()
+  const sseActive = isConnected && !isFallback
+
+  // Fetch all refunds to determine polling state (if any pending; deactivated when SSE active)
   const { data: allRefunds = [] } = useQuery<RefundRecord[]>({
     queryKey: ['refunds', 'all-for-polling'],
     queryFn: () => listRefunds(),
     refetchInterval: (query) => {
+      if (sseActive) return false
       const data = query.state.data
       const hasPending = data?.some((r) => r.status === 'pending')
       return hasPending ? 3000 : false
@@ -67,8 +72,9 @@ function AppContent() {
   })
 
   const isPolling = React.useMemo(() => {
+    if (sseActive) return false
     return allRefunds.some((r) => r.status === 'pending')
-  }, [allRefunds])
+  }, [allRefunds, sseActive])
 
   // Fetch selected refund detail for children extension slots and modals
   const { data: selectedRefund } = useQuery<RefundRecord>({
@@ -107,6 +113,7 @@ function AppContent() {
         systemHealth: 'operational',
         isPolling,
         pollingIntervalSeconds: 3,
+        sseConnected: sseActive,
       }}
     >
       <div className="space-y-6">
@@ -135,7 +142,10 @@ function AppContent() {
         </div>
 
         {/* Refund Queue Table */}
-        <RefundQueueTable onSelectRefund={handleSelectRefund} />
+        <RefundQueueTable
+          onSelectRefund={handleSelectRefund}
+          sseConnected={sseActive}
+        />
 
         {/* Detail Inspection Drawer with extensions */}
         <RefundDetailDrawer
