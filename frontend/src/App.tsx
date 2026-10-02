@@ -17,6 +17,7 @@ import {
   CreateRefundModal,
   ManualOverrideModal,
   RequestProofModal,
+  CustomerClarificationModal,
 } from '@/components/modals'
 import { Button } from '@/components/ui/Button'
 import type { RefundRecord } from '@/types/api'
@@ -36,6 +37,23 @@ function AppContent() {
   const [isCreateModalOpen, setIsCreateModalOpen] = React.useState(false)
   const [isOverrideModalOpen, setIsOverrideModalOpen] = React.useState(false)
   const [isRequestProofModalOpen, setIsRequestProofModalOpen] = React.useState(false)
+  const [isClarificationModalOpen, setIsClarificationModalOpen] = React.useState(false)
+  const [clarificationRefundId, setClarificationRefundId] = React.useState<string | null>(null)
+
+  // Detect URL routing for customer clarification portal (?clarify=<refundId> or /clarify/<refundId>)
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const searchParams = new URLSearchParams(window.location.search)
+      const clarifyParam = searchParams.get('clarify')
+      const pathMatch = window.location.pathname.match(/\/clarify\/([^/?#]+)/)
+      const routeRefundId = clarifyParam || (pathMatch ? pathMatch[1] : null)
+
+      if (routeRefundId) {
+        setClarificationRefundId(routeRefundId)
+        setIsClarificationModalOpen(true)
+      }
+    }
+  }, [])
 
   // Fetch all refunds to determine polling state (if any pending)
   const { data: allRefunds = [] } = useQuery<RefundRecord[]>({
@@ -76,6 +94,11 @@ function AppContent() {
   const handleTriggerRequestProof = (refundId: string) => {
     setSelectedRefundId(refundId)
     setIsRequestProofModalOpen(true)
+  }
+
+  const handleTriggerClarify = (refundId: string) => {
+    setClarificationRefundId(refundId)
+    setIsClarificationModalOpen(true)
   }
 
   return (
@@ -121,6 +144,7 @@ function AppContent() {
           onClose={handleCloseDrawer}
           onTriggerOverride={handleTriggerOverride}
           onTriggerRequestProof={handleTriggerRequestProof}
+          onTriggerClarify={handleTriggerClarify}
         >
           <EvidenceGallery evidence={selectedRefund?.evidence} />
           <ClarificationHistoryViewer history={selectedRefund?.clarificationHistory} />
@@ -146,6 +170,15 @@ function AppContent() {
           orderId={selectedRefund?.orderId}
           isOpen={isRequestProofModalOpen}
           onClose={() => setIsRequestProofModalOpen(false)}
+        />
+
+        <CustomerClarificationModal
+          refundId={clarificationRefundId}
+          isOpen={isClarificationModalOpen}
+          onClose={() => {
+            setIsClarificationModalOpen(false)
+            setClarificationRefundId(null)
+          }}
         />
       </div>
     </AppLayout>

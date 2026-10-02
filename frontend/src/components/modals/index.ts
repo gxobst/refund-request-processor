@@ -6,3 +6,6 @@ export type { RequestProofModalProps } from './RequestProofModal'
 
 export { CreateRefundModal } from './CreateRefundModal'
 export type { CreateRefundModalProps } from './CreateRefundModal'
+
+export { CustomerClarificationModal } from './CustomerClarificationModal'
+export type { CustomerClarificationModalProps } from './CustomerClarificationModal'

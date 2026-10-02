@@ -286,4 +286,35 @@ describe('RefundDetailDrawer component', () => {
     })
     expect(screen.queryByTestId('detail-error-banner')).not.toBeInTheDocument()
   })
+
+  it('renders Submit Clarification button when status is awaiting_clarification and triggers onTriggerClarify', async () => {
+    const mockAwaitingClarification: RefundRecord = {
+      ...mockDetailRecord,
+      refundId: 'ref-clarify-77',
+      status: 'awaiting_clarification',
+      decision: 'escalate',
+    } as unknown as RefundRecord
+
+    vi.mocked(refundService.getRefundById).mockResolvedValue(mockAwaitingClarification)
+    const handleClarify = vi.fn()
+
+    renderWithClient(
+      <RefundDetailDrawer
+        refundId="ref-clarify-77"
+        isOpen={true}
+        onClose={vi.fn()}
+        onTriggerClarify={handleClarify}
+      />
+    )
+
+    await waitFor(() => {
+      const clarifyBtn = screen.getByTestId('drawer-clarify-button')
+      expect(clarifyBtn).toBeInTheDocument()
+      expect(clarifyBtn).not.toBeDisabled()
+    })
+
+    const clarifyBtn = screen.getByTestId('drawer-clarify-button')
+    fireEvent.click(clarifyBtn)
+    expect(handleClarify).toHaveBeenCalledWith('ref-clarify-77')
+  })
 })

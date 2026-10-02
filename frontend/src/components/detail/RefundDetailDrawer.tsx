@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/Button'
 import { DecisionBadge } from '@/components/badges/DecisionBadge'
 import { StatusBadge } from '@/components/badges/StatusBadge'
 import { cn } from '@/lib/utils'
+import { CustomerClarificationModal } from '@/components/modals/CustomerClarificationModal'
 import type { RefundRecord, ProblemDetails } from '@/types/api'
 
 export interface RefundDetailDrawerProps {
@@ -32,6 +33,7 @@ export interface RefundDetailDrawerProps {
   onClose: () => void
   onTriggerOverride?: (refundId: string) => void
   onTriggerRequestProof?: (refundId: string) => void
+  onTriggerClarify?: (refundId: string) => void
   children?: React.ReactNode
 }
 
@@ -68,9 +70,11 @@ export function RefundDetailDrawer({
   onClose,
   onTriggerOverride,
   onTriggerRequestProof,
+  onTriggerClarify,
   children,
 }: RefundDetailDrawerProps) {
   const [activeEmailTab, setActiveEmailTab] = React.useState<EmailTabType>('approval')
+  const [isInternalClarifyOpen, setIsInternalClarifyOpen] = React.useState(false)
 
   const {
     data: refund,
@@ -169,6 +173,14 @@ export function RefundDetailDrawer({
         return null
     }
   }, [activeEmailTab, approvalEmailText, denialEmailText, clarificationEmailText])
+
+  const handleClarifyClick = () => {
+    if (onTriggerClarify) {
+      onTriggerClarify(effectiveRefundId)
+    } else {
+      setIsInternalClarifyOpen(true)
+    }
+  }
 
   return (
     <Drawer
@@ -517,6 +529,21 @@ export function RefundDetailDrawer({
           </Button>
 
           <div className="flex items-center space-x-2">
+            {/* Submit Clarification Button (when awaiting_clarification) */}
+            {status === 'awaiting_clarification' && (
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="drawer-clarify-button"
+                disabled={!effectiveRefundId}
+                onClick={handleClarifyClick}
+                className="border-sky-300 text-sky-800 hover:bg-sky-50"
+              >
+                <HelpCircle className="h-3.5 w-3.5 mr-1 text-sky-600" />
+                Submit Clarification
+              </Button>
+            )}
+
             {/* Request Proof Button (enabled when escalated or ambiguous) */}
             <Button
               variant="outline"
@@ -546,6 +573,14 @@ export function RefundDetailDrawer({
           </div>
         </div>
       </DrawerFooter>
+
+      {!onTriggerClarify && (
+        <CustomerClarificationModal
+          refundId={effectiveRefundId}
+          isOpen={isInternalClarifyOpen}
+          onClose={() => setIsInternalClarifyOpen(false)}
+        />
+      )}
     </Drawer>
   )
 }

@@ -32,4 +32,88 @@ describe('App smoke tests', () => {
       expect(screen.getByText('ORD-1001')).toBeInTheDocument()
     })
   })
+
+  it('detects URL query param ?clarify=<refundId> on load and automatically opens CustomerClarificationModal', async () => {
+    window.history.pushState({}, '', '/?clarify=ref-102')
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByText('Customer Clarification Portal')).toBeInTheDocument()
+      expect(screen.getByTestId('clarification-order-id')).toHaveTextContent('ORD-1002')
+    })
+
+    window.history.pushState({}, '', '/')
+  })
+
+  it('detects URL pathname /clarify/<refundId> on load and automatically opens CustomerClarificationModal', async () => {
+    window.history.pushState({}, '', '/clarify/ref-102')
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByText('Customer Clarification Portal')).toBeInTheDocument()
+      expect(screen.getByTestId('clarification-order-id')).toHaveTextContent('ORD-1002')
+    })
+
+    window.history.pushState({}, '', '/')
+  })
+
+  it('opens CustomerClarificationModal from RefundDetailDrawer when status is awaiting_clarification and submits clarification', async () => {
+    const { fireEvent } = await import('@testing-library/react')
+    render(<App />)
+
+    // Wait for queue table to load
+    await waitFor(() => {
+      expect(screen.getByText('ORD-1003')).toBeInTheDocument()
+    })
+
+    // Click inspect button for ORD-1003
+    const inspectBtn = screen.getByRole('button', { name: /review order ord-1003/i })
+    fireEvent.click(inspectBtn)
+
+    // Wait for drawer and click "Submit Clarification" button
+    await waitFor(() => {
+      const clarifyBtn = screen.getByTestId('drawer-clarify-button')
+      expect(clarifyBtn).toBeInTheDocument()
+      expect(clarifyBtn).toBeEnabled()
+    })
+
+    const drawerClarifyBtn = screen.getByTestId('drawer-clarify-button')
+    fireEvent.click(drawerClarifyBtn)
+
+    // Verify modal is open with prompt
+    await waitFor(() => {
+      expect(screen.getByText('Customer Clarification Portal')).toBeInTheDocument()
+      expect(screen.getByTestId('clarification-order-id')).toHaveTextContent('ORD-1003')
+      expect(screen.getByTestId('clarification-inquiry-prompt')).toHaveTextContent(
+        'Please upload a photo of the exterior shipping box and packing slip.'
+      )
+    })
+
+    // Fill clarification response
+    const textarea = screen.getByTestId('clarification-response-textarea')
+    fireEvent.change(textarea, {
+      target: { value: 'Here is the clarification: the outer box was partially opened upon arrival.' },
+    })
+
+    // Submit clarification
+    const submitBtn = screen.getByTestId('clarification-submit-button')
+    fireEvent.click(submitBtn)
+
+    // Verify success confirmation state
+    await waitFor(() => {
+      expect(screen.getByTestId('clarification-success-state')).toBeInTheDocument()
+    })
+
+    // Click Done to close modal
+    const doneBtn = screen.getByTestId('clarification-done-button')
+    fireEvent.click(doneBtn)
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('clarification-success-state')).not.toBeInTheDocument()
+    })
+  })
 })
