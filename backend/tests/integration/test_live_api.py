@@ -254,6 +254,7 @@ async def test_live_manual_override():
         response = await client.post(
             f"/refunds/{refund_id}/override",
             json=override_payload,
+            headers={"X-User-Role": "supervisor"},
         )
 
     assert response.status_code == 200
@@ -286,6 +287,7 @@ async def test_live_override_nonexistent_returns_404():
         response = await client.post(
             "/refunds/nonexistent_id_9999/override",
             json=override_payload,
+            headers={"X-User-Role": "supervisor"},
         )
 
     assert response.status_code == 404

@@ -45,11 +45,15 @@ class MockRefundRepository:
         refund_id: str,
         override_decision: str,
         override_reason: str,
+        approval_email_text: str | None = None,
+        denial_email_text: str | None = None,
+        overridden_by: str | None = "supervisor",
     ) -> RefundRecord:
         rec = self.records[refund_id]
         rec.status = "completed"
         rec.override_decision = override_decision
         rec.reasoning = override_reason
+        rec.overridden_by = overridden_by
         return rec
 
     def submit_clarification_response(
@@ -242,6 +246,7 @@ async def test_post_override_publishes_event():
             override_res = await client.post(
                 "/v1/refunds/ref_override_1/override",
                 json={"override_decision": "approve", "reason": "Customer is a high-value VIP."},
+                headers={"X-User-Role": "supervisor"},
             )
             assert override_res.status_code == 200
 

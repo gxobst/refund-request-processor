@@ -629,7 +629,9 @@ async def test_e2e_override_flow(mock_repo: RefundRepository):
             "reason": "Customer VIP status verified in external CRM. Exception granted by supervisor.",
         }
         override_res = await client.post(
-            f"/refunds/{refund_id}/override", json=override_payload
+            f"/refunds/{refund_id}/override",
+            json=override_payload,
+            headers={"X-User-Role": "supervisor"},
         )
         assert override_res.status_code == 200
         override_data = override_res.json()
