@@ -263,3 +263,34 @@ class ReviewerProofRequest(BaseModel):
         return v.strip()
 
 
+class BulkExportJobRequest(BaseModel):
+    """Request payload for initiating an asynchronous bulk queue export job."""
+
+    format: Literal["csv", "json"] = Field(default="csv", description="Export file format.")
+    status: RefundStatus | None = Field(default=None, description="Optional refund status filter.")
+    start_date: str | None = Field(default=None, description="Optional ISO-8601 or YYYY-MM-DD start date filter (inclusive).")
+    end_date: str | None = Field(default=None, description="Optional ISO-8601 or YYYY-MM-DD end date filter (inclusive).")
+
+    @field_validator("format")
+    @classmethod
+    def validate_format(cls, v: str) -> str:
+        if v not in ("csv", "json"):
+            raise ValueError("Export format must be 'csv' or 'json'.")
+        return v
+
+
+class BulkExportJobResponse(BaseModel):
+    """Response payload representing an asynchronous bulk export job status and artifact."""
+
+    job_id: str = Field(..., description="Unique export job identifier prefixed with exp_.")
+    status: Literal["pending", "processing", "completed", "failed"] = Field(..., description="Current job execution status.")
+    format: Literal["csv", "json"] = Field(..., description="Export format.")
+    created_at: str = Field(..., description="ISO-8601 creation timestamp.")
+    expires_at: str | None = Field(default=None, description="ISO-8601 expiration timestamp (default 1 hour after creation).")
+    completed_at: str | None = Field(default=None, description="ISO-8601 completion timestamp.")
+    download_url: str | None = Field(default=None, description="Direct presigned S3 download URL or local download route.")
+    record_count: int | None = Field(default=None, description="Number of exported refund records.")
+    error: str | None = Field(default=None, description="Error message if export job failed.")
+
+
+

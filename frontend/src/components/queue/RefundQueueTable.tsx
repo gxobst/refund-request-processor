@@ -6,8 +6,10 @@ import {
   FileQuestion,
   RotateCcw,
   Download,
+  Loader2,
+  CheckCircle,
 } from 'lucide-react'
-import { listRefunds } from '@/services/refundService'
+import { listRefunds, createBulkExportJob, pollBulkExportJob } from '@/services/refundService'
 import {
   serializeToCsv,
   serializeToJson,
@@ -247,6 +249,46 @@ export function RefundQueueTable({
     setIsExportOpen(false)
   }
 
+  interface BulkExportState {
+    status: 'idle' | 'pending' | 'processing' | 'completed' | 'failed'
+    jobId?: string
+    downloadUrl?: string | null
+    error?: string | null
+  }
+
+  const [bulkExportState, setBulkExportState] = React.useState<BulkExportState>({ status: 'idle' })
+
+  const handleBulkExport = async (format: 'csv' | 'json' = 'csv') => {
+    const statusFilter = activeTab === 'all' ? null : (currentTabConfig.statusFilter || (activeTab as RefundStatus))
+    setBulkExportState({ status: 'pending' })
+    try {
+      const job = await createBulkExportJob({ format, status: statusFilter })
+      setBulkExportState({ status: job.status || 'processing', jobId: job.job_id })
+
+      // Poll until completed or failed
+      const completedJob = await pollBulkExportJob(job.job_id, 300, 40)
+      setBulkExportState({
+        status: 'completed',
+        jobId: completedJob.job_id,
+        downloadUrl: completedJob.download_url,
+      })
+
+      // Automatically trigger browser download
+      if (completedJob.download_url) {
+        const link = document.createElement('a')
+        link.href = completedJob.download_url
+        link.setAttribute('download', '')
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Bulk export failed.'
+      setBulkExportState({ status: 'failed', error: message })
+    }
+  }
+
+
   return (
     <div
       className={cn(
@@ -344,6 +386,23 @@ export function RefundQueueTable({
             <span>Refresh</span>
           </Button>
 
+          {/* Bulk Export Button */}
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="bulk-export-button"
+            disabled={bulkExportState.status === 'pending' || bulkExportState.status === 'processing'}
+            onClick={() => handleBulkExport('csv')}
+            className="h-8 px-2.5 text-slate-600 hover:text-slate-900 border-slate-300"
+          >
+            {bulkExportState.status === 'pending' || bulkExportState.status === 'processing' ? (
+              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Download className="h-3.5 w-3.5 mr-1.5" aria-hidden="true" />
+            )}
+            <span>Bulk Export</span>
+          </Button>
+
           {/* Export Dropdown Trigger & Menu */}
           <div className="relative inline-block text-left" ref={exportDropdownRef}>
             <Button
@@ -386,11 +445,69 @@ export function RefundQueueTable({
                 >
                   Export as JSON
                 </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="menu-bulk-export-button"
+                  onClick={() => {
+                    setIsExportOpen(false)
+                    handleBulkExport('csv')
+                  }}
+                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors flex items-center border-t border-slate-100 mt-1 pt-1"
+                >
+                  Bulk Export (Async)
+                </button>
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {/* Bulk Export Status Banner */}
+      {bulkExportState.status !== 'idle' && (
+        <div
+          data-testid="bulk-export-status"
+          role={bulkExportState.status === 'failed' ? 'alert' : 'status'}
+          className={cn(
+            'border-b px-4 py-2.5 text-xs flex items-center justify-between gap-2 transition-colors',
+            (bulkExportState.status === 'pending' || bulkExportState.status === 'processing') &&
+              'border-sky-200 bg-sky-50 text-sky-800',
+            bulkExportState.status === 'completed' &&
+              'border-emerald-200 bg-emerald-50 text-emerald-800',
+            bulkExportState.status === 'failed' &&
+              'border-rose-200 bg-rose-50 text-rose-800'
+          )}
+        >
+          <div className="flex items-center space-x-2">
+            {(bulkExportState.status === 'pending' || bulkExportState.status === 'processing') && (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-600 flex-shrink-0" />
+                <span>Exporting refund requests in background... ({bulkExportState.status})</span>
+              </>
+            )}
+            {bulkExportState.status === 'completed' && (
+              <>
+                <CheckCircle className="h-3.5 w-3.5 text-emerald-600 flex-shrink-0" />
+                <span>Export completed! Download started.</span>
+              </>
+            )}
+            {bulkExportState.status === 'failed' && (
+              <>
+                <AlertCircle className="h-3.5 w-3.5 text-rose-600 flex-shrink-0" />
+                <span>Export failed: {bulkExportState.error}</span>
+              </>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setBulkExportState({ status: 'idle' })}
+            className="text-xs font-medium underline opacity-80 hover:opacity-100 ml-auto"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
 
       {/* Error Alert Banner */}
       {problemDetails && (

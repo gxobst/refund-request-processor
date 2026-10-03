@@ -396,6 +396,55 @@ class EvidenceStorageService:
                 raise FileNotFoundError(f"Evidence file not found locally: {storage_key}")
             return target_path.read_bytes()
 
+    def generate_presigned_download_url(self, key: str, expires_in: int = 3600) -> str:
+        """Generate secure S3 presigned download URL."""
+        if self.s3_client is None:
+            raise RuntimeError("S3 client is not configured for export storage.")
+        return self.s3_client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self.bucket_name, "Key": key},
+            ExpiresIn=expires_in,
+        )
+
+    def save_export_file(
+        self,
+        file_bytes: bytes,
+        job_id: str,
+        format: str,
+    ) -> str:
+        """Save export file to S3 (generating presigned download URL) or local filesystem."""
+        key = f"exports/{job_id}.{format}"
+        content_type = "text/csv; charset=utf-8" if format == "csv" else "application/json"
+        if self.storage_backend == "s3" and self.s3_client is not None:
+            self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=key,
+                Body=file_bytes,
+                ContentType=content_type,
+            )
+            return self.generate_presigned_download_url(key=key, expires_in=3600)
+        else:
+            target_path = (self.local_dir / key).resolve()
+            if not str(target_path).startswith(str(self.local_dir)):
+                raise ValueError("Path traversal attempt detected in target path.")
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_bytes(file_bytes)
+            return f"/v1/refunds/export/jobs/{job_id}/download"
+
+    def get_export_file(self, job_id: str, format: str) -> bytes:
+        """Retrieve raw export file bytes from S3 or local filesystem."""
+        key = f"exports/{job_id}.{format}"
+        if self.storage_backend == "s3" and self.s3_client is not None:
+            return self.get_file(key)
+        else:
+            target_path = (self.local_dir / key).resolve()
+            if not str(target_path).startswith(str(self.local_dir)):
+                raise ValueError("Path traversal attempt detected in target path.")
+            if not target_path.is_file():
+                raise FileNotFoundError(f"Export file not found locally: {key}")
+            return target_path.read_bytes()
+
+
 
 def get_evidence_storage_service() -> EvidenceStorageService:
     """Dependency provider returning an EvidenceStorageService instance."""

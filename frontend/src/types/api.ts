@@ -33,3 +33,23 @@ export type RefundRecord = components['schemas']['RefundDetail']
 export type ProblemDetails = components['schemas']['ProblemDetails']
 export type ValidationProblemDetails = components['schemas']['ValidationProblemDetails']
 export type InvalidParam = components['schemas']['InvalidParam']
+
+export interface BulkExportJobRequest {
+  format?: 'csv' | 'json'
+  status?: RefundStatus | null
+  start_date?: string | null
+  end_date?: string | null
+}
+
+export interface BulkExportJobResponse {
+  job_id: string
+  status: 'pending' | 'processing' | 'completed' | 'failed'
+  format: 'csv' | 'json'
+  created_at: string
+  expires_at?: string | null
+  completed_at?: string | null
+  download_url?: string | null
+  record_count?: number | null
+  error?: string | null
+}
+

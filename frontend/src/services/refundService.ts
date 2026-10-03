@@ -1,5 +1,12 @@
 import { apiClient, buildUrl } from './apiClient'
-import type { RefundRecord, RefundStatus, RefundCreateResponse } from '../types/api'
+import type {
+  RefundRecord,
+  RefundStatus,
+  RefundCreateResponse,
+  BulkExportJobRequest,
+  BulkExportJobResponse,
+} from '../types/api'
+
 
 export interface RefundEventPayload {
   refund_id?: string
@@ -247,6 +254,45 @@ export function subscribeToRefundEvents(
   }
 }
 
+/**
+ * Creates an asynchronous bulk export job for the refund queue.
+ */
+export async function createBulkExportJob(request: BulkExportJobRequest): Promise<BulkExportJobResponse> {
+  const result = await apiClient.post<BulkExportJobResponse>('/v1/refunds/export/jobs', request)
+  return result
+}
+
+/**
+ * Fetches status and metadata for a bulk export job.
+ */
+export async function getBulkExportJob(jobId: string): Promise<BulkExportJobResponse> {
+  const result = await apiClient.get<BulkExportJobResponse>(`/v1/refunds/export/jobs/${jobId}`)
+  return result
+}
+
+/**
+ * Polls a bulk export job until it reaches 'completed' or 'failed' status.
+ */
+export async function pollBulkExportJob(
+  jobId: string,
+  intervalMs: number = 1000,
+  maxAttempts: number = 30,
+): Promise<BulkExportJobResponse> {
+  let attempts = 0
+  while (attempts < maxAttempts) {
+    attempts++
+    const job = await getBulkExportJob(jobId)
+    if (job.status === 'completed') {
+      return job
+    }
+    if (job.status === 'failed') {
+      throw new Error(job.error || `Bulk export job ${jobId} failed`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+  throw new Error(`Bulk export job ${jobId} timed out after ${maxAttempts} attempts`)
+}
+
 export const refundService = {
   listRefunds,
   submitRefund,
@@ -256,4 +302,8 @@ export const refundService = {
   uploadEvidence,
   requestReviewerProof,
   subscribeToRefundEvents,
+  createBulkExportJob,
+  getBulkExportJob,
+  pollBulkExportJob,
 }
+

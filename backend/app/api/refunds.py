@@ -1,6 +1,6 @@
 import asyncio
 import csv
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.parser import BytesParser
 from email.policy import default
 import io
@@ -11,7 +11,7 @@ from typing import Any
 import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from starlette.datastructures import UploadFile
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 
 from app.agents.proof_notifier import generate_reviewer_proof_email
 from app.auth.rbac import require_supervisor_role
@@ -20,6 +20,8 @@ from app.graph.runner import resume_refund_workflow, run_refund_workflow
 from app.schemas.order import ORDER_ID_PATTERN
 from app.services.broadcaster import broadcaster
 from app.schemas.refund import (
+    BulkExportJobRequest,
+    BulkExportJobResponse,
     EvidenceItem,
     RefundClarificationRequest,
     RefundCreateRequest,
@@ -519,6 +521,297 @@ async def export_refund_requests(
             media_type="application/json",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+
+
+# In-memory export job store
+_export_jobs: dict[str, dict[str, Any]] = {}
+
+
+def reset_export_jobs() -> None:
+    """Reset the in-memory export job store (used for test isolation)."""
+    _export_jobs.clear()
+
+
+def get_export_jobs() -> dict[str, dict[str, Any]]:
+    """Return reference to in-memory export jobs."""
+    return _export_jobs
+
+
+def _parse_filter_date(val: str, is_end_date: bool = False) -> datetime:
+    """Parse ISO-8601 or YYYY-MM-DD date filter string into timezone-aware UTC datetime."""
+    s = val.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if is_end_date and len(val.strip()) == 10:  # YYYY-MM-DD format
+        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return dt
+
+
+async def process_export_job(
+    job_id: str,
+    request_data: BulkExportJobRequest,
+    repo: RefundRepository,
+    storage: EvidenceStorageService,
+) -> None:
+    """Background export task worker processing bulk refund queries and persistence."""
+    if job_id not in _export_jobs:
+        return
+    _export_jobs[job_id]["status"] = "processing"
+
+    try:
+        # Fetch records from repository
+        records = repo.list_refund_requests(status=request_data.status, limit=100000)
+
+        # Apply date filters if provided
+        start_dt = None
+        if request_data.start_date:
+            start_dt = _parse_filter_date(request_data.start_date, is_end_date=False)
+
+        end_dt = None
+        if request_data.end_date:
+            end_dt = _parse_filter_date(request_data.end_date, is_end_date=True)
+
+        if start_dt is not None or end_dt is not None:
+            filtered_records = []
+            for r in records:
+                r_created = getattr(r, "created_at", None)
+                if not r_created:
+                    continue
+                try:
+                    iso_s = r_created.strip()
+                    if iso_s.endswith("Z"):
+                        iso_s = iso_s[:-1] + "+00:00"
+                    rec_dt = datetime.fromisoformat(iso_s)
+                    if rec_dt.tzinfo is None:
+                        rec_dt = rec_dt.replace(tzinfo=timezone.utc)
+                except Exception:
+                    continue
+
+                if start_dt is not None and rec_dt < start_dt:
+                    continue
+                if end_dt is not None and rec_dt > end_dt:
+                    continue
+                filtered_records.append(r)
+            records = filtered_records
+
+        # Ensure status filtering is strict
+        if request_data.status is not None:
+            status_lower = request_data.status.strip().lower()
+            records = [r for r in records if getattr(r, "status", "").lower() == status_lower]
+
+        # Serialize to CSV or JSON
+        if request_data.format == "csv":
+            content_str = _format_export_csv(records)
+            payload_bytes = content_str.encode("utf-8")
+        else:
+            json_data = [
+                r.model_dump(mode="json") if hasattr(r, "model_dump") else r
+                for r in records
+            ]
+            content_str = json.dumps(json_data, indent=2)
+            payload_bytes = content_str.encode("utf-8")
+
+        # Save export artifact to S3 or local filesystem
+        download_url = storage.save_export_file(
+            file_bytes=payload_bytes,
+            job_id=job_id,
+            format=request_data.format,
+        )
+
+        _export_jobs[job_id]["status"] = "completed"
+        _export_jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+        _export_jobs[job_id]["record_count"] = len(records)
+        _export_jobs[job_id]["download_url"] = download_url
+    except Exception as e:
+        _export_jobs[job_id]["status"] = "failed"
+        _export_jobs[job_id]["error"] = str(e)
+        _export_jobs[job_id]["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+
+@router.post(
+    "/export/jobs",
+    response_model=BulkExportJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Create asynchronous bulk queue export job",
+)
+async def create_bulk_export_job(
+    request: Request,
+    body: BulkExportJobRequest,
+    background_tasks: BackgroundTasks,
+    repo: RefundRepository = Depends(get_repository),
+    storage: EvidenceStorageService = Depends(get_evidence_storage_service),
+) -> Any:
+    """Create a new asynchronous bulk queue export job."""
+    s_dt = None
+    e_dt = None
+    if body.start_date:
+        try:
+            s_dt = _parse_filter_date(body.start_date, is_end_date=False)
+        except Exception as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={
+                    "type": "urn:problem:bad-request",
+                    "title": "Bad Request",
+                    "status": 400,
+                    "detail": f"Invalid start_date '{body.start_date}': {e}",
+                    "instance": request.url.path,
+                },
+                media_type="application/problem+json",
+            )
+    if body.end_date:
+        try:
+            e_dt = _parse_filter_date(body.end_date, is_end_date=True)
+        except Exception as e:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={
+                    "type": "urn:problem:bad-request",
+                    "title": "Bad Request",
+                    "status": 400,
+                    "detail": f"Invalid end_date '{body.end_date}': {e}",
+                    "instance": request.url.path,
+                },
+                media_type="application/problem+json",
+            )
+
+    if s_dt is not None and e_dt is not None and s_dt > e_dt:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "type": "urn:problem:bad-request",
+                "title": "Bad Request",
+                "status": 400,
+                "detail": f"start_date '{body.start_date}' cannot be after end_date '{body.end_date}'.",
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
+        )
+
+    job_id = f"exp_{uuid.uuid4().hex[:10]}"
+    now = datetime.now(timezone.utc)
+    created_at = now.isoformat()
+    expires_at = (now + timedelta(seconds=3600)).isoformat()
+
+    job_data: dict[str, Any] = {
+        "job_id": job_id,
+        "status": "pending",
+        "format": body.format,
+        "created_at": created_at,
+        "expires_at": expires_at,
+        "completed_at": None,
+        "download_url": None,
+        "record_count": None,
+        "error": None,
+        "status_filter": body.status,
+        "start_date": body.start_date,
+        "end_date": body.end_date,
+    }
+    _export_jobs[job_id] = job_data
+
+    background_tasks.add_task(process_export_job, job_id, body, repo, storage)
+
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content=BulkExportJobResponse(**job_data).model_dump(mode="json"),
+    )
+
+
+@router.get(
+    "/export/jobs/{job_id}/download",
+    status_code=status.HTTP_200_OK,
+    summary="Download bulk export file",
+)
+async def download_bulk_export(
+    job_id: str,
+    request: Request,
+    storage: EvidenceStorageService = Depends(get_evidence_storage_service),
+) -> Response:
+    """Download the generated export file from local filesystem or redirect to S3."""
+    if job_id not in _export_jobs:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "type": "urn:problem:not-found",
+                "title": "Not Found",
+                "status": 404,
+                "detail": f"Export job '{job_id}' not found.",
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
+        )
+
+    job = _export_jobs[job_id]
+    if job.get("status") != "completed":
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "type": "urn:problem:not-found",
+                "title": "Not Found",
+                "status": 404,
+                "detail": f"Export job '{job_id}' has not completed yet.",
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
+        )
+
+    download_url = job.get("download_url") or ""
+    if download_url.startswith("http://") or download_url.startswith("https://"):
+        return RedirectResponse(url=download_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+    try:
+        content = storage.get_export_file(job_id=job_id, format=job["format"])
+    except FileNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "type": "urn:problem:not-found",
+                "title": "Not Found",
+                "status": 404,
+                "detail": f"Export file for job '{job_id}' not found.",
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
+        )
+
+    filename = f"refunds-export-{job_id}.{job['format']}"
+    media_type = "text/csv; charset=utf-8" if job["format"] == "csv" else "application/json"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get(
+    "/export/jobs/{job_id}",
+    response_model=BulkExportJobResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get bulk export job status",
+)
+async def get_bulk_export_job(
+    job_id: str,
+    request: Request,
+) -> Any:
+    """Retrieve status, metadata, and download URL for an export job."""
+    if job_id not in _export_jobs:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "type": "urn:problem:not-found",
+                "title": "Not Found",
+                "status": 404,
+                "detail": f"Export job '{job_id}' not found.",
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
+        )
+
+    return BulkExportJobResponse(**_export_jobs[job_id])
+
 
 
 @router.get(
