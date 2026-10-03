@@ -39,6 +39,7 @@ export interface BulkExportJobRequest {
   status?: RefundStatus | null
   start_date?: string | null
   end_date?: string | null
+  columns?: string[]
 }
 
 export interface BulkExportJobResponse {

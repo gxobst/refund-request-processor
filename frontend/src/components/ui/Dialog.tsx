@@ -11,6 +11,7 @@ export interface DialogProps {
   showCloseButton?: boolean
   'aria-labelledby'?: string
   'aria-describedby'?: string
+  'data-testid'?: string
 }
 
 export function Dialog({
@@ -21,6 +22,7 @@ export function Dialog({
   showCloseButton = true,
   'aria-labelledby': ariaLabelledBy,
   'aria-describedby': ariaDescribedBy,
+  'data-testid': dataTestId,
 }: DialogProps) {
   const dialogRef = React.useRef<HTMLDivElement>(null)
   const previousActiveElement = React.useRef<HTMLElement | null>(null)
@@ -117,6 +119,7 @@ export function Dialog({
       <div
         ref={dialogRef}
         role="dialog"
+        data-testid={dataTestId}
         aria-modal="true"
         aria-labelledby={ariaLabelledBy}
         aria-describedby={ariaDescribedBy}

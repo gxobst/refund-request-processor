@@ -270,6 +270,10 @@ class BulkExportJobRequest(BaseModel):
     status: RefundStatus | None = Field(default=None, description="Optional refund status filter.")
     start_date: str | None = Field(default=None, description="Optional ISO-8601 or YYYY-MM-DD start date filter (inclusive).")
     end_date: str | None = Field(default=None, description="Optional ISO-8601 or YYYY-MM-DD end date filter (inclusive).")
+    columns: list[str] | None = Field(
+        default=None,
+        description="Optional ordered list of column identifiers or header names to include.",
+    )
 
     @field_validator("format")
     @classmethod

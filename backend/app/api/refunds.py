@@ -418,55 +418,201 @@ async def subscribe_refund_events(
     )
 
 
-CSV_EXPORT_HEADERS = [
-    "Refund ID",
-    "Order ID",
-    "Status",
-    "Decision",
-    "Category",
-    "Refund Amount",
-    "Confidence Score",
-    "Customer Request",
-    "Decision Reasoning",
-    "Override Decision",
-    "Override Reason",
-    "Created At",
-    "Updated At",
+EXPORT_COLUMNS_DEFINITION: list[tuple[str, str]] = [
+    ("refund_id", "Refund ID"),
+    ("order_id", "Order ID"),
+    ("status", "Status"),
+    ("decision", "Decision"),
+    ("category", "Category"),
+    ("refund_amount", "Refund Amount"),
+    ("confidence_score", "Confidence Score"),
+    ("customer_request_text", "Customer Request"),
+    ("reasoning", "Decision Reasoning"),
+    ("override_decision", "Override Decision"),
+    ("override_reason", "Override Reason"),
+    ("created_at", "Created At"),
+    ("updated_at", "Updated At"),
 ]
 
+CSV_EXPORT_HEADERS = [header for _, header in EXPORT_COLUMNS_DEFINITION]
 
-def _format_export_csv(records: list[RefundRecord]) -> str:
+COLUMN_DISPLAY_NAMES: dict[str, str] = {
+    col_id: header for col_id, header in EXPORT_COLUMNS_DEFINITION
+}
+
+# Mapping for case-insensitive / normalized lookup by either ID or Display Header
+COLUMN_LOOKUP_MAP: dict[str, str] = {}
+for _col_id, _header in EXPORT_COLUMNS_DEFINITION:
+    COLUMN_LOOKUP_MAP[_col_id.lower()] = _col_id
+    COLUMN_LOOKUP_MAP[_col_id.lower().replace("_", " ")] = _col_id
+    COLUMN_LOOKUP_MAP[_col_id.lower().replace("_", "-")] = _col_id
+    COLUMN_LOOKUP_MAP[_header.lower()] = _col_id
+    COLUMN_LOOKUP_MAP[_header.lower().replace(" ", "_")] = _col_id
+    COLUMN_LOOKUP_MAP[_header.lower().replace(" ", "-")] = _col_id
+
+COLUMN_LOOKUP_MAP["customer_request"] = "customer_request_text"
+COLUMN_LOOKUP_MAP["customer request"] = "customer_request_text"
+COLUMN_LOOKUP_MAP["customer-request"] = "customer_request_text"
+COLUMN_LOOKUP_MAP["decision_reasoning"] = "reasoning"
+COLUMN_LOOKUP_MAP["decision reasoning"] = "reasoning"
+COLUMN_LOOKUP_MAP["decision-reasoning"] = "reasoning"
+
+
+def _resolve_single_column(name: str) -> str | None:
+    norm = name.strip().lower()
+    return COLUMN_LOOKUP_MAP.get(norm)
+
+
+def _get_column_value(r: Any, col_id: str) -> str:
+    rec_dict = r.model_dump() if hasattr(r, "model_dump") else (r if isinstance(r, dict) else getattr(r, "__dict__", {}))
+    if col_id == "refund_id":
+        return str(rec_dict.get("refund_id") or getattr(r, "refund_id", "") or "")
+    elif col_id == "order_id":
+        return str(rec_dict.get("order_id") or getattr(r, "order_id", "") or "")
+    elif col_id == "status":
+        return str(rec_dict.get("status") or getattr(r, "status", "") or "")
+    elif col_id == "decision":
+        val = rec_dict.get("decision")
+        if val is None:
+            val = getattr(r, "decision", None)
+        return "" if val is None else str(val)
+    elif col_id == "category":
+        val = rec_dict.get("category")
+        if val is None:
+            val = getattr(r, "category", None)
+        return "" if val is None else str(val)
+    elif col_id == "refund_amount":
+        amt = rec_dict.get("refund_amount")
+        if amt is None:
+            amt = rec_dict.get("order_amount")
+        return "" if amt is None else str(amt)
+    elif col_id == "confidence_score":
+        conf = rec_dict.get("confidence_score")
+        if conf is None and hasattr(r, "confidence_score"):
+            conf = getattr(r, "confidence_score")
+        return "" if conf is None else str(conf)
+    elif col_id == "customer_request_text":
+        return str(rec_dict.get("customer_request_text") or getattr(r, "customer_request_text", "") or "")
+    elif col_id == "reasoning":
+        val = rec_dict.get("reasoning")
+        if val is None:
+            val = getattr(r, "reasoning", None)
+        return "" if val is None else str(val)
+    elif col_id == "override_decision":
+        val = rec_dict.get("override_decision")
+        if val is None:
+            val = getattr(r, "override_decision", None)
+        return "" if val is None else str(val)
+    elif col_id == "override_reason":
+        val = rec_dict.get("override_reason")
+        if val is None:
+            val = getattr(r, "override_reason", None)
+        return "" if val is None else str(val)
+    elif col_id == "created_at":
+        return str(rec_dict.get("created_at") or getattr(r, "created_at", "") or "")
+    elif col_id == "updated_at":
+        return str(rec_dict.get("updated_at") or getattr(r, "updated_at", "") or "")
+    return ""
+
+
+def _get_json_column_value(r: Any, col_id: str) -> Any:
+    rec_dict = r.model_dump(mode="json") if hasattr(r, "model_dump") else (r if isinstance(r, dict) else getattr(r, "__dict__", {}))
+    if col_id == "refund_amount":
+        amt = rec_dict.get("refund_amount")
+        if amt is None:
+            amt = rec_dict.get("order_amount")
+        return amt
+    return rec_dict.get(col_id)
+
+
+def _format_export_csv(records: list[RefundRecord], columns: list[str] | None = None) -> str:
     output = io.StringIO()
     writer = csv.writer(output, lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL)
-    writer.writerow(CSV_EXPORT_HEADERS)
+
+    if columns is not None:
+        resolved_cols: list[str] = []
+        for c in columns:
+            res = _resolve_single_column(c)
+            resolved_cols.append(res if res is not None else c)
+        headers = [COLUMN_DISPLAY_NAMES.get(cid, cid) for cid in resolved_cols]
+    else:
+        resolved_cols = [c[0] for c in EXPORT_COLUMNS_DEFINITION]
+        headers = CSV_EXPORT_HEADERS
+
+    writer.writerow(headers)
 
     for r in records:
-        rec_dict = r.model_dump() if hasattr(r, "model_dump") else r.__dict__
-        refund_amount = rec_dict.get("refund_amount")
-        if refund_amount is None:
-            refund_amount = rec_dict.get("order_amount")
-
-        conf_score = getattr(r, "confidence_score", None)
-        confidence_str = "" if conf_score is None else str(conf_score)
-        amount_str = "" if refund_amount is None else str(refund_amount)
-
-        writer.writerow([
-            getattr(r, "refund_id", "") or "",
-            getattr(r, "order_id", "") or "",
-            getattr(r, "status", "") or "",
-            getattr(r, "decision", "") or "",
-            getattr(r, "category", "") or "",
-            amount_str,
-            confidence_str,
-            getattr(r, "customer_request_text", "") or "",
-            getattr(r, "reasoning", "") or "",
-            getattr(r, "override_decision", "") or "",
-            getattr(r, "override_reason", "") or "",
-            getattr(r, "created_at", "") or "",
-            getattr(r, "updated_at", "") or "",
-        ])
+        writer.writerow([_get_column_value(r, col_id) for col_id in resolved_cols])
 
     return output.getvalue()
+
+
+def _parse_and_validate_columns(
+    columns: list[str] | None,
+    request: Request | None = None,
+) -> tuple[list[str] | None, JSONResponse | None]:
+    """Parse and validate column identifiers/header names, returning resolved column IDs or RFC 9457 ProblemDetails."""
+    if columns is None:
+        if request and "columns" in request.query_params:
+            return None, JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={
+                    "type": "urn:problem:bad-request",
+                    "title": "Bad Request",
+                    "status": 400,
+                    "detail": "At least one column must be selected",
+                    "instance": request.url.path,
+                },
+                media_type="application/problem+json",
+            )
+        return None, None
+
+    # Flatten and strip comma-delimited strings and lists
+    raw_items: list[str] = []
+    for item in columns:
+        if not item:
+            continue
+        for part in item.split(","):
+            p = part.strip()
+            if p:
+                raw_items.append(p)
+
+    if not raw_items:
+        return None, JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "type": "urn:problem:bad-request",
+                "title": "Bad Request",
+                "status": 400,
+                "detail": "At least one column must be selected",
+                "instance": request.url.path if request else "",
+            },
+            media_type="application/problem+json",
+        )
+
+    resolved: list[str] = []
+    invalid: list[str] = []
+    for item in raw_items:
+        col_id = _resolve_single_column(item)
+        if col_id is None:
+            invalid.append(item)
+        else:
+            resolved.append(col_id)
+
+    if invalid:
+        return None, JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "type": "urn:problem:bad-request",
+                "title": "Bad Request",
+                "status": 400,
+                "detail": f"Invalid column(s): {', '.join(invalid)}",
+                "instance": request.url.path if request else "",
+            },
+            media_type="application/problem+json",
+        )
+
+    return resolved, None
 
 
 @router.get(
@@ -478,6 +624,7 @@ async def export_refund_requests(
     request: Request,
     format: str = Query(default="csv"),
     status: RefundStatus | None = Query(default=None),
+    columns: list[str] | None = Query(default=None),
     repo: RefundRepository = Depends(get_repository),
 ) -> Response:
     """Export refund requests matching the optional status filter in CSV or JSON format."""
@@ -495,6 +642,10 @@ async def export_refund_requests(
             },
         )
 
+    resolved_cols, err_resp = _parse_and_validate_columns(columns, request=request)
+    if err_resp:
+        return err_resp
+
     records = repo.list_refund_requests(status=status, limit=10000)
 
     now = datetime.now(timezone.utc)
@@ -503,7 +654,7 @@ async def export_refund_requests(
 
     if normalized_format == "csv":
         filename = f"refunds-{status_str}-{timestamp}.csv"
-        csv_content = _format_export_csv(records)
+        csv_content = _format_export_csv(records, columns=resolved_cols)
         return Response(
             content=csv_content,
             media_type="text/csv; charset=utf-8",
@@ -511,10 +662,16 @@ async def export_refund_requests(
         )
     else:
         filename = f"refunds-{status_str}-{timestamp}.json"
-        json_data = [
-            r.model_dump(mode="json") if hasattr(r, "model_dump") else r
-            for r in records
-        ]
+        if resolved_cols is not None:
+            json_data = [
+                {col_id: _get_json_column_value(r, col_id) for col_id in resolved_cols}
+                for r in records
+            ]
+        else:
+            json_data = [
+                r.model_dump(mode="json") if hasattr(r, "model_dump") else r
+                for r in records
+            ]
         json_content = json.dumps(json_data, indent=2)
         return Response(
             content=json_content,
@@ -604,13 +761,23 @@ async def process_export_job(
 
         # Serialize to CSV or JSON
         if request_data.format == "csv":
-            content_str = _format_export_csv(records)
+            content_str = _format_export_csv(records, columns=request_data.columns)
             payload_bytes = content_str.encode("utf-8")
         else:
-            json_data = [
-                r.model_dump(mode="json") if hasattr(r, "model_dump") else r
-                for r in records
-            ]
+            if request_data.columns is not None:
+                resolved_cols: list[str] = []
+                for c in request_data.columns:
+                    res = _resolve_single_column(c)
+                    resolved_cols.append(res if res is not None else c)
+                json_data = [
+                    {col_id: _get_json_column_value(r, col_id) for col_id in resolved_cols}
+                    for r in records
+                ]
+            else:
+                json_data = [
+                    r.model_dump(mode="json") if hasattr(r, "model_dump") else r
+                    for r in records
+                ]
             content_str = json.dumps(json_data, indent=2)
             payload_bytes = content_str.encode("utf-8")
 
@@ -645,6 +812,12 @@ async def create_bulk_export_job(
     storage: EvidenceStorageService = Depends(get_evidence_storage_service),
 ) -> Any:
     """Create a new asynchronous bulk queue export job."""
+    if body.columns is not None:
+        resolved_cols, err_resp = _parse_and_validate_columns(body.columns, request=request)
+        if err_resp:
+            return err_resp
+        body.columns = resolved_cols
+
     s_dt = None
     e_dt = None
     if body.start_date:
@@ -709,6 +882,7 @@ async def create_bulk_export_job(
         "status_filter": body.status,
         "start_date": body.start_date,
         "end_date": body.end_date,
+        "columns": body.columns,
     }
     _export_jobs[job_id] = job_data
 

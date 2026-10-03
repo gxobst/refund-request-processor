@@ -18,6 +18,7 @@ import {
 } from '@/utils/exportUtils'
 import { DecisionBadge } from '@/components/badges/DecisionBadge'
 import { StatusBadge } from '@/components/badges/StatusBadge'
+import { ExportCustomizationModal } from '@/components/modals/ExportCustomizationModal'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import type { RefundRecord, RefundStatus, ProblemDetails } from '@/types/api'
@@ -205,6 +206,7 @@ export function RefundQueueTable({
 
   // Export dropdown state and click-outside / escape listeners
   const [isExportOpen, setIsExportOpen] = React.useState(false)
+  const [isCustomizeExportOpen, setIsCustomizeExportOpen] = React.useState(false)
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
 
   React.useEffect(() => {
@@ -425,7 +427,7 @@ export function RefundQueueTable({
                 role="menu"
                 aria-orientation="vertical"
                 aria-labelledby="export-dropdown-button"
-                className="absolute right-0 mt-1 w-36 origin-top-right rounded-md bg-white py-1 shadow-lg ring-1 ring-black ring-opacity-5 z-20 focus:outline-none border border-slate-200"
+                className="absolute right-0 mt-1 w-44 origin-top-right rounded-md bg-white py-1 shadow-lg ring-1 ring-black ring-opacity-5 z-20 focus:outline-none border border-slate-200"
               >
                 <button
                   type="button"
@@ -448,12 +450,24 @@ export function RefundQueueTable({
                 <button
                   type="button"
                   role="menuitem"
+                  data-testid="customize-export-menu-item"
+                  onClick={() => {
+                    setIsExportOpen(false)
+                    setIsCustomizeExportOpen(true)
+                  }}
+                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors flex items-center border-t border-slate-100 mt-1 pt-1"
+                >
+                  Customize Export...
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
                   data-testid="menu-bulk-export-button"
                   onClick={() => {
                     setIsExportOpen(false)
                     handleBulkExport('csv')
                   }}
-                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors flex items-center border-t border-slate-100 mt-1 pt-1"
+                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors flex items-center"
                 >
                   Bulk Export (Async)
                 </button>
@@ -693,6 +707,13 @@ export function RefundQueueTable({
           </tbody>
         </table>
       </div>
+
+      <ExportCustomizationModal
+        isOpen={isCustomizeExportOpen}
+        onClose={() => setIsCustomizeExportOpen(false)}
+        records={refunds}
+        statusFilter={activeTab === 'all' ? 'all' : (currentTabConfig.statusFilter || activeTab)}
+      />
     </div>
   )
 }
