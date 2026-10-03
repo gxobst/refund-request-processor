@@ -3,11 +3,13 @@ import { useQueryClient } from '@tanstack/react-query'
 import {
   subscribeToRefundEvents,
   type RefundEventPayload,
+  type PolicyEventPayload,
 } from '@/services/refundService'
 
 export interface UseRefundEventsOptions {
   onEvent?: (event: RefundEventPayload) => void
   onError?: (error: Event) => void
+  onPolicyEvent?: (event: PolicyEventPayload) => void
   enabled?: boolean
 }
 
@@ -15,6 +17,7 @@ export interface UseRefundEventsReturn {
   isConnected: boolean
   isFallback: boolean
   lastEvent: RefundEventPayload | null
+  lastPolicyEvent?: PolicyEventPayload | null
 }
 
 /**
@@ -34,12 +37,16 @@ export function useRefundEvents(options: UseRefundEventsOptions = {}): UseRefund
   const [isConnected, setIsConnected] = React.useState<boolean>(false)
   const [isFallback, setIsFallback] = React.useState<boolean>(!isEventSourceSupported)
   const [lastEvent, setLastEvent] = React.useState<RefundEventPayload | null>(null)
+  const [lastPolicyEvent, setLastPolicyEvent] = React.useState<PolicyEventPayload | null>(null)
 
   const onEventRef = React.useRef(onEvent)
   onEventRef.current = onEvent
 
   const onErrorRef = React.useRef(onError)
   onErrorRef.current = onError
+
+  const onPolicyEventRef = React.useRef(options.onPolicyEvent)
+  onPolicyEventRef.current = options.onPolicyEvent
 
   React.useEffect(() => {
     if (!enabled) {
@@ -80,6 +87,16 @@ export function useRefundEvents(options: UseRefundEventsOptions = {}): UseRefund
         // Connection opened or initial ping received
         setIsConnected(true)
         setIsFallback(false)
+      },
+      (policyEvent: PolicyEventPayload) => {
+        setIsConnected(true)
+        setIsFallback(false)
+        setLastPolicyEvent(policyEvent)
+
+        // Automatically invalidate the TanStack Query cache for query key ['policies']
+        queryClient.invalidateQueries({ queryKey: ['policies'] })
+
+        onPolicyEventRef.current?.(policyEvent)
       }
     )
 
@@ -93,5 +110,6 @@ export function useRefundEvents(options: UseRefundEventsOptions = {}): UseRefund
     isConnected,
     isFallback,
     lastEvent,
+    lastPolicyEvent,
   }
 }

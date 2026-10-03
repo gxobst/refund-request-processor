@@ -11,6 +11,7 @@ from app.policy.schema import (
     PolicyItemResponse,
     RefundCategory,
 )
+from app.services.broadcaster import broadcaster
 
 router = APIRouter(prefix="/policies", tags=["policies"])
 
@@ -163,7 +164,7 @@ async def update_policy(category: str, request: Request) -> Any:
             media_type="application/problem+json",
         )
 
-    return PolicyItemResponse(
+    response_item = PolicyItemResponse(
         category=normalized_category,
         return_window_days=updated_policy.return_window_days,
         max_refund_amount=updated_policy.max_refund_amount,
@@ -173,3 +174,5 @@ async def update_policy(category: str, request: Request) -> Any:
         refund_window_days=updated_policy.refund_window_days,
         max_order_amount=updated_policy.max_order_amount,
     )
+    await broadcaster.publish("policy_update", response_item.model_dump())
+    return response_item

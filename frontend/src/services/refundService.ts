@@ -16,6 +16,18 @@ export interface RefundEventPayload {
   [key: string]: unknown
 }
 
+export interface PolicyEventPayload {
+  category: string
+  return_window_days: number
+  max_refund_amount: number
+  auto_approve_threshold: number
+  requires_proof: boolean
+  eligible_delivery_statuses: string[]
+  refund_window_days?: number
+  max_order_amount?: number
+  [key: string]: unknown
+}
+
 export interface ListRefundsParams {
   status?: RefundStatus
   limit?: number
@@ -168,12 +180,14 @@ export async function requestReviewerProof(
  * @param onEvent Callback invoked when a refund_update event or message is received.
  * @param onError Optional callback invoked on EventSource error.
  * @param onOpen Optional callback invoked when the connection is opened.
+ * @param onPolicyEvent Optional callback invoked when a policy_update event is received.
  * @returns A cleanup function that closes the EventSource connection.
  */
 export function subscribeToRefundEvents(
   onEvent: (event: RefundEventPayload) => void,
   onError?: (err: Event) => void,
   onOpen?: () => void,
+  onPolicyEvent?: (event: PolicyEventPayload) => void,
 ): () => void {
   if (typeof window === 'undefined' || typeof EventSource === 'undefined') {
     return () => {}
@@ -197,7 +211,21 @@ export function subscribeToRefundEvents(
     }
   }
 
+  const handlePolicyMessage = (e: MessageEvent) => {
+    try {
+      const data = JSON.parse(e.data) as PolicyEventPayload
+      if (onPolicyEvent) {
+        onPolicyEvent(data)
+      } else {
+        onEvent(data as unknown as RefundEventPayload)
+      }
+    } catch {
+      // Ignore non-JSON or ping payloads
+    }
+  }
+
   eventSource.addEventListener('refund_update', handleMessage)
+  eventSource.addEventListener('policy_update', handlePolicyMessage)
   eventSource.onmessage = handleMessage
 
   eventSource.addEventListener('ping', () => {
@@ -214,6 +242,7 @@ export function subscribeToRefundEvents(
 
   return () => {
     eventSource.removeEventListener('refund_update', handleMessage)
+    eventSource.removeEventListener('policy_update', handlePolicyMessage)
     eventSource.close()
   }
 }

@@ -67,6 +67,7 @@ function CategoryPolicyCard({ rule, onUpdate, isUpdating }: CategoryCardProps) {
     setMaxAmount(String(rule.max_refund_amount))
     setAutoApprove(String(rule.auto_approve_threshold))
     setRequiresProof(rule.requires_proof)
+    setErrors({})
   }, [
     rule.return_window_days,
     rule.max_refund_amount,
