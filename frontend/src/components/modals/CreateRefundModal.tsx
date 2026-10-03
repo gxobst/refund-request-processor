@@ -2,6 +2,7 @@ import * as React from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, UploadCloud, FileText, X } from 'lucide-react'
 import * as refundService from '@/services/refundService'
+import { validateImageDimensions, compressImage } from '@/utils/imageUtils'
 import { isApiError } from '@/services/apiClient'
 import {
   Dialog,
@@ -58,6 +59,9 @@ export function CreateRefundModal({
   const [orderIdError, setOrderIdError] = React.useState<string | null>(null)
   const [explanationError, setExplanationError] = React.useState<string | null>(null)
   const [fileError, setFileError] = React.useState<string | null>(null)
+  const [dimensionError, setDimensionError] = React.useState<string | null>(null)
+  const [imageInfo, setImageInfo] = React.useState<{ width: number; height: number; size: number } | null>(null)
+  const [isValidatingImage, setIsValidatingImage] = React.useState(false)
   const [mutationError, setMutationError] = React.useState<unknown | null>(null)
 
   const fileInputRef = React.useRef<HTMLInputElement>(null)
@@ -70,6 +74,9 @@ export function CreateRefundModal({
     setOrderIdError(null)
     setExplanationError(null)
     setFileError(null)
+    setDimensionError(null)
+    setImageInfo(null)
+    setIsValidatingImage(false)
     setMutationError(null)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
@@ -127,12 +134,60 @@ export function CreateRefundModal({
     return true
   }
 
+  const processSelectedFile = async (file: File) => {
+    setFileError(null)
+    setDimensionError(null)
+    setImageInfo(null)
+
+    if (!validateFile(file)) {
+      return
+    }
+
+    if (typeof window !== 'undefined' && typeof window.URL?.createObjectURL !== 'function') {
+      setSelectedFile(file)
+      return
+    }
+
+    setIsValidatingImage(true)
+    try {
+      const dimensionResult = await validateImageDimensions(file)
+      if (!dimensionResult.valid) {
+        setSelectedFile(null)
+        setImageInfo(null)
+        setDimensionError(
+          dimensionResult.error ||
+            'Unable to decode image dimensions. Please verify the file is a valid image.'
+        )
+        if (fileInputRef.current) {
+          fileInputRef.current.value = ''
+        }
+        return
+      }
+
+      const compressed = await compressImage(file)
+      setSelectedFile(compressed)
+      setImageInfo({
+        width: dimensionResult.width,
+        height: dimensionResult.height,
+        size: compressed.size,
+      })
+      setDimensionError(null)
+    } catch {
+      setSelectedFile(null)
+      setImageInfo(null)
+      setDimensionError('Unable to decode image dimensions. Please verify the file is a valid image.')
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    } finally {
+      setIsValidatingImage(false)
+    }
+  }
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0]
-      if (validateFile(file)) {
-        setSelectedFile(file)
-      }
+      void processSelectedFile(file)
     }
   }
 
@@ -144,9 +199,7 @@ export function CreateRefundModal({
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0]
-      if (validateFile(file)) {
-        setSelectedFile(file)
-      }
+      void processSelectedFile(file)
     }
   }
 
@@ -166,6 +219,8 @@ export function CreateRefundModal({
   const handleRemoveFile = () => {
     setSelectedFile(null)
     setFileError(null)
+    setDimensionError(null)
+    setImageInfo(null)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -182,7 +237,7 @@ export function CreateRefundModal({
 
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault()
-    if (isPending) return
+    if (isPending || isValidatingImage) return
 
     let hasError = false
     const trimmedOrderId = orderId.trim()
@@ -198,7 +253,7 @@ export function CreateRefundModal({
       hasError = true
     }
 
-    if (fileError) {
+    if (fileError || dimensionError) {
       hasError = true
     }
 
@@ -356,12 +411,23 @@ export function CreateRefundModal({
             Proof / Evidence Attachment (Optional)
           </label>
 
+          {dimensionError && (
+            <div
+              role="alert"
+              data-testid="evidence-dimension-error"
+              className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-900 flex items-start space-x-2 text-xs"
+            >
+              <AlertCircle className="h-4 w-4 text-rose-600 flex-shrink-0 mt-0.5" />
+              <span className="font-medium">{dimensionError}</span>
+            </div>
+          )}
+
           <input
             ref={fileInputRef}
             type="file"
             accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
             onChange={handleFileChange}
-            disabled={isPending}
+            disabled={isPending || isValidatingImage}
             className="hidden"
             data-testid="file-picker-input"
           />
@@ -370,7 +436,7 @@ export function CreateRefundModal({
             <div
               data-testid="file-dropzone"
               onClick={() => {
-                if (!isPending) {
+                if (!isPending && !isValidatingImage) {
                   fileInputRef.current?.click()
                 }
               }}
@@ -378,9 +444,9 @@ export function CreateRefundModal({
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               role="button"
-              tabIndex={isPending ? -1 : 0}
+              tabIndex={isPending || isValidatingImage ? -1 : 0}
               onKeyDown={(e) => {
-                if (!isPending && (e.key === 'Enter' || e.key === ' ')) {
+                if (!isPending && !isValidatingImage && (e.key === 'Enter' || e.key === ' ')) {
                   e.preventDefault()
                   fileInputRef.current?.click()
                 }
@@ -390,13 +456,19 @@ export function CreateRefundModal({
                 isDragging
                   ? 'border-sky-500 bg-sky-50'
                   : 'border-slate-300 bg-slate-50/50 hover:bg-slate-50 hover:border-slate-400',
-                isPending && 'opacity-50 cursor-not-allowed pointer-events-none'
+                (isPending || isValidatingImage) && 'opacity-50 cursor-not-allowed pointer-events-none'
               )}
             >
               <UploadCloud className="h-7 w-7 text-slate-400 mb-1" />
               <p className="text-xs font-medium text-slate-700">
-                Drag and drop image here, or{' '}
-                <span className="text-sky-600 hover:underline">browse</span>
+                {isValidatingImage ? (
+                  'Validating and compressing image...'
+                ) : (
+                  <>
+                    Drag and drop image here, or{' '}
+                    <span className="text-sky-600 hover:underline">browse</span>
+                  </>
+                )}
               </p>
               <p className="text-[11px] text-slate-400 mt-0.5">
                 JPEG, PNG, or WebP up to 5MB
@@ -418,11 +490,19 @@ export function CreateRefundModal({
                 <span className="text-xs text-slate-500" data-testid="selected-file-size">
                   ({formatFileSize(selectedFile.size)})
                 </span>
+                {imageInfo && (
+                  <span
+                    data-testid="evidence-compressed-badge"
+                    className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
+                  >
+                    {imageInfo.width}x{imageInfo.height} ({formatFileSize(selectedFile.size)})
+                  </span>
+                )}
               </div>
               <button
                 type="button"
                 onClick={handleRemoveFile}
-                disabled={isPending}
+                disabled={isPending || isValidatingImage}
                 aria-label="Remove attached file"
                 data-testid="remove-file-button"
                 className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 transition-colors disabled:opacity-50"
@@ -460,7 +540,7 @@ export function CreateRefundModal({
               type="submit"
               variant="default"
               isLoading={isPending}
-              disabled={isPending}
+              disabled={isPending || isValidatingImage}
               data-testid="create-refund-submit-button"
             >
               Submit Refund
