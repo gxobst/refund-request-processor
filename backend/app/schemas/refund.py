@@ -155,6 +155,14 @@ class RefundRecord(BaseModel):
         description="Customer-uploaded proof attachments (images and videos).",
     )
     category: str | None = Field(default=None, description="Classified refund reason category.")
+    node_latencies: dict[str, float] = Field(
+        default_factory=dict,
+        description="Wall-clock execution latencies per agent node in milliseconds.",
+    )
+    latency_ms: float | None = Field(
+        default=None,
+        description="Total workflow evaluation latency across agent nodes in milliseconds.",
+    )
 
 
 class RefundDecisionUpdate(BaseModel):
@@ -169,6 +177,8 @@ class RefundDecisionUpdate(BaseModel):
     approval_email_text: str | None = None
     denial_email_text: str | None = None
     category: str | None = Field(default=None, description="Classified refund reason category.")
+    node_latencies: dict[str, float] | None = None
+    latency_ms: float | None = None
 
 
 class RefundOverrideUpdate(BaseModel):

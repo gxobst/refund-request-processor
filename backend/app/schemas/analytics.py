@@ -48,3 +48,12 @@ class AnalyticsMetricsResponse(BaseModel):
     category_breakdown: dict[str, int] = Field(
         default_factory=dict, description="Counts of requests grouped by product/reason category."
     )
+    average_latency_ms: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Average end-to-end evaluation latency in milliseconds across evaluated requests.",
+    )
+    node_latency_breakdown: dict[str, float] = Field(
+        default_factory=lambda: {"classifier": 0.0, "policy_checker": 0.0, "decision_agent": 0.0},
+        description="Average latency in milliseconds broken down by agent node.",
+    )

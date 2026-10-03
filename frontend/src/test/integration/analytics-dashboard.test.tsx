@@ -28,6 +28,12 @@ const MOCK_METRICS: AnalyticsMetrics = {
     wrong_item: 6,
     late_delivery: 4,
   },
+  average_latency_ms: 1240,
+  node_latency_breakdown: {
+    classifier: 240,
+    policy_checker: 400,
+    decision_agent: 600,
+  },
 }
 
 function renderApp() {

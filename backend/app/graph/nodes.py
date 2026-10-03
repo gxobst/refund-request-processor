@@ -4,6 +4,7 @@ import contextvars
 from decimal import Decimal
 import json
 from pathlib import Path
+import time
 from typing import Any
 import boto3
 
@@ -131,9 +132,15 @@ def intake_validate_node(state: dict[str, Any]) -> dict[str, Any]:
 
 def classifier_node(state: dict[str, Any]) -> dict[str, Any]:
     """Classify customer refund request reason."""
+    start_time = time.perf_counter()
     res = agent_classifier_node(state)
     if "reasoning" not in res and "classification_reasoning" in res:
         res["reasoning"] = res["classification_reasoning"]
+    duration_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
+    node_latencies = dict(state.get("node_latencies") or {})
+    node_latencies["classifier"] = duration_ms
+    res["node_latencies"] = node_latencies
+    state["node_latencies"] = node_latencies
     return res
 
 
@@ -246,7 +253,12 @@ def clarification_node(state: dict[str, Any]) -> dict[str, Any]:
 
 def policy_checker_node(state: dict[str, Any]) -> dict[str, Any]:
     """Evaluate order against refund policy rules."""
+    start_time = time.perf_counter()
     if not state.get("order") and not state.get("order_id"):
+        duration_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
+        node_latencies = dict(state.get("node_latencies") or {})
+        node_latencies["policy_checker"] = duration_ms
+        state["node_latencies"] = node_latencies
         return {
             "policy_status": "ambiguous",
             "matched_policy_rule": None,
@@ -254,6 +266,7 @@ def policy_checker_node(state: dict[str, Any]) -> dict[str, Any]:
             "passed_rules": [],
             "failed_rules": [],
             "tool_calls": [],
+            "node_latencies": node_latencies,
         }
     from datetime import date
     from unittest.mock import patch
@@ -269,6 +282,11 @@ def policy_checker_node(state: dict[str, Any]) -> dict[str, Any]:
         res = agent_policy_checker_node(state)
     if "tool_calls" not in res:
         res["tool_calls"] = []
+    duration_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
+    node_latencies = dict(state.get("node_latencies") or {})
+    node_latencies["policy_checker"] = duration_ms
+    res["node_latencies"] = node_latencies
+    state["node_latencies"] = node_latencies
     return res
 
 
@@ -276,6 +294,7 @@ def policy_checker_node(state: dict[str, Any]) -> dict[str, Any]:
 
 def decision_node(state: dict[str, Any]) -> dict[str, Any]:
     """Synthesize findings into final approval, denial, or escalation decision."""
+    start_time = time.perf_counter()
     policy_status = state.get("policy_status")
     policy_reasoning = state.get("policy_reasoning") or ""
     failed_rules = state.get("failed_rules") or []
@@ -330,6 +349,12 @@ def decision_node(state: dict[str, Any]) -> dict[str, Any]:
     else:
         res["approval_email_text"] = None
         res["denial_email_text"] = None
+
+    duration_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
+    node_latencies = dict(state.get("node_latencies") or {})
+    node_latencies["decision_agent"] = duration_ms
+    res["node_latencies"] = node_latencies
+    state["node_latencies"] = node_latencies
     return res
 
 
@@ -354,6 +379,12 @@ def save_dynamo_node(state: dict[str, Any]) -> dict[str, Any]:
     denial_email_text = state.get("denial_email_text")
     category = state.get("category")
 
+    node_latencies = dict(state.get("node_latencies") or {})
+    latency_ms = state.get("latency_ms")
+    if latency_ms is None and node_latencies:
+        latency_ms = round(sum(node_latencies.values()), 2)
+    state["latency_ms"] = latency_ms
+
     if refund_id:
         repo = get_current_repository() or state.get("_repository") or RefundRepository()
         try:
@@ -369,6 +400,8 @@ def save_dynamo_node(state: dict[str, Any]) -> dict[str, Any]:
                     approval_email_text=approval_email_text,
                     denial_email_text=denial_email_text,
                     category=category,
+                    node_latencies=node_latencies,
+                    latency_ms=latency_ms,
                 )
             except TypeError:
                 repo.update_decision(
@@ -378,6 +411,10 @@ def save_dynamo_node(state: dict[str, Any]) -> dict[str, Any]:
                     matched_policy_rule=matched_rule,
                     confidence_score=confidence,
                     status=status,
+                    tool_calls=tool_calls,
+                    approval_email_text=approval_email_text,
+                    denial_email_text=denial_email_text,
+                    category=category,
                 )
         except (RefundNotFoundError, KeyError):
             # In testing or standalone execution, record might not exist prior
@@ -410,6 +447,8 @@ def save_dynamo_node(state: dict[str, Any]) -> dict[str, Any]:
         "status": status,
         "approval_email_text": approval_email_text,
         "denial_email_text": denial_email_text,
+        "node_latencies": node_latencies,
+        "latency_ms": latency_ms,
     }
 
 

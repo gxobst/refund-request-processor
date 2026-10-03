@@ -33,3 +33,5 @@ class RefundWorkflowState(TypedDict, total=False):
     approval_email_text: str | None
     denial_email_text: str | None
     evidence: list[dict[str, Any]] | list[Any]
+    node_latencies: dict[str, float]
+    latency_ms: float | None

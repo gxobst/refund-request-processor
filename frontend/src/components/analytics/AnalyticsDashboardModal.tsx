@@ -11,6 +11,7 @@ import {
   Layers,
   FileQuestion,
   HelpCircle,
+  Timer,
 } from 'lucide-react'
 import {
   Dialog,
@@ -63,6 +64,29 @@ export function AnalyticsDashboardModal({ isOpen, onClose }: AnalyticsDashboardM
   const calcPercent = (count: number, denom: number): string => {
     if (!denom || denom === 0) return '0.0%'
     return `${((count / denom) * 100).toFixed(1)}%`
+  }
+
+  const formatLatency = (val: number | undefined | null): string => {
+    if (val === undefined || val === null || isNaN(val) || val <= 0) return '0 ms'
+    return `${Math.round(val).toLocaleString('en-US')} ms`
+  }
+
+  const nodeBreakdown = metrics?.node_latency_breakdown || {}
+  const sumNodeLatencies =
+    (nodeBreakdown.classifier || 0) +
+    (nodeBreakdown.policy_checker || 0) +
+    (nodeBreakdown.decision_agent || 0)
+  const totalLatencyForDistribution =
+    metrics?.average_latency_ms && metrics.average_latency_ms > 0
+      ? metrics.average_latency_ms
+      : sumNodeLatencies
+
+  const getLatencyBarWidth = (nodeVal: number | undefined): string => {
+    if (!nodeVal || nodeVal <= 0 || !totalLatencyForDistribution || totalLatencyForDistribution <= 0) {
+      return '0%'
+    }
+    const pct = Math.min(100, Math.max(0, Math.round((nodeVal / totalLatencyForDistribution) * 100)))
+    return `${pct}%`
   }
 
   return (
@@ -162,7 +186,7 @@ export function AnalyticsDashboardModal({ isOpen, onClose }: AnalyticsDashboardM
         {!isLoading && !isError && metrics && metrics.total_requests > 0 && (
           <div className="space-y-6">
             {/* KPI Cards Row */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
               {/* Total Volume */}
               <Card data-testid="kpi-total-volume" className="border-slate-200 shadow-sm">
                 <CardHeader className="p-3 sm:p-4 pb-1">
@@ -226,6 +250,97 @@ export function AnalyticsDashboardModal({ isOpen, onClose }: AnalyticsDashboardM
                   <p className="text-[11px] text-slate-500 mt-0.5">Model confidence score</p>
                 </CardContent>
               </Card>
+
+              {/* Average Latency */}
+              <Card data-testid="kpi-average-latency" className="border-slate-200 shadow-sm col-span-2 sm:col-span-1">
+                <CardHeader className="p-3 sm:p-4 pb-1">
+                  <CardTitle className="text-xs font-medium text-slate-500 flex items-center justify-between">
+                    <span>Average Latency</span>
+                    <Timer className="h-4 w-4 text-indigo-500" />
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-3 sm:p-4 pt-1">
+                  <div className="text-xl sm:text-2xl font-bold text-indigo-600">
+                    {formatLatency(metrics.average_latency_ms)}
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">End-to-end evaluation</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Agent Latency Breakdown Section */}
+            <div
+              data-testid="latency-distribution"
+              className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm space-y-4"
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-slate-900">Agent Latency Breakdown</h3>
+                <span className="text-xs text-slate-500">Execution time per agent node</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {/* Classifier */}
+                <div data-testid="latency-node-classifier" className="space-y-1.5">
+                  <div className="flex justify-between text-xs">
+                    <span className="font-medium text-slate-700 flex items-center">
+                      <span className="h-2 w-2 rounded-full bg-indigo-500 mr-1.5" />
+                      Classifier
+                    </span>
+                    <span className="text-slate-500">
+                      {formatLatency(metrics.node_latency_breakdown?.classifier)}
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-indigo-500 h-2 rounded-full transition-all"
+                      style={{
+                        width: getLatencyBarWidth(metrics.node_latency_breakdown?.classifier),
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Policy Checker */}
+                <div data-testid="latency-node-policy_checker" className="space-y-1.5">
+                  <div className="flex justify-between text-xs">
+                    <span className="font-medium text-slate-700 flex items-center">
+                      <span className="h-2 w-2 rounded-full bg-purple-500 mr-1.5" />
+                      Policy Checker
+                    </span>
+                    <span className="text-slate-500">
+                      {formatLatency(metrics.node_latency_breakdown?.policy_checker)}
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-purple-500 h-2 rounded-full transition-all"
+                      style={{
+                        width: getLatencyBarWidth(metrics.node_latency_breakdown?.policy_checker),
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Decision Agent */}
+                <div data-testid="latency-node-decision_agent" className="space-y-1.5">
+                  <div className="flex justify-between text-xs">
+                    <span className="font-medium text-slate-700 flex items-center">
+                      <span className="h-2 w-2 rounded-full bg-teal-500 mr-1.5" />
+                      Decision Agent
+                    </span>
+                    <span className="text-slate-500">
+                      {formatLatency(metrics.node_latency_breakdown?.decision_agent)}
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-teal-500 h-2 rounded-full transition-all"
+                      style={{
+                        width: getLatencyBarWidth(metrics.node_latency_breakdown?.decision_agent),
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Decision Distribution Breakdown */}

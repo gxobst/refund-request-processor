@@ -180,6 +180,8 @@ class RefundRepository:
         approval_email_text: str | None = None,
         denial_email_text: str | None = None,
         category: str | None = None,
+        node_latencies: dict[str, float] | None = None,
+        latency_ms: float | None = None,
     ) -> RefundRecord:
         """Update decision metadata and workflow status for an existing refund record.
 
@@ -194,6 +196,8 @@ class RefundRepository:
             approval_email_text: Optional generated confirmation and return instructions email text.
             denial_email_text: Optional generated denial notification email text.
             category: Optional classified refund reason category.
+            node_latencies: Optional dict of wall-clock latencies per agent node in milliseconds.
+            latency_ms: Optional total workflow evaluation latency in milliseconds.
 
         Returns:
             Updated RefundRecord instance.
@@ -219,6 +223,16 @@ class RefundRepository:
             updated_dict["tool_calls"] = tool_calls
         else:
             updated_dict["tool_calls"] = existing.tool_calls or []
+
+        if node_latencies is not None:
+            updated_dict["node_latencies"] = node_latencies
+        else:
+            updated_dict["node_latencies"] = existing.node_latencies or {}
+
+        if latency_ms is not None:
+            updated_dict["latency_ms"] = latency_ms
+        else:
+            updated_dict["latency_ms"] = existing.latency_ms
 
         if approval_email_text is not None:
             updated_dict["approval_email_text"] = approval_email_text
@@ -545,6 +559,8 @@ class RefundRepository:
                 override_rate=0.0,
                 average_confidence=0.0,
                 category_breakdown={},
+                average_latency_ms=0.0,
+                node_latency_breakdown={"classifier": 0.0, "policy_checker": 0.0, "decision_agent": 0.0},
             )
 
         status_counts = {
@@ -563,6 +579,12 @@ class RefundRepository:
         completed_records_count = 0
         completed_overridden_count = 0
         confidence_scores: list[float] = []
+        latencies: list[float] = []
+        node_latencies_collector: dict[str, list[float]] = {
+            "classifier": [],
+            "policy_checker": [],
+            "decision_agent": [],
+        }
 
         for item in raw_items:
             # Status breakdown
@@ -599,6 +621,35 @@ class RefundRepository:
                 except (ValueError, TypeError):
                     pass
 
+            # Latency metrics aggregation
+            raw_lat = item.get("latency_ms")
+            item_total_latency: float | None = None
+            if raw_lat is not None:
+                try:
+                    item_total_latency = float(raw_lat)
+                except (ValueError, TypeError):
+                    item_total_latency = None
+
+            raw_nl = item.get("node_latencies")
+            if isinstance(raw_nl, dict):
+                nl_sum = 0.0
+                has_nl_values = False
+                for node_key in ("classifier", "policy_checker", "decision_agent"):
+                    val = raw_nl.get(node_key)
+                    if val is not None:
+                        try:
+                            f_val = float(val)
+                            node_latencies_collector[node_key].append(f_val)
+                            nl_sum += f_val
+                            has_nl_values = True
+                        except (ValueError, TypeError):
+                            pass
+                if item_total_latency is None and has_nl_values:
+                    item_total_latency = nl_sum
+
+            if item_total_latency is not None:
+                latencies.append(item_total_latency)
+
         auto_approval_rate = round(decision_counts["auto_approve"] / total_requests, 4)
         override_rate = (
             round(completed_overridden_count / completed_records_count, 4)
@@ -610,6 +661,19 @@ class RefundRepository:
             if confidence_scores
             else 0.0
         )
+        average_latency_ms = (
+            round(sum(latencies) / len(latencies), 2)
+            if latencies
+            else 0.0
+        )
+        node_latency_breakdown = {
+            node_key: (
+                round(sum(vals) / len(vals), 2)
+                if vals
+                else 0.0
+            )
+            for node_key, vals in node_latencies_collector.items()
+        }
 
         return AnalyticsMetricsResponse(
             total_requests=total_requests,
@@ -619,6 +683,8 @@ class RefundRepository:
             override_rate=override_rate,
             average_confidence=average_confidence,
             category_breakdown=category_breakdown,
+            average_latency_ms=average_latency_ms,
+            node_latency_breakdown=node_latency_breakdown,
         )
 
 

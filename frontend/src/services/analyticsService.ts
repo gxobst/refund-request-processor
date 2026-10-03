@@ -22,6 +22,8 @@ export interface AnalyticsMetrics {
   override_rate: number
   average_confidence: number
   category_breakdown: Record<string, number>
+  average_latency_ms: number
+  node_latency_breakdown: Record<string, number>
 }
 
 /**
