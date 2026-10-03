@@ -1,6 +1,30 @@
 import * as React from 'react'
 
-export type UserRole = 'agent' | 'supervisor'
+export type UserRole = 'agent' | 'supervisor' | 'senior_manager'
+
+export const ROLE_APPROVAL_LIMITS: Record<UserRole, number> = {
+  agent: 100,
+  supervisor: 500,
+  senior_manager: 2500,
+}
+
+export function getApprovalLimit(role: UserRole | string): number {
+  if (role === 'senior_manager') return ROLE_APPROVAL_LIMITS.senior_manager
+  if (role === 'supervisor') return ROLE_APPROVAL_LIMITS.supervisor
+  if (role === 'agent') return ROLE_APPROVAL_LIMITS.agent
+  return ROLE_APPROVAL_LIMITS.agent
+}
+
+export function mapGroupsToRole(groups: string[]): UserRole {
+  const normalized = groups.map((g) => g.toLowerCase().trim())
+  if (normalized.some((g) => ['senior_managers', 'senior_manager', 'admin'].includes(g))) {
+    return 'senior_manager'
+  }
+  if (normalized.some((g) => ['supervisors', 'supervisor'].includes(g))) {
+    return 'supervisor'
+  }
+  return 'agent'
+}
 
 export interface DecodedTokenClaims {
   groups: string[]
@@ -14,6 +38,7 @@ export interface RoleContextType {
   role: UserRole
   setRole: (role: UserRole) => void
   isSupervisor: boolean
+  approvalLimit: number
   authToken: string | null
   setAuthToken: (token: string | null) => void
   userSub: string | null
@@ -84,7 +109,7 @@ export function getActiveUserRole(): UserRole {
   }
   try {
     const saved = window.localStorage.getItem(ROLE_STORAGE_KEY)
-    if (saved === 'agent' || saved === 'supervisor') {
+    if (saved === 'agent' || saved === 'supervisor' || saved === 'senior_manager') {
       return saved
     }
   } catch {
@@ -126,10 +151,7 @@ export function RoleProvider({ children, initialRole, initialAuthToken }: RolePr
     if (token) {
       const claims = decodeTokenClaims(token)
       if (claims) {
-        const hasSupervisor = claims.groups.some((g) =>
-          ['supervisors', 'supervisor', 'admin'].includes(g.toLowerCase().trim())
-        )
-        return hasSupervisor ? 'supervisor' : 'agent'
+        return mapGroupsToRole(claims.groups)
       }
     }
     return getActiveUserRole()
@@ -168,10 +190,7 @@ export function RoleProvider({ children, initialRole, initialAuthToken }: RolePr
         }
         const claims = decodeTokenClaims(token)
         if (claims) {
-          const hasSupervisor = claims.groups.some((g) =>
-            ['supervisors', 'supervisor', 'admin'].includes(g.toLowerCase().trim())
-          )
-          const newRole: UserRole = hasSupervisor ? 'supervisor' : 'agent'
+          const newRole: UserRole = mapGroupsToRole(claims.groups)
           setRoleState(newRole)
           if (typeof window !== 'undefined' && window.localStorage) {
             try {
@@ -198,18 +217,20 @@ export function RoleProvider({ children, initialRole, initialAuthToken }: RolePr
     []
   )
 
-  const isSupervisor = role === 'supervisor'
+  const isSupervisor = role === 'supervisor' || role === 'senior_manager'
+  const approvalLimit = getApprovalLimit(role)
 
   const value = React.useMemo<RoleContextType>(
     () => ({
       role,
       setRole,
       isSupervisor,
+      approvalLimit,
       authToken,
       setAuthToken,
       userSub,
     }),
-    [role, setRole, isSupervisor, authToken, setAuthToken, userSub]
+    [role, setRole, isSupervisor, approvalLimit, authToken, setAuthToken, userSub]
   )
 
   return <RoleContext.Provider value={value}>{children}</RoleContext.Provider>
@@ -236,7 +257,8 @@ export function useUserRole(): RoleContextType {
           }
         }
       },
-      isSupervisor: active === 'supervisor',
+      isSupervisor: active === 'supervisor' || active === 'senior_manager',
+      approvalLimit: getApprovalLimit(active),
       authToken: token,
       setAuthToken: (newToken: string | null) => {
         if (typeof window !== 'undefined' && window.localStorage) {

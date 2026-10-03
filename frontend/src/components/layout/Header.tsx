@@ -74,8 +74,43 @@ export function Header({
   const currentHealth = healthBadgeConfig[systemHealth]
   const { role, setRole, isSupervisor, authToken, setAuthToken, userSub } = useUserRole()
 
+  const roleDisplayConfig: Record<
+    UserRole,
+    { label: string; limitText: string; icon: typeof User; className: string; iconColor: string }
+  > = {
+    agent: {
+      label: 'Agent',
+      limitText: '$100',
+      icon: User,
+      className: 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100',
+      iconColor: 'text-blue-600',
+    },
+    supervisor: {
+      label: 'Supervisor',
+      limitText: '$500',
+      icon: UserCheck,
+      className: 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100',
+      iconColor: 'text-purple-600',
+    },
+    senior_manager: {
+      label: 'Senior Manager',
+      limitText: '$2,500',
+      icon: ShieldCheck,
+      className: 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100',
+      iconColor: 'text-amber-600',
+    },
+  }
+
+  const currentRoleConfig = roleDisplayConfig[role] || roleDisplayConfig.agent
+  const RoleIcon = currentRoleConfig.icon
+
   const handleToggleRole = () => {
-    const nextRole = role === 'supervisor' ? 'agent' : 'supervisor'
+    const cycleMap: Record<UserRole, UserRole> = {
+      agent: 'supervisor',
+      supervisor: 'senior_manager',
+      senior_manager: 'agent',
+    }
+    const nextRole = cycleMap[role] || 'agent'
     setRole(nextRole)
   }
 
@@ -217,21 +252,15 @@ export function Header({
             type="button"
             onClick={handleToggleRole}
             data-testid="role-switcher"
-            aria-label={`Current role: ${isSupervisor ? 'Supervisor' : 'Agent'}. Click to toggle.`}
+            aria-label={`Current role: ${currentRoleConfig.label} (${currentRoleConfig.limitText}). Click to toggle.`}
             className={cn(
               'inline-flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium rounded-md border shadow-sm transition-colors',
               'focus:outline-none focus:ring-2 focus:ring-slate-400',
-              isSupervisor
-                ? 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
-                : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
+              currentRoleConfig.className
             )}
           >
-            {isSupervisor ? (
-              <UserCheck className="h-3.5 w-3.5 text-purple-600" aria-hidden="true" />
-            ) : (
-              <User className="h-3.5 w-3.5 text-blue-600" aria-hidden="true" />
-            )}
-            <span>{isSupervisor ? 'Supervisor' : 'Agent'}</span>
+            <RoleIcon className={cn('h-3.5 w-3.5', currentRoleConfig.iconColor)} aria-hidden="true" />
+            <span>{currentRoleConfig.label} ({currentRoleConfig.limitText})</span>
           </button>
 
           {/* Policy Rules Button */}

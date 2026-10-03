@@ -164,6 +164,18 @@ class RefundRecord(BaseModel):
         default=None,
         description="Total workflow evaluation latency across agent nodes in milliseconds.",
     )
+    escalation_tier: Literal["supervisor", "senior_manager"] | None = Field(
+        default=None,
+        description="Current escalation tier required for approval.",
+    )
+    refund_amount: float | None = Field(
+        default=None,
+        description="Refund monetary amount.",
+    )
+    order_amount: float | None = Field(
+        default=None,
+        description="Order total monetary amount.",
+    )
 
 
 class RefundDecisionUpdate(BaseModel):
@@ -180,6 +192,7 @@ class RefundDecisionUpdate(BaseModel):
     category: str | None = Field(default=None, description="Classified refund reason category.")
     node_latencies: dict[str, float] | None = None
     latency_ms: float | None = None
+    escalation_tier: Literal["supervisor", "senior_manager"] | None = None
 
 
 class RefundOverrideUpdate(BaseModel):
@@ -192,16 +205,17 @@ class RefundOverrideUpdate(BaseModel):
         default=None,
         description="Identifier or role of the operator who applied the manual override.",
     )
+    escalation_tier: Literal["supervisor", "senior_manager"] | None = None
 
 
-OverrideDecisionType = Literal["approve", "deny"]
+OverrideDecisionType = Literal["approve", "deny", "escalate"]
 
 
 class RefundOverrideRequest(BaseModel):
     """Request payload for submitting a human operator override."""
 
     override_decision: OverrideDecisionType = Field(
-        ..., description="Manual override decision ('approve' or 'deny')."
+        ..., description="Manual override decision ('approve', 'deny', or 'escalate')."
     )
     reason: str = Field(
         ..., min_length=1, description="Operator explanation justifying the override."

@@ -47,7 +47,7 @@ export interface SubmitRefundParams {
 }
 
 export interface OverrideRefundPayload {
-  overrideDecision: 'approve' | 'deny'
+  overrideDecision: 'approve' | 'deny' | 'escalate'
   overrideReason: string
 }
 

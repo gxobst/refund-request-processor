@@ -306,16 +306,18 @@ class RefundRepository:
         approval_email_text: str | None = None,
         denial_email_text: str | None = None,
         overridden_by: str | None = "supervisor",
+        escalation_tier: str | None = None,
     ) -> RefundRecord:
         """Record a human manual override and update final decision.
 
         Args:
             refund_id: Target refund request ID.
-            override_decision: Human override decision ('approve' or 'deny').
+            override_decision: Human override decision ('approve', 'deny', or 'escalate').
             override_reason: Justification for the override.
             approval_email_text: Optional custom or pre-generated approval email text.
             denial_email_text: Optional custom or pre-generated denial email text.
             overridden_by: Identifier or role of the operator who applied the manual override.
+            escalation_tier: Optional escalation tier (e.g. 'senior_manager', 'supervisor').
 
         Returns:
             Updated RefundRecord instance.
@@ -334,16 +336,30 @@ class RefundRepository:
         updated_dict["overridden_at"] = now_iso
         updated_dict["overridden_by"] = overridden_by
         updated_dict["updated_at"] = now_iso
-        updated_dict["decision"] = override_decision
-        updated_dict["status"] = "completed"
 
-        if override_decision in ("approve", "auto_approve"):
+        dec_lower = override_decision.strip().lower()
+        if dec_lower in ("escalate", "escalated"):
+            updated_dict["decision"] = "escalate"
+            updated_dict["status"] = "escalated"
+            tier = escalation_tier or "senior_manager"
+            updated_dict["escalation_tier"] = tier
+            updated_dict["approval_email_text"] = None
+            updated_dict["denial_email_text"] = None
+        elif dec_lower in ("approve", "auto_approve"):
+            updated_dict["decision"] = "approve"
+            updated_dict["status"] = "completed"
+            if escalation_tier is not None:
+                updated_dict["escalation_tier"] = escalation_tier
             if approval_email_text is None:
                 from app.agents.approval_notifier import generate_approval_email
                 approval_email_text = generate_approval_email(order_id=existing.order_id, refund_id=refund_id)
             updated_dict["approval_email_text"] = approval_email_text
             updated_dict["denial_email_text"] = None
-        elif override_decision == "deny":
+        elif dec_lower in ("deny", "denied"):
+            updated_dict["decision"] = "deny"
+            updated_dict["status"] = "completed"
+            if escalation_tier is not None:
+                updated_dict["escalation_tier"] = escalation_tier
             if denial_email_text is None:
                 from app.agents.denial_notifier import generate_denial_email
                 denial_email_text = generate_denial_email(
@@ -354,6 +370,10 @@ class RefundRepository:
             updated_dict["denial_email_text"] = denial_email_text
             updated_dict["approval_email_text"] = None
         else:
+            updated_dict["decision"] = override_decision
+            updated_dict["status"] = "completed"
+            if escalation_tier is not None:
+                updated_dict["escalation_tier"] = escalation_tier
             updated_dict["approval_email_text"] = None
             updated_dict["denial_email_text"] = None
 

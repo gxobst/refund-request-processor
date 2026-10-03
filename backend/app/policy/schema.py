@@ -240,3 +240,19 @@ class PolicyAuditEntry(BaseModel):
     action: str = Field(default="update", description="Type of action: update or rollback.")
 
 
+DEFAULT_ROLE_APPROVAL_LIMITS: dict[str, float] = {
+    "agent": 100.0,
+    "supervisor": 500.0,
+    "senior_manager": 2500.0,
+}
+
+
+class RoleApprovalLimits(BaseModel):
+    """Tiered financial approval limits per operator role."""
+
+    agent: float = Field(default=100.0, ge=0.0, description="Agent approval limit.")
+    supervisor: float = Field(default=500.0, ge=0.0, description="Supervisor approval limit.")
+    senior_manager: float = Field(default=2500.0, ge=0.0, description="Senior Manager approval limit.")
+
+
+

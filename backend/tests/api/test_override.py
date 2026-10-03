@@ -59,6 +59,7 @@ class MockRefundRepository:
         approval_email_text: str | None = None,
         denial_email_text: str | None = None,
         overridden_by: str | None = "supervisor",
+        escalation_tier: str | None = None,
     ) -> RefundRecord:
         record = self.records.get(refund_id)
         if record is None:
@@ -429,7 +430,7 @@ async def test_override_refund_decision_deny(mock_repo: MockRefundRepository):
     [
         {"override_decision": "maybe", "reason": "Not sure"},
         {"override_decision": "auto_approve", "reason": "Trying to use agent decision"},
-        {"override_decision": "escalate", "reason": "Already escalated"},
+        {"override_decision": "unsupported", "reason": "Unsupported decision"},
         {"override_decision": "approve", "reason": ""},
         {"override_decision": "approve", "reason": "    \n\t  "},
         {"override_decision": "approve"},

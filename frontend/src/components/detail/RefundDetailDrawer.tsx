@@ -113,7 +113,12 @@ export function RefundDetailDrawer({
   const deliveryStatus =
     (rec.deliveryStatus as string) || (rec.delivery_status as string) || 'Delivered'
 
-  // Override fields
+  // Override & Escalation fields
+  const escalationTier =
+    refund?.escalationTier ||
+    (rec.escalation_tier as string) ||
+    (rec.escalationTier as string) ||
+    null
   const overrideDecision =
     refund?.overrideDecision || (rec.override_decision as string) || null
   const overrideReason =
@@ -215,6 +220,19 @@ export function RefundDetailDrawer({
             </DrawerTitle>
             <div className="flex items-center space-x-2">
               <StatusBadge status={status} />
+              {escalationTier && (
+                <span
+                  data-testid="escalation-tier-badge"
+                  className={cn(
+                    "inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold uppercase tracking-wider",
+                    escalationTier === 'senior_manager'
+                      ? "bg-purple-100 text-purple-800 border border-purple-200"
+                      : "bg-blue-100 text-blue-800 border border-blue-200"
+                  )}
+                >
+                  Escalation: {escalationTier === 'senior_manager' ? 'Senior Manager' : 'Supervisor'}
+                </span>
+              )}
               <DecisionBadge
                 decision={overrideDecision || decision}
                 confidenceScore={confidenceScore}

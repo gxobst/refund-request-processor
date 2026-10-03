@@ -25,6 +25,8 @@ class MockRefundRepository:
         status: str = "escalated",
         decision: str | None = "escalate",
         reasoning: str | None = "Needs supervisor review",
+        refund_amount: float | None = None,
+        order_amount: float | None = None,
     ) -> RefundRecord:
         now_iso = datetime.now(timezone.utc).isoformat()
         record = RefundRecord(
@@ -34,6 +36,8 @@ class MockRefundRepository:
             status=status,
             decision=decision,
             reasoning=reasoning,
+            refund_amount=refund_amount,
+            order_amount=order_amount,
             created_at=now_iso,
             updated_at=now_iso,
         )
@@ -75,6 +79,7 @@ class MockRefundRepository:
         approval_email_text: str | None = None,
         denial_email_text: str | None = None,
         overridden_by: str | None = "supervisor",
+        escalation_tier: str | None = None,
     ) -> RefundRecord:
         record = self.records.get(refund_id)
         if record is None:
@@ -90,6 +95,7 @@ class MockRefundRepository:
                 "updated_at": now_iso,
                 "decision": override_decision,
                 "status": "completed",
+                "escalation_tier": escalation_tier,
             }
         )
         self.records[refund_id] = updated
@@ -126,10 +132,14 @@ def test_get_current_user_role_normalizes_case_and_whitespace():
     scope_agent = {"type": "http", "headers": [(b"x-user-role", b" Agent ")]}
     assert get_current_user_role(Request(scope_agent)) == "agent"
 
+    scope_sm = {"type": "http", "headers": [(b"x-user-role", b" Senior_Manager ")]}
+    assert get_current_user_role(Request(scope_sm)) == "senior_manager"
 
-def test_require_supervisor_role_accepts_supervisor():
-    """require_supervisor_role returns role string when role is 'supervisor'."""
+
+def test_require_supervisor_role_accepts_supervisor_and_senior_manager():
+    """require_supervisor_role returns role string when role is 'supervisor' or 'senior_manager'."""
     assert require_supervisor_role(role="supervisor") == "supervisor"
+    assert require_supervisor_role(role="senior_manager") == "senior_manager"
 
 
 def test_require_supervisor_role_raises_403_for_non_supervisor():
@@ -158,8 +168,8 @@ def test_require_supervisor_role_raises_403_for_non_supervisor():
 async def test_override_missing_role_header_returns_403(
     mock_repo: MockRefundRepository, endpoint_path: str
 ):
-    """Calling override endpoint without X-User-Role header returns 403 Forbidden with RFC 9457 details."""
-    mock_repo.seed_record("ref-rbac-1")
+    """Calling override endpoint without X-User-Role header defaults to agent and returns 403 when over limit."""
+    mock_repo.seed_record("ref-rbac-1", refund_amount=250.0)
     transport = ASGITransport(app=app)
     payload = {"override_decision": "approve", "reason": "Customer exception granted."}
 
@@ -171,20 +181,19 @@ async def test_override_missing_role_header_returns_403(
     problem = data.get("detail", data)
     assert problem["status"] == 403
     assert problem["title"] == "Forbidden"
-    assert problem["detail"] == "Supervisor role required to perform manual overrides."
     assert problem["type"] == "urn:problem:forbidden"
     assert endpoint_path in problem["instance"]
 
 
 @pytest.mark.parametrize(
     "invalid_role",
-    ["agent", "AGENT", " agent ", "guest", "admin", "unknown_role", ""],
+    ["guest", "GUEST", " guest ", "unknown_role", "auditor", "viewer"],
 )
 @pytest.mark.asyncio
 async def test_override_non_supervisor_role_returns_403(
     mock_repo: MockRefundRepository, invalid_role: str
 ):
-    """Calling override endpoint with non-supervisor role returns 403 Forbidden."""
+    """Calling override endpoint with unauthorized role returns 403 Forbidden."""
     mock_repo.seed_record("ref-rbac-1")
     transport = ASGITransport(app=app)
     payload = {"override_decision": "approve", "reason": "Customer exception granted."}
@@ -200,13 +209,12 @@ async def test_override_non_supervisor_role_returns_403(
     problem = data.get("detail", data)
     assert problem["status"] == 403
     assert problem["title"] == "Forbidden"
-    assert problem["detail"] == "Supervisor role required to perform manual overrides."
     assert problem["type"] == "urn:problem:forbidden"
 
 
 @pytest.mark.parametrize(
     "valid_role_header",
-    ["supervisor", "SUPERVISOR", " Supervisor ", "  supervisor  "],
+    ["supervisor", "SUPERVISOR", " Supervisor ", "  supervisor  ", "senior_manager", "SENIOR_MANAGER"],
 )
 @pytest.mark.asyncio
 async def test_override_supervisor_role_succeeds(
@@ -230,7 +238,7 @@ async def test_override_supervisor_role_succeeds(
     assert data["decision"] == "approve"
     assert data["status"] == "completed"
     assert data["override_decision"] == "approve"
-    assert data["overridden_by"] == "supervisor"
+    assert data["overridden_by"] in ("supervisor", "senior_manager")
 
 
 @pytest.mark.asyncio

@@ -5,9 +5,23 @@ from fastapi import Depends, HTTPException, Request, status
 
 from app.auth.jwt import decode_jwt, extract_user_id, extract_user_role
 from app.core.config import get_settings
+from app.policy.schema import DEFAULT_ROLE_APPROVAL_LIMITS
 
-UserRole = Literal["agent", "supervisor"]
+UserRole = Literal["agent", "supervisor", "senior_manager"]
 DEFAULT_ROLE: UserRole = "agent"
+
+
+def get_approval_limit_for_role(role: str) -> float:
+    """Return the configured dollar approval limit for a given operator role.
+
+    - 'agent': $100.0
+    - 'supervisor': $500.0
+    - 'senior_manager': $2,500.0
+    - default / unknown: $100.0
+    """
+    normalized = role.strip().lower() if role else ""
+    return DEFAULT_ROLE_APPROVAL_LIMITS.get(normalized, DEFAULT_ROLE_APPROVAL_LIMITS["agent"])
+
 
 
 def get_current_user_role(request: Request) -> str:
@@ -102,18 +116,18 @@ def get_current_user_identity(request: Request) -> str:
         return user_id
 
     role = request.headers.get("X-User-Role", "").strip().lower()
-    return role if role in ("supervisor", "agent") else DEFAULT_ROLE
+    return role if role in ("supervisor", "senior_manager", "agent") else DEFAULT_ROLE
 
 
 def require_supervisor_role(
     role: str = Depends(get_current_user_role),
     request: Request = None,
 ) -> str:
-    """FastAPI dependency verifying that the caller has 'supervisor' role.
+    """FastAPI dependency verifying that the caller has 'supervisor' or 'senior_manager' role.
 
-    Raises HTTP 403 Forbidden with RFC 9457 ProblemDetails if the role is not 'supervisor'.
+    Raises HTTP 403 Forbidden with RFC 9457 ProblemDetails if the role is not 'supervisor' or 'senior_manager'.
     """
-    if role != "supervisor":
+    if role not in ("supervisor", "senior_manager"):
         path = request.url.path if request is not None else ""
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

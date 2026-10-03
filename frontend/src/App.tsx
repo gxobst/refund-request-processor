@@ -176,8 +176,14 @@ function AppContent() {
 
         <ManualOverrideModal
           refundId={selectedRefundId}
-          orderId={selectedRefund?.orderId}
+          orderId={selectedRefund?.orderId || (selectedRefund as Record<string, unknown>)?.order_id as string | undefined}
           currentDecision={selectedRefund?.decision}
+          refundAmount={
+            selectedRefund?.refundAmount ??
+            ((selectedRefund as Record<string, unknown>)?.refund_amount as number | undefined) ??
+            selectedRefund?.orderAmount ??
+            ((selectedRefund as Record<string, unknown>)?.order_amount as number | undefined)
+          }
           isOpen={isOverrideModalOpen}
           onClose={() => setIsOverrideModalOpen(false)}
         />

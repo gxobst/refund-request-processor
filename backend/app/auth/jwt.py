@@ -120,10 +120,12 @@ def decode_jwt(
 
 
 def extract_user_role(payload: dict[str, Any]) -> str:
-    """Extract user role ('supervisor' or 'agent') from decoded JWT payload claims.
+    """Extract user role ('senior_manager', 'supervisor', or 'agent') from decoded JWT payload claims.
 
-    Maps 'cognito:groups' or 'roles': resolves to 'supervisor' if 'supervisors',
-    'supervisor', or 'admin' is present; otherwise defaults to 'agent'.
+    Maps 'cognito:groups' or 'roles' with hierarchical precedence:
+    - Resolves to 'senior_manager' if 'senior_managers', 'senior_manager', or 'admin' is present.
+    - Resolves to 'supervisor' if 'supervisors' or 'supervisor' is present.
+    - Otherwise defaults to 'agent'.
     """
     raw_groups = payload.get("cognito:groups")
     if raw_groups is None:
@@ -139,7 +141,9 @@ def extract_user_role(payload: dict[str, Any]) -> str:
         return "agent"
 
     normalized = {str(g).strip().lower() for g in groups}
-    if any(supervisor_name in normalized for supervisor_name in ("supervisors", "supervisor", "admin")):
+    if any(mgr_name in normalized for mgr_name in ("senior_managers", "senior_manager", "admin")):
+        return "senior_manager"
+    if any(supervisor_name in normalized for supervisor_name in ("supervisors", "supervisor")):
         return "supervisor"
     return "agent"
 

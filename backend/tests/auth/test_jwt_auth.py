@@ -38,6 +38,8 @@ class MockRefundRepository:
         status: str = "escalated",
         decision: str | None = "escalate",
         reasoning: str | None = "Needs supervisor review",
+        refund_amount: float | None = None,
+        order_amount: float | None = None,
     ) -> RefundRecord:
         now_iso = datetime.now(timezone.utc).isoformat()
         record = RefundRecord(
@@ -47,6 +49,8 @@ class MockRefundRepository:
             status=status,
             decision=decision,
             reasoning=reasoning,
+            refund_amount=refund_amount,
+            order_amount=order_amount,
             created_at=now_iso,
             updated_at=now_iso,
         )
@@ -64,6 +68,7 @@ class MockRefundRepository:
         approval_email_text: str | None = None,
         denial_email_text: str | None = None,
         overridden_by: str | None = "supervisor",
+        escalation_tier: str | None = None,
     ) -> RefundRecord:
         record = self.records.get(refund_id)
         if record is None:
@@ -227,17 +232,21 @@ def test_decode_jwt_issuer_validation(monkeypatch):
     "payload, expected_role",
     [
         ({"cognito:groups": ["supervisors"]}, "supervisor"),
-        ({"cognito:groups": ["admin"]}, "supervisor"),
+        ({"cognito:groups": ["admin"]}, "senior_manager"),
+        ({"cognito:groups": ["senior_managers"]}, "senior_manager"),
+        ({"cognito:groups": ["senior_manager"]}, "senior_manager"),
         ({"cognito:groups": ["supervisor"]}, "supervisor"),
         ({"cognito:groups": ["SUPERVISORS"]}, "supervisor"),
         ({"cognito:groups": ["agents", "supervisors"]}, "supervisor"),
-        ({"roles": ["admin"]}, "supervisor"),
+        ({"cognito:groups": ["agents", "senior_managers"]}, "senior_manager"),
+        ({"roles": ["admin"]}, "senior_manager"),
         ({"roles": ["supervisor"]}, "supervisor"),
         ({"cognito:groups": ["agents"]}, "agent"),
         ({"cognito:groups": []}, "agent"),
         ({"roles": ["agent"]}, "agent"),
         ({}, "agent"),
         ({"cognito:groups": "supervisor"}, "supervisor"),
+        ({"cognito:groups": "senior_manager"}, "senior_manager"),
         ({"cognito:groups": "agent"}, "agent"),
     ],
 )
@@ -360,7 +369,7 @@ async def test_override_with_agent_bearer_token_returns_403(
 ):
     """Agent Bearer token receives HTTP 403 Forbidden with RFC 9457 ProblemDetails."""
     monkeypatch.setattr("app.auth.jwt.get_settings", lambda: Settings(jwt_secret_key=TEST_SECRET_KEY))
-    mock_repo.seed_record("ref-jwt-2")
+    mock_repo.seed_record("ref-jwt-2", refund_amount=250.0)
 
     token = create_jwt_token(
         {"sub": "agent-sub-002", "cognito:groups": ["agents"]},

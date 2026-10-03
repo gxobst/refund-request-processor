@@ -33,7 +33,7 @@ describe('RBAC Role Switcher and Override Integration Tests', () => {
     window.localStorage.clear()
   })
 
-  it('renders Header role switcher with default Supervisor role and toggles between Agent and Supervisor', async () => {
+  it('renders Header role switcher with default Supervisor role and toggles between Supervisor, Senior Manager, and Agent', async () => {
     renderApp()
 
     // 1. Initial state: role switcher should be present and show Supervisor
@@ -41,12 +41,17 @@ describe('RBAC Role Switcher and Override Integration Tests', () => {
     expect(roleSwitcher).toBeInTheDocument()
     expect(roleSwitcher).toHaveTextContent('Supervisor')
 
-    // 2. Toggle to Agent
+    // 2. Toggle to Senior Manager
+    fireEvent.click(roleSwitcher)
+    expect(roleSwitcher).toHaveTextContent('Senior Manager')
+    expect(window.localStorage.getItem('user_role')).toBe('senior_manager')
+
+    // 3. Toggle to Agent
     fireEvent.click(roleSwitcher)
     expect(roleSwitcher).toHaveTextContent('Agent')
     expect(window.localStorage.getItem('user_role')).toBe('agent')
 
-    // 3. Toggle back to Supervisor
+    // 4. Toggle back to Supervisor
     fireEvent.click(roleSwitcher)
     expect(roleSwitcher).toHaveTextContent('Supervisor')
     expect(window.localStorage.getItem('user_role')).toBe('supervisor')

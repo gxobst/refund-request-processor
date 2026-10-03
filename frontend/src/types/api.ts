@@ -10,12 +10,17 @@ export type HealthStatus = components['schemas']['HealthStatus']
 export type RefundStatus = components['schemas']['RefundStatus']
 export type RefundDecision = components['schemas']['RefundDecision']
 export type RefundCategory = components['schemas']['RefundCategory']
-export type OverrideDecisionType = components['schemas']['OverrideDecisionType']
+export type OverrideDecisionType = 'approve' | 'deny' | 'escalate'
 
 export type RefundCreateRequest = components['schemas']['RefundCreateRequest']
 export type RefundCreateResponse = components['schemas']['RefundCreateResponse']
 export type RefundClarificationRequest = components['schemas']['RefundClarificationRequest']
-export type RefundOverrideRequest = components['schemas']['RefundOverrideRequest']
+export interface RefundOverrideRequest {
+  override_decision: OverrideDecisionType
+  overrideDecision?: OverrideDecisionType
+  reason: string
+  override_reason?: string
+}
 export type ReviewerProofRequest = components['schemas']['ReviewerProofRequest']
 
 export type EvidenceItem = components['schemas']['EvidenceItem']
@@ -27,8 +32,15 @@ export type MatchedPolicyRule = components['schemas']['MatchedPolicyRule']
  * RefundDetail represents the complete refund request record returned by the backend.
  * Aliased as RefundRecord for convenience and compatibility across back-office views.
  */
-export type RefundDetail = components['schemas']['RefundDetail']
-export type RefundRecord = components['schemas']['RefundDetail']
+export type RefundRecord = components['schemas']['RefundDetail'] & {
+  escalationTier?: 'supervisor' | 'senior_manager' | null
+  escalation_tier?: 'supervisor' | 'senior_manager' | null
+  refundAmount?: number | null
+  refund_amount?: number | null
+  orderAmount?: number | null
+  order_amount?: number | null
+}
+export type RefundDetail = RefundRecord
 
 export type ProblemDetails = components['schemas']['ProblemDetails']
 export type ValidationProblemDetails = components['schemas']['ValidationProblemDetails']

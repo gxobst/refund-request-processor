@@ -381,13 +381,15 @@ export const handlers = [
     }
 
     const body = (await request.json()) as Record<string, unknown>
-    const decision = (body.override_decision || body.overrideDecision) as 'approve' | 'deny'
+    const decision = (body.override_decision || body.overrideDecision) as 'approve' | 'deny' | 'escalate'
     const reason = String(body.override_reason || body.overrideReason || '')
+    const escalationTier = (body.escalation_tier || body.escalationTier || (decision === 'escalate' ? 'senior_manager' : null)) as string | null
 
-    record.status = 'completed'
+    record.status = decision === 'escalate' ? 'escalated' : 'completed'
     record.decision = decision
     record.overrideDecision = decision
     record.overrideReason = reason
+    record.escalationTier = escalationTier ?? undefined
     record.overriddenAt = new Date().toISOString()
     record.updatedAt = new Date().toISOString()
 
