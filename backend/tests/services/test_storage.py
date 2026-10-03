@@ -3,6 +3,7 @@
 from datetime import datetime
 import io
 from pathlib import Path
+import struct
 from unittest.mock import MagicMock
 import pytest
 from botocore.exceptions import ClientError
@@ -18,6 +19,23 @@ from app.services.storage import (
     sanitize_filename,
     validate_file,
 )
+
+VALID_SAMPLE_IMAGES: dict[str, bytes] = {
+    "image/jpeg": (
+        b"\xff\xd8\xff\xc0\x00\x11\x08"
+        + struct.pack(">HH", 50, 50)
+        + b"\x03\x01\x11\x00\x02\x11\x00\x03\x11\x00\xff\xd9"
+    ),
+    "image/png": (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+        + struct.pack(">II", 50, 50)
+        + b"\x08\x02\x00\x00\x00\x00\x00\x00\x00"
+    ),
+    "image/webp": (
+        b"RIFF\x1a\x00\x00\x00WEBPVP8L\x05\x00\x00\x00\x2f"
+        + struct.pack("<I", (49 & 0x3FFF) | ((49 & 0x3FFF) << 14))
+    ),
+}
 
 
 # --- Filename Sanitization & Storage Key Tests ---
@@ -68,7 +86,7 @@ def test_generate_storage_key_with_refund_id_fallback():
 @pytest.mark.parametrize("content_type", sorted(ALLOWED_IMAGE_TYPES))
 def test_validate_file_allowed_images(content_type: str):
     """Verify all allowed image MIME types (JPEG, PNG, WebP) pass validation within 5MB."""
-    sample_bytes = b"\x00" * 1024
+    sample_bytes = VALID_SAMPLE_IMAGES[content_type]
     # Should not raise
     validate_file(sample_bytes, content_type)
 
@@ -114,7 +132,7 @@ def test_validate_file_image_size_exceeded():
 def test_local_storage_save_retrieval_and_metadata(tmp_path: Path):
     """Verify local filesystem save, retrieval, metadata calculation, and directory auto-creation."""
     service = EvidenceStorageService(local_dir=tmp_path, storage_backend="local")
-    payload = b"fake-jpeg-photo-content-for-damage"
+    payload = VALID_SAMPLE_IMAGES["image/jpeg"]
 
     metadata = service.save_file(
         file_bytes=payload,
@@ -129,6 +147,9 @@ def test_local_storage_save_retrieval_and_metadata(tmp_path: Path):
     assert metadata["filename"] == "damage.jpeg"
     assert metadata["content_type"] == "image/jpeg"
     assert metadata["size_bytes"] == len(payload)
+    assert metadata["width"] == 50
+    assert metadata["height"] == 50
+    assert metadata["format"] == "jpeg"
     assert metadata["storage_key"].startswith("evidence/ORD-1001/")
     assert metadata["url"] == f"/static/uploads/{metadata['storage_key']}"
     # Verify ISO timestamp
@@ -173,7 +194,8 @@ def test_s3_storage_save_retrieval_and_metadata():
         bucket_name="my-evidence-bucket",
     )
 
-    payload = b"s3-stored-image-bytes"
+    payload = VALID_SAMPLE_IMAGES["image/png"]
+    mock_body.read.return_value = payload
     metadata = service.save_file(
         file_bytes=payload,
         filename="broken_screen.png",
@@ -195,6 +217,9 @@ def test_s3_storage_save_retrieval_and_metadata():
     assert metadata["filename"] == "broken_screen.png"
     assert metadata["content_type"] == "image/png"
     assert metadata["size_bytes"] == len(payload)
+    assert metadata["width"] == 50
+    assert metadata["height"] == 50
+    assert metadata["format"] == "png"
     assert metadata["url"] == f"https://my-evidence-bucket.s3.amazonaws.com/{metadata['storage_key']}"
 
     # Verify S3 get_object retrieval

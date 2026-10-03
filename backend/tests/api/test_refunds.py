@@ -8,11 +8,18 @@ import pytest
 
 
 from pathlib import Path
+import struct
 from app.api.refunds import get_repository
 from app.db.repository import RefundNotFoundError
 from app.main import app
 from app.schemas.refund import EvidenceItem, RefundRecord
 from app.services.storage import EvidenceStorageService, get_evidence_storage_service
+
+VALID_PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+    + struct.pack(">II", 50, 50)
+    + b"\x08\x02\x00\x00\x00\x00\x00\x00\x00"
+)
 
 
 class MockRefundRepository:
@@ -267,8 +274,8 @@ async def test_submit_refund_request_multipart_with_image_file(
         "order_id": "ORD-1002",
         "customer_request_text": "Item arrived broken with visible cracks.",
     }
-    # Minimal valid PNG header + dummy payload
-    png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    # Minimal valid PNG header
+    png_bytes = VALID_PNG_BYTES
     files = {"file": ("damage_photo.png", png_bytes, "image/png")}
     transport = ASGITransport(app=app)
 
@@ -498,7 +505,7 @@ async def test_submit_refund_request_mixed_case_webkit_boundary(
 ):
     """Test POST /refunds with mixed-case WebKit boundary successfully parses fields and files."""
     boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"
-    image_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    image_bytes = VALID_PNG_BYTES
     body = (
         f"--{boundary}\r\n"
         'Content-Disposition: form-data; name="order_id"\r\n\r\n'

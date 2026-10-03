@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 import re
+import struct
 from typing import Any
 import uuid
 
@@ -29,6 +30,16 @@ ALLOWED_CONTENT_TYPES: set[str] = {
 # Size limits (5MB for images)
 MAX_IMAGE_SIZE_BYTES: int = 5 * 1024 * 1024
 
+# Resolution limits
+MIN_IMAGE_DIMENSION: int = 50
+MAX_IMAGE_DIMENSION: int = 8192
+
+MIME_TO_FORMAT: dict[str, str] = {
+    "image/jpeg": "jpeg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
+
 
 def sanitize_filename(filename: str) -> str:
     """Sanitize user-provided filename preventing path traversal and unsafe characters.
@@ -47,11 +58,122 @@ def sanitize_filename(filename: str) -> str:
     return cleaned if cleaned else "evidence_file"
 
 
-def validate_file(file_bytes: bytes, content_type: str) -> None:
-    """Validate media type and enforce maximum file size limits.
+def _parse_png_dimensions(file_bytes: bytes) -> tuple[int, int]:
+    """Extract width and height from PNG IHDR chunk using struct."""
+    if len(file_bytes) < 24:
+        raise ValueError("Invalid or corrupt image header")
+    if file_bytes[12:16] != b"IHDR":
+        raise ValueError("Invalid or corrupt image header")
+    width, height = struct.unpack(">II", file_bytes[16:24])
+    if width <= 0 or height <= 0:
+        raise ValueError("Invalid or corrupt image header")
+    return width, height
+
+
+def _parse_jpeg_dimensions(file_bytes: bytes) -> tuple[int, int]:
+    """Extract width and height from JPEG Start of Frame (SOF) markers using struct."""
+    length = len(file_bytes)
+    offset = 2
+    sof_markers = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+
+    while offset < length:
+        if file_bytes[offset] != 0xFF:
+            offset += 1
+            continue
+        while offset < length and file_bytes[offset] == 0xFF:
+            offset += 1
+        if offset >= length:
+            break
+        marker = file_bytes[offset]
+        offset += 1
+
+        if marker in (0xD9, 0xDA):
+            break
+
+        if marker in (0xD8, 0xD9) or (0xD0 <= marker <= 0xD7):
+            continue
+
+        if offset + 2 > length:
+            raise ValueError("Invalid or corrupt image header")
+
+        payload_len = struct.unpack(">H", file_bytes[offset : offset + 2])[0]
+        if payload_len < 2:
+            raise ValueError("Invalid or corrupt image header")
+
+        if marker in sof_markers:
+            if offset + 7 > length:
+                raise ValueError("Invalid or corrupt image header")
+            height, width = struct.unpack(">HH", file_bytes[offset + 3 : offset + 7])
+            if width <= 0 or height <= 0:
+                raise ValueError("Invalid or corrupt image header")
+            return width, height
+
+        offset += payload_len
+
+    raise ValueError("Invalid or corrupt image header")
+
+
+def _parse_webp_dimensions(file_bytes: bytes) -> tuple[int, int]:
+    """Extract width and height from WebP VP8, VP8L, or VP8X chunks using struct."""
+    length = len(file_bytes)
+    if length < 12:
+        raise ValueError("Invalid or corrupt image header")
+    if file_bytes[:4] != b"RIFF" or file_bytes[8:12] != b"WEBP":
+        raise ValueError("Invalid or corrupt image header")
+
+    offset = 12
+    while offset + 8 <= length:
+        chunk_fourcc = file_bytes[offset : offset + 4]
+        chunk_size = struct.unpack("<I", file_bytes[offset + 4 : offset + 8])[0]
+        chunk_data_offset = offset + 8
+        chunk_end = chunk_data_offset + chunk_size
+
+        if chunk_fourcc == b"VP8 ":
+            if chunk_data_offset + 10 > length:
+                raise ValueError("Invalid or corrupt image header")
+            if file_bytes[chunk_data_offset + 3 : chunk_data_offset + 6] != b"\x9d\x01\x2a":
+                raise ValueError("Invalid or corrupt image header")
+            width = struct.unpack("<H", file_bytes[chunk_data_offset + 6 : chunk_data_offset + 8])[0] & 0x3FFF
+            height = struct.unpack("<H", file_bytes[chunk_data_offset + 8 : chunk_data_offset + 10])[0] & 0x3FFF
+            if width <= 0 or height <= 0:
+                raise ValueError("Invalid or corrupt image header")
+            return width, height
+
+        elif chunk_fourcc == b"VP8L":
+            if chunk_data_offset + 5 > length:
+                raise ValueError("Invalid or corrupt image header")
+            if file_bytes[chunk_data_offset] != 0x2F:
+                raise ValueError("Invalid or corrupt image header")
+            bits = struct.unpack("<I", file_bytes[chunk_data_offset + 1 : chunk_data_offset + 5])[0]
+            width = (bits & 0x3FFF) + 1
+            height = ((bits >> 14) & 0x3FFF) + 1
+            return width, height
+
+        elif chunk_fourcc == b"VP8X":
+            if chunk_data_offset + 10 > length:
+                raise ValueError("Invalid or corrupt image header")
+            canvas_w_bytes = file_bytes[chunk_data_offset + 4 : chunk_data_offset + 7] + b"\x00"
+            canvas_h_bytes = file_bytes[chunk_data_offset + 7 : chunk_data_offset + 10] + b"\x00"
+            width = struct.unpack("<I", canvas_w_bytes)[0] + 1
+            height = struct.unpack("<I", canvas_h_bytes)[0] + 1
+            return width, height
+
+        offset = chunk_end + (chunk_size % 2)
+
+    raise ValueError("Invalid or corrupt image header")
+
+
+def validate_file(file_bytes: bytes, content_type: str) -> tuple[int, int, str]:
+    """Validate media type, binary magic bytes, resolution bounds, and size limits.
+
+    Returns:
+        tuple[int, int, str]: (width, height, detected_format) where detected_format
+        is 'jpeg', 'png', or 'webp'.
 
     Raises:
-        ValueError: If content_type is not authorized or file exceeds size limits.
+        ValueError: If content_type is unsupported, file exceeds 5MB, binary signature
+        fails verification or contradicts declared MIME type, headers are corrupt/truncated,
+        or image dimensions fall outside 50x50 to 8192x8192 pixels.
     """
     normalized_type = content_type.lower().strip()
     if normalized_type not in ALLOWED_CONTENT_TYPES:
@@ -66,6 +188,53 @@ def validate_file(file_bytes: bytes, content_type: str) -> None:
             f"File size ({size} bytes) exceeds maximum allowed limit of "
             f"{MAX_IMAGE_SIZE_BYTES} bytes (5MB) for images."
         )
+
+    if size == 0:
+        raise ValueError("Invalid or corrupt image header")
+
+    # Magic byte inspection
+    detected_format: str
+    if file_bytes.startswith(b"\xff\xd8\xff"):
+        detected_format = "jpeg"
+    elif file_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        detected_format = "png"
+    elif file_bytes.startswith(b"RIFF") and len(file_bytes) >= 12 and file_bytes[8:12] == b"WEBP":
+        detected_format = "webp"
+    else:
+        # Differentiate between truncated known magic prefix and non-image spoofed content
+        if file_bytes.startswith(b"\xff\xd8") or file_bytes.startswith(b"\x89PNG") or file_bytes.startswith(b"RIFF"):
+            raise ValueError("Invalid or corrupt image header")
+        raise ValueError("File signature does not match allowed image formats (JPEG, PNG, WebP)")
+
+    # MIME type contradiction check
+    expected_format = MIME_TO_FORMAT.get(normalized_type)
+    if expected_format is not None and detected_format != expected_format:
+        raise ValueError(
+            f"File signature does not match declared MIME type '{content_type}' "
+            f"(detected '{detected_format}')."
+        )
+
+    # Dimension extraction
+    if detected_format == "jpeg":
+        width, height = _parse_jpeg_dimensions(file_bytes)
+    elif detected_format == "png":
+        width, height = _parse_png_dimensions(file_bytes)
+    elif detected_format == "webp":
+        width, height = _parse_webp_dimensions(file_bytes)
+    else:
+        raise ValueError("File signature does not match allowed image formats (JPEG, PNG, WebP)")
+
+    # Resolution bounds enforcement
+    if width < MIN_IMAGE_DIMENSION or height < MIN_IMAGE_DIMENSION:
+        raise ValueError(
+            f"Image dimensions ({width}x{height}) are below minimum required resolution of {MIN_IMAGE_DIMENSION}x{MIN_IMAGE_DIMENSION} pixels."
+        )
+    if width > MAX_IMAGE_DIMENSION or height > MAX_IMAGE_DIMENSION:
+        raise ValueError(
+            f"Image dimensions ({width}x{height}) exceed maximum allowed resolution of {MAX_IMAGE_DIMENSION}x{MAX_IMAGE_DIMENSION} pixels."
+        )
+
+    return width, height, detected_format
 
 
 def generate_storage_key(refund_id: str, filename: str, order_id: str | None = None) -> str:
@@ -130,9 +299,9 @@ class EvidenceStorageService:
         """Generate a secure, hierarchical storage key."""
         return generate_storage_key(refund_id=refund_id, filename=filename, order_id=order_id)
 
-    def validate_file(self, file_bytes: bytes, content_type: str) -> None:
-        """Validate media type and size constraints."""
-        validate_file(file_bytes=file_bytes, content_type=content_type)
+    def validate_file(self, file_bytes: bytes, content_type: str) -> tuple[int, int, str]:
+        """Validate media type, binary magic bytes, dimensions, and size constraints."""
+        return validate_file(file_bytes=file_bytes, content_type=content_type)
 
     def get_file_url(self, storage_key: str) -> str:
         """Return an accessible URL for a given storage key."""
@@ -152,7 +321,9 @@ class EvidenceStorageService:
         order_id: str | None = None,
     ) -> dict[str, Any]:
         """Validate, store, and return metadata for an evidence file."""
-        self.validate_file(file_bytes=file_bytes, content_type=content_type)
+        width, height, detected_format = self.validate_file(
+            file_bytes=file_bytes, content_type=content_type
+        )
         storage_key = self.generate_storage_key(
             refund_id=refund_id, filename=filename, order_id=order_id
         )
@@ -185,6 +356,9 @@ class EvidenceStorageService:
             "url": url,
             "storage_backend": self.storage_backend,
             "created_at": created_at,
+            "width": width,
+            "height": height,
+            "format": detected_format,
         }
 
     def get_file(self, storage_key: str) -> bytes:

@@ -1,6 +1,7 @@
 """Unit and API integration tests for customer clarification response endpoint and workflow resumption."""
 
 from datetime import datetime, timezone
+import struct
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from httpx import ASGITransport, AsyncClient
@@ -14,6 +15,17 @@ from app.graph.runner import resume_refund_workflow, run_refund_workflow
 from app.main import app
 from app.schemas.classifier import ClassificationOutput
 from app.schemas.refund import EvidenceItem, RefundRecord
+
+VALID_JPEG_BYTES = (
+    b"\xff\xd8\xff\xc0\x00\x11\x08"
+    + struct.pack(">HH", 50, 50)
+    + b"\x03\x01\x11\x00\x02\x11\x00\x03\x11\x00\xff\xd9"
+)
+VALID_PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+    + struct.pack(">II", 50, 50)
+    + b"\x08\x02\x00\x00\x00\x00\x00\x00\x00"
+)
 
 
 class MockRefundRepository:
@@ -362,7 +374,7 @@ async def test_clarify_multipart_form_with_evidence_file(mock_repo: MockRefundRe
     mock_repo.seed_record(refund_id=refund_id, order_id="ORD-1002", status="awaiting_clarification")
     transport = ASGITransport(app=app)
 
-    file_bytes = b"fake-jpeg-photo-damage-proof"
+    file_bytes = VALID_JPEG_BYTES
     with patch("app.api.refunds.resume_refund_workflow", new_callable=AsyncMock):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post(
@@ -516,7 +528,7 @@ async def test_clarify_multipart_form_with_evidence_file_parameter(
     mock_repo.seed_record(refund_id=refund_id, order_id="ORD-1003", status="awaiting_clarification")
     transport = ASGITransport(app=app)
 
-    file_bytes = b"fake-jpeg-photo-damage-evidence-param"
+    file_bytes = VALID_JPEG_BYTES
     with patch("app.api.refunds.resume_refund_workflow", new_callable=AsyncMock) as mock_resume:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post(
@@ -550,7 +562,7 @@ async def test_clarify_mixed_case_webkit_boundary(
     refund_id = "ref-clarify-boundary"
     mock_repo.seed_record(refund_id=refund_id, order_id="ORD-1004", status="awaiting_clarification")
     boundary = "----WebKitFormBoundaryClarifyAbC123"
-    image_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    image_bytes = VALID_PNG_BYTES
     body = (
         f"--{boundary}\r\n"
         'Content-Disposition: form-data; name="response_text"\r\n\r\n'

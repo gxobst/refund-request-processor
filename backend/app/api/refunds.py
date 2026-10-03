@@ -11,7 +11,7 @@ from typing import Any
 import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from starlette.datastructures import UploadFile
-from starlette.responses import Response, StreamingResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from app.agents.proof_notifier import generate_reviewer_proof_email
 from app.auth.rbac import require_supervisor_role
@@ -237,9 +237,16 @@ async def submit_refund_request(
         ext = Path(filename).suffix.lower()
         allowed_extensions = {".jpg", ".jpeg", ".png", ".webp"}
         if ext not in allowed_extensions:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Disallowed file extension '{ext}'. Allowed extensions are: {sorted(allowed_extensions)}",
+                content={
+                    "type": "urn:problem:bad-request",
+                    "title": "Bad Request",
+                    "status": status.HTTP_400_BAD_REQUEST,
+                    "detail": f"Disallowed file extension '{ext}'. Allowed extensions are: {sorted(allowed_extensions)}",
+                    "instance": request.url.path,
+                },
+                media_type="application/problem+json",
             )
         file_bytes = await uploaded_file.read()
         file_content_type = uploaded_file.content_type or ""
@@ -248,13 +255,27 @@ async def submit_refund_request(
         except ValueError as e:
             msg = str(e)
             if "exceeds maximum allowed limit" in msg:
-                raise HTTPException(
+                return JSONResponse(
                     status_code=HTTP_413_STATUS,
-                    detail=msg,
+                    content={
+                        "type": "urn:problem:payload-too-large",
+                        "title": "Payload Too Large",
+                        "status": HTTP_413_STATUS,
+                        "detail": msg,
+                        "instance": request.url.path,
+                    },
+                    media_type="application/problem+json",
                 )
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=msg,
+                content={
+                    "type": "urn:problem:bad-request",
+                    "title": "Bad Request",
+                    "status": status.HTTP_400_BAD_REQUEST,
+                    "detail": msg,
+                    "instance": request.url.path,
+                },
+                media_type="application/problem+json",
             )
 
         saved_meta = storage_service.save_file(
@@ -584,9 +605,16 @@ async def upload_refund_evidence(
     ext = Path(filename).suffix.lower()
     allowed_extensions = {".jpg", ".jpeg", ".png", ".webp"}
     if ext not in allowed_extensions:
-        raise HTTPException(
+        return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Disallowed file extension '{ext}'. Allowed extensions are: {sorted(allowed_extensions)}",
+            content={
+                "type": "urn:problem:bad-request",
+                "title": "Bad Request",
+                "status": status.HTTP_400_BAD_REQUEST,
+                "detail": f"Disallowed file extension '{ext}'. Allowed extensions are: {sorted(allowed_extensions)}",
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
         )
 
     content_type = file.content_type or ""
@@ -597,13 +625,27 @@ async def upload_refund_evidence(
     except ValueError as e:
         msg = str(e)
         if "exceeds maximum allowed limit" in msg:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=HTTP_413_STATUS,
-                detail=msg,
+                content={
+                    "type": "urn:problem:payload-too-large",
+                    "title": "Payload Too Large",
+                    "status": HTTP_413_STATUS,
+                    "detail": msg,
+                    "instance": request.url.path,
+                },
+                media_type="application/problem+json",
             )
-        raise HTTPException(
+        return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=msg,
+            content={
+                "type": "urn:problem:bad-request",
+                "title": "Bad Request",
+                "status": status.HTTP_400_BAD_REQUEST,
+                "detail": msg,
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
         )
 
     saved_meta = storage_service.save_file(
@@ -752,9 +794,16 @@ async def clarify_refund_request(
         ext = Path(filename).suffix.lower()
         allowed_extensions = {".jpg", ".jpeg", ".png", ".webp"}
         if ext not in allowed_extensions:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Disallowed file extension '{ext}'. Allowed extensions are: {sorted(allowed_extensions)}",
+                content={
+                    "type": "urn:problem:bad-request",
+                    "title": "Bad Request",
+                    "status": status.HTTP_400_BAD_REQUEST,
+                    "detail": f"Disallowed file extension '{ext}'. Allowed extensions are: {sorted(allowed_extensions)}",
+                    "instance": request.url.path,
+                },
+                media_type="application/problem+json",
             )
         file_bytes = await evidence_file.read()
         file_content_type = evidence_file.content_type or ""
@@ -763,13 +812,27 @@ async def clarify_refund_request(
         except ValueError as e:
             msg = str(e)
             if "exceeds maximum allowed limit" in msg:
-                raise HTTPException(
+                return JSONResponse(
                     status_code=HTTP_413_STATUS,
-                    detail=msg,
+                    content={
+                        "type": "urn:problem:payload-too-large",
+                        "title": "Payload Too Large",
+                        "status": HTTP_413_STATUS,
+                        "detail": msg,
+                        "instance": request.url.path,
+                    },
+                    media_type="application/problem+json",
                 )
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=msg,
+                content={
+                    "type": "urn:problem:bad-request",
+                    "title": "Bad Request",
+                    "status": status.HTTP_400_BAD_REQUEST,
+                    "detail": msg,
+                    "instance": request.url.path,
+                },
+                media_type="application/problem+json",
             )
         saved_meta = storage_service.save_file(
             file_bytes=file_bytes,

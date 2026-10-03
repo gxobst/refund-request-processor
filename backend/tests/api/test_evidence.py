@@ -1,6 +1,8 @@
 """API integration tests for multipart evidence upload endpoint (POST /refunds/{refund_id}/evidence)."""
 
 from datetime import datetime, timezone
+from pathlib import Path
+import struct
 from typing import Any
 from unittest.mock import AsyncMock, patch
 from httpx import ASGITransport, AsyncClient
@@ -10,6 +12,30 @@ from app.api.refunds import get_repository
 from app.db.repository import RefundNotFoundError
 from app.main import app
 from app.schemas.refund import ClarificationTurn, EvidenceItem, RefundRecord
+
+
+def make_png(width: int = 50, height: int = 50) -> bytes:
+    ihdr_data = struct.pack(">II", width, height) + b"\x08\x02\x00\x00\x00"
+    ihdr_chunk = b"\x00\x00\x00\x0dIHDR" + ihdr_data + b"\x00\x00\x00\x00"
+    return b"\x89PNG\r\n\x1a\n" + ihdr_chunk
+
+
+def make_jpeg(width: int = 50, height: int = 50) -> bytes:
+    payload_len = 17
+    sof_payload = (
+        struct.pack(">H", payload_len)
+        + b"\x08"
+        + struct.pack(">HH", height, width)
+        + b"\x03\x01\x11\x00\x02\x11\x00\x03\x11\x00"
+    )
+    return b"\xff\xd8\xff\xc0" + sof_payload + b"\xff\xd9"
+
+
+def make_webp(width: int = 50, height: int = 50) -> bytes:
+    packed = ((width - 1) & 0x3FFF) | (((height - 1) & 0x3FFF) << 14)
+    vp8l_data = b"\x2f" + struct.pack("<I", packed)
+    chunk = b"VP8L" + struct.pack("<I", len(vp8l_data)) + vp8l_data
+    return b"RIFF" + struct.pack("<I", len(chunk) + 4) + b"WEBP" + chunk
 
 
 class MockRefundRepository:
@@ -153,7 +179,7 @@ async def test_upload_evidence_success_201(mock_repo: MockRefundRepository):
     mock_repo.seed_record(refund_id=refund_id, order_id="ORD-2001")
     transport = ASGITransport(app=app)
 
-    file_bytes = b"fake-jpg-broken-screen"
+    file_bytes = make_jpeg(50, 50)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
             f"/refunds/{refund_id}/evidence",
@@ -169,6 +195,9 @@ async def test_upload_evidence_success_201(mock_repo: MockRefundRepository):
     assert item["filename"] == "broken_screen.jpg"
     assert item["content_type"] == "image/jpeg"
     assert item["size_bytes"] == len(file_bytes)
+    assert item["width"] == 50
+    assert item["height"] == 50
+    assert item["format"] == "jpeg"
     assert item["storage_key"].startswith("evidence/ORD-2001/")
     assert item["url"].startswith("/static/uploads/evidence/ORD-2001/")
     assert "evidence_id" in item
@@ -182,11 +211,13 @@ async def test_upload_evidence_multiple_sequential(mock_repo: MockRefundReposito
     mock_repo.seed_record(refund_id=refund_id, order_id="ORD-2002")
     transport = ASGITransport(app=app)
 
+    png_bytes = make_png(50, 50)
+    webp_bytes = make_webp(50, 50)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # First upload: photo of item
         res1 = await client.post(
             f"/refunds/{refund_id}/evidence",
-            files={"file": ("item_photo.png", b"item-png-bytes", "image/png")},
+            files={"file": ("item_photo.png", png_bytes, "image/png")},
         )
         assert res1.status_code == 201
         assert len(res1.json()["evidence"]) == 1
@@ -194,7 +225,7 @@ async def test_upload_evidence_multiple_sequential(mock_repo: MockRefundReposito
         # Second upload: packaging photo
         res2 = await client.post(
             f"/refunds/{refund_id}/evidence",
-            files={"file": ("packaging.webp", b"webp-bytes", "image/webp")},
+            files={"file": ("packaging.webp", webp_bytes, "image/webp")},
         )
         assert res2.status_code == 201
         assert len(res2.json()["evidence"]) == 2
@@ -213,7 +244,7 @@ async def test_upload_evidence_not_found_404(mock_repo: MockRefundRepository):
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
             "/refunds/nonexistent-refund-id/evidence",
-            files={"file": ("photo.jpg", b"bytes", "image/jpeg")},
+            files={"file": ("photo.jpg", make_jpeg(50, 50), "image/jpeg")},
         )
 
     assert response.status_code == 404
@@ -335,7 +366,7 @@ async def test_upload_evidence_mixed_case_webkit_boundary(mock_repo: MockRefundR
     refund_id = "ref-evidence-boundary"
     mock_repo.seed_record(refund_id=refund_id, order_id="ORD-2003")
     boundary = "----WebKitFormBoundaryAbCdEf123456"
-    image_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    image_bytes = make_png(50, 50)
     body = (
         f"--{boundary}\r\n"
         'Content-Disposition: form-data; name="file"; filename="screen.png"\r\n'
@@ -382,7 +413,7 @@ async def test_upload_evidence_awaiting_clarification_queues_workflow_and_sets_p
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post(
                 f"/refunds/{refund_id}/evidence",
-                files={"file": ("damaged_monitor.png", b"image-png-bytes", "image/png")},
+                files={"file": ("damaged_monitor.png", make_png(50, 50), "image/png")},
             )
 
     assert response.status_code == 201
@@ -429,7 +460,7 @@ async def test_upload_evidence_non_awaiting_clarification_does_not_queue_workflo
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post(
                 f"/refunds/{refund_id}/evidence",
-                files={"file": ("extra_photo.jpg", b"jpeg-bytes", "image/jpeg")},
+                files={"file": ("extra_photo.jpg", make_jpeg(50, 50), "image/jpeg")},
             )
 
     assert response.status_code == 201
@@ -466,7 +497,7 @@ async def test_upload_evidence_validation_failures_never_enqueue_background_task
             # 1. 404 Not Found (non-existent refund_id)
             res_404 = await client.post(
                 "/refunds/nonexistent-id/evidence",
-                files={"file": ("valid.png", b"bytes", "image/png")},
+                files={"file": ("valid.png", make_png(50, 50), "image/png")},
             )
             assert res_404.status_code == 404
             mock_resume.assert_not_called()
@@ -515,7 +546,7 @@ async def test_evidence_upload_updates_clarification_history_evidence_ids(
         # POST evidence
         res = await client.post(
             f"/refunds/{refund_id}/evidence",
-            files={"file": ("damage_photo.png", b"fake-png-bytes", "image/png")},
+            files={"file": ("damage_photo.png", make_png(50, 50), "image/png")},
         )
         assert res.status_code == 201
         data = res.json()

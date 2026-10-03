@@ -398,6 +398,42 @@ describe('CustomerClarificationModal', () => {
     )
   })
 
+  it('displays problemDetails.detail in clarification-error-banner when evidence upload fails with HTTP 400', async () => {
+    vi.mocked(refundService.getRefundById).mockResolvedValue(mockRefundWithPrompt)
+    const problemError = new ApiError({
+      type: 'urn:problem:bad-request',
+      title: 'Bad Request',
+      status: 400,
+      detail: 'Image dimensions (30x30) are below minimum required resolution of 50x50 pixels.',
+      instance: '/v1/refunds/ref-12345/clarify',
+    })
+    vi.mocked(refundService.submitClarification).mockRejectedValueOnce(problemError)
+
+    renderWithClient(
+      <CustomerClarificationModal
+        refundId="ref-12345"
+        isOpen={true}
+        onClose={vi.fn()}
+      />
+    )
+
+    const textarea = screen.getByTestId('clarification-response-textarea')
+    fireEvent.change(textarea, { target: { value: 'Customer clarification response text.' } })
+
+    const submitBtn = screen.getByTestId('clarification-submit-button')
+    fireEvent.click(submitBtn)
+
+    await waitFor(() => {
+      const errorBanner = screen.getByTestId('clarification-error-banner')
+      expect(errorBanner).toBeInTheDocument()
+      expect(errorBanner).toHaveAttribute('role', 'alert')
+      expect(errorBanner).toHaveTextContent('Bad Request')
+      expect(errorBanner).toHaveTextContent(
+        'Image dimensions (30x30) are below minimum required resolution of 50x50 pixels.'
+      )
+    })
+  })
+
   it('acknowledges success state and clicking Done triggers onClose and resets state', async () => {
     vi.mocked(refundService.getRefundById).mockResolvedValue(mockRefundWithPrompt)
     vi.mocked(refundService.submitClarification).mockResolvedValue(mockUpdatedRecord)

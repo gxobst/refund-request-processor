@@ -27,6 +27,11 @@ class EvidenceItem(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc).isoformat(),
         description="ISO-8601 creation timestamp.",
     )
+    width: int | None = Field(default=None, description="Image width in pixels.")
+    height: int | None = Field(default=None, description="Image height in pixels.")
+    format: str | None = Field(
+        default=None, description="Detected image format ('jpeg', 'png', 'webp')."
+    )
 
 
 class ClarificationTurn(BaseModel):

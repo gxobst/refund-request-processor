@@ -17,6 +17,7 @@ from langchain_core.runnables import RunnableLambda
 import pytest
 
 from pathlib import Path
+import struct
 
 from app.api.refunds import get_repository
 from app.core.config import Settings
@@ -28,6 +29,17 @@ from app.schemas.classifier import ClassificationOutput
 from app.schemas.policy_checker import PolicyCheckerOutput
 from app.schemas.refund import RefundRecord
 from app.services.storage import EvidenceStorageService, get_evidence_storage_service
+
+VALID_JPEG_BYTES = (
+    b"\xff\xd8\xff\xc0\x00\x11\x08"
+    + struct.pack(">HH", 50, 50)
+    + b"\x03\x01\x11\x00\x02\x11\x00\x03\x11\x00\xff\xd9"
+)
+VALID_PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+    + struct.pack(">II", 50, 50)
+    + b"\x08\x02\x00\x00\x00\x00\x00\x00\x00"
+)
 
 
 # --- In-Memory DynamoDB Mock Components for Offline Integration Testing ---
@@ -997,7 +1009,7 @@ async def test_e2e_reviewer_proof_request_and_clarification_resumption(
         assert "JPEG, PNG, or WebP" in proof_data["clarification_email_text"]
 
         # Step 3: Customer submits clarification response with attached evidence via POST /refunds/{refund_id}/clarify
-        file_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+        file_bytes = VALID_PNG_BYTES
         clarify_payload = {
             "response_text": "Here is the photo of the shattered screen as requested by the supervisor.",
         }
@@ -1156,7 +1168,7 @@ async def test_e2e_damaged_without_evidence_pauses_and_resumes_with_evidence(
 
         # Step 3: Customer uploads damage photo evidence via POST /refunds/{refund_id}/evidence
         # This automatically resumes background workflow evaluation without calling /clarify
-        file_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+        file_bytes = VALID_JPEG_BYTES
         evidence_res = await client.post(
             f"/refunds/{refund_id}/evidence",
             files={"file": ("broken_chair.jpg", file_bytes, "image/jpeg")},
@@ -1218,7 +1230,7 @@ async def test_e2e_high_value_damaged_pauses_for_photos_and_escalates_after_evid
         assert "photo" in paused_record.get("clarification_prompt", "").lower()
 
         # Step 3: Customer submits clarification with attached photo evidence
-        file_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+        file_bytes = VALID_JPEG_BYTES
         clarify_res = await client.post(
             f"/refunds/{refund_id}/clarify",
             data={"response_text": "Here is the photo of the cracked gaming monitor screen."},
@@ -1278,7 +1290,7 @@ async def test_e2e_high_value_damaged_evidence_upload_auto_resumes_and_escalates
 
         # Step 3: Customer uploads photo evidence via POST /refunds/{refund_id}/evidence
         # Automatically resumes workflow without calling /clarify
-        file_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+        file_bytes = VALID_JPEG_BYTES
         evidence_res = await client.post(
             f"/refunds/{refund_id}/evidence",
             files={"file": ("cracked_monitor.jpg", file_bytes, "image/jpeg")},
@@ -1439,7 +1451,7 @@ async def test_e2e_wrong_item_with_image_evidence_verifies_and_completes(
         assert paused_record["category"] == "wrong_item"
 
         # Step 2: Customer uploads photo evidence of wrong item via POST /refunds/{refund_id}/evidence
-        file_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+        file_bytes = VALID_JPEG_BYTES
         evidence_res = await client.post(
             f"/refunds/{refund_id}/evidence",
             files={"file": ("received_lamp.jpg", file_bytes, "image/jpeg")},
