@@ -1,4 +1,5 @@
-import { apiClient } from './apiClient'
+import { apiClient, buildUrl } from './apiClient'
+import { getActiveUserRole } from '../context/RoleContext'
 
 export interface StatusBreakdown {
   pending: number
@@ -77,3 +78,47 @@ export async function fetchAnalyticsTrends(
   )
 }
 
+/**
+ * Exports operational analytics report as a binary Blob in CSV or PDF format.
+ */
+export async function exportAnalyticsReport(
+  format: 'csv' | 'pdf',
+  startDate?: string,
+  endDate?: string
+): Promise<Blob> {
+  const params = new URLSearchParams()
+  params.append('format', format)
+  if (startDate) params.append('start_date', startDate)
+  if (endDate) params.append('end_date', endDate)
+  const queryString = params.toString()
+  const path = `/v1/analytics/export?${queryString}`
+  const url = buildUrl(path)
+
+  const headers = new Headers()
+  headers.set('X-User-Role', getActiveUserRole())
+  if (format === 'csv') {
+    headers.set('Accept', 'text/csv, application/problem+json')
+  } else {
+    headers.set('Accept', 'application/pdf, application/problem+json')
+  }
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers,
+  })
+
+  if (!response.ok) {
+    let errorMsg = `Export failed with status ${response.status}`
+    try {
+      const errJson = await response.json()
+      if (errJson?.detail) {
+        errorMsg = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail)
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(errorMsg)
+  }
+
+  return await response.blob()
+}

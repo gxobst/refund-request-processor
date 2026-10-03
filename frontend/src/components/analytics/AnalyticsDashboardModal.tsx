@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   BarChart3,
@@ -14,6 +14,9 @@ import {
   HelpCircle,
   Timer,
   Calendar,
+  Download,
+  FileSpreadsheet,
+  FileText,
 } from 'lucide-react'
 import {
   Dialog,
@@ -27,6 +30,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card'
 import {
   fetchAnalyticsMetrics,
   fetchAnalyticsTrends,
+  exportAnalyticsReport,
   type AnalyticsMetrics,
   type AnalyticsTrendsResponse,
 } from '@/services/analyticsService'
@@ -106,6 +110,49 @@ export function AnalyticsDashboardModal({ isOpen, onClose }: AnalyticsDashboardM
     refetchTrends()
   }
 
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false)
+  const [isExporting, setIsExporting] = useState<'csv' | 'pdf' | null>(null)
+  const [exportError, setExportError] = useState<string | null>(null)
+  const exportMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setIsExportMenuOpen(false)
+      }
+    }
+    if (isExportMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [isExportMenuOpen])
+
+  const handleExport = async (format: 'csv' | 'pdf') => {
+    setIsExporting(format)
+    setExportError(null)
+    try {
+      const blob = await exportAnalyticsReport(format, startDate, endDate)
+      const todayStr = new Date().toISOString().split('T')[0]
+      const filename = `analytics-report-${todayStr}.${format}`
+      const url = typeof window.URL?.createObjectURL === 'function' ? window.URL.createObjectURL(blob) : ''
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      if (typeof window.URL?.revokeObjectURL === 'function' && url) {
+        window.URL.revokeObjectURL(url)
+      }
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Failed to export analytics report')
+    } finally {
+      setIsExporting(null)
+    }
+  }
+
   const total = metrics?.total_requests || 0
 
   const formatPercent = (val: number | undefined): string => {
@@ -165,21 +212,102 @@ export function AnalyticsDashboardModal({ isOpen, onClose }: AnalyticsDashboardM
                 </DialogDescription>
               </div>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleRefresh}
-              disabled={isFetching}
-              data-testid="analytics-refresh-button"
-              aria-label="Refresh analytics metrics"
-              className="flex items-center space-x-1.5 text-xs text-slate-600 hover:text-slate-900"
-            >
-              <RefreshCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
-              <span>Refresh</span>
-            </Button>
+            <div className="flex items-center space-x-2">
+              <div className="relative inline-block text-left" ref={exportMenuRef}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsExportMenuOpen((prev) => !prev)}
+                  disabled={!!isExporting}
+                  data-testid="analytics-export-button"
+                  aria-expanded={isExportMenuOpen}
+                  aria-haspopup="true"
+                  className="flex items-center space-x-1.5 text-xs text-slate-600 hover:text-slate-900"
+                >
+                  {isExporting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Download className="h-3.5 w-3.5 text-slate-500" />
+                  )}
+                  <span>{isExporting ? `Exporting...` : 'Export'}</span>
+                </Button>
+
+                <div
+                  role="menu"
+                  className={cn(
+                    'absolute right-0 z-50 mt-1.5 w-44 rounded-md bg-white shadow-lg border border-slate-200 py-1 transition-all',
+                    !isExportMenuOpen && 'hidden'
+                  )}
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-testid="analytics-export-csv"
+                    disabled={!!isExporting}
+                    onClick={() => {
+                      setIsExportMenuOpen(false)
+                      handleExport('csv')
+                    }}
+                    className="flex w-full items-center px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    <FileSpreadsheet className="h-3.5 w-3.5 mr-2 text-emerald-600" />
+                    Export as CSV
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    data-testid="analytics-export-pdf"
+                    disabled={!!isExporting}
+                    onClick={() => {
+                      setIsExportMenuOpen(false)
+                      handleExport('pdf')
+                    }}
+                    className="flex w-full items-center px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    <FileText className="h-3.5 w-3.5 mr-2 text-rose-600" />
+                    Export as PDF
+                  </button>
+                </div>
+              </div>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleRefresh}
+                disabled={isFetching}
+                data-testid="analytics-refresh-button"
+                aria-label="Refresh analytics metrics"
+                className="flex items-center space-x-1.5 text-xs text-slate-600 hover:text-slate-900"
+              >
+                <RefreshCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
+                <span>Refresh</span>
+              </Button>
+            </div>
           </div>
         </DialogHeader>
+
+        {/* Export Error Alert */}
+        {exportError && (
+          <div
+            role="alert"
+            data-testid="analytics-export-error"
+            className="flex items-center justify-between rounded-md bg-rose-50 border border-rose-200 p-3 text-xs text-rose-800"
+          >
+            <div className="flex items-center space-x-2">
+              <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
+              <span>{exportError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setExportError(null)}
+              className="text-rose-600 hover:text-rose-800 font-semibold ml-2 text-xs"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
 
         {/* Filter & Controls Toolbar */}
         {!isLoading && !isError && (

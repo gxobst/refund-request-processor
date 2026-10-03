@@ -871,6 +871,46 @@ class RefundRepository:
             points=points,
         )
 
+    def get_analytics_category_breakdown(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict]:
+        """Aggregate refund requests by category with decision outcome breakdowns."""
+        table = getattr(self, "_table", self.table)
+        response = table.scan()
+        raw_items = response.get("Items", []) if isinstance(response, dict) else (response or [])
+
+        raw_items = _filter_items_by_date_range(raw_items, start_date=start_date, end_date=end_date)
+
+        categories: dict[str, dict] = {}
+        for item in raw_items:
+            raw_category = item.get("category")
+            if raw_category is not None and str(raw_category).strip():
+                cat_key = str(raw_category).strip()
+            else:
+                cat_key = "unclassified"
+
+            if cat_key not in categories:
+                categories[cat_key] = {
+                    "category": cat_key,
+                    "count": 0,
+                    "auto_approved": 0,
+                    "escalated": 0,
+                    "denied": 0,
+                }
+
+            categories[cat_key]["count"] += 1
+            raw_decision = str(item.get("decision") or "").strip().lower()
+            if raw_decision == "auto_approve":
+                categories[cat_key]["auto_approved"] += 1
+            elif raw_decision == "escalate":
+                categories[cat_key]["escalated"] += 1
+            elif raw_decision == "deny":
+                categories[cat_key]["denied"] += 1
+
+        return sorted(categories.values(), key=lambda x: x["category"])
+
 
 
 
