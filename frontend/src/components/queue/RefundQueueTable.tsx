@@ -5,8 +5,15 @@ import {
   AlertCircle,
   FileQuestion,
   RotateCcw,
+  Download,
 } from 'lucide-react'
 import { listRefunds } from '@/services/refundService'
+import {
+  serializeToCsv,
+  serializeToJson,
+  generateExportFilename,
+  downloadExportFile,
+} from '@/utils/exportUtils'
 import { DecisionBadge } from '@/components/badges/DecisionBadge'
 import { StatusBadge } from '@/components/badges/StatusBadge'
 import { Button } from '@/components/ui/Button'
@@ -194,6 +201,52 @@ export function RefundQueueTable({
     }
   }, [error])
 
+  // Export dropdown state and click-outside / escape listeners
+  const [isExportOpen, setIsExportOpen] = React.useState(false)
+  const exportDropdownRef = React.useRef<HTMLDivElement>(null)
+
+  React.useEffect(() => {
+    if (!isExportOpen) return
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      if (
+        exportDropdownRef.current &&
+        !exportDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsExportOpen(false)
+      }
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsExportOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isExportOpen])
+
+  const handleExportCsv = () => {
+    const statusParam = activeTab === 'all' ? 'all' : (currentTabConfig.statusFilter || activeTab)
+    const filename = generateExportFilename('csv', statusParam)
+    const content = serializeToCsv(refunds)
+    downloadExportFile(content, filename, 'text/csv; charset=utf-8')
+    setIsExportOpen(false)
+  }
+
+  const handleExportJson = () => {
+    const statusParam = activeTab === 'all' ? 'all' : (currentTabConfig.statusFilter || activeTab)
+    const filename = generateExportFilename('json', statusParam)
+    const content = serializeToJson(refunds)
+    downloadExportFile(content, filename, 'application/json')
+    setIsExportOpen(false)
+  }
+
   return (
     <div
       className={cn(
@@ -290,6 +343,52 @@ export function RefundQueueTable({
             />
             <span>Refresh</span>
           </Button>
+
+          {/* Export Dropdown Trigger & Menu */}
+          <div className="relative inline-block text-left" ref={exportDropdownRef}>
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="export-dropdown-button"
+              aria-haspopup="true"
+              aria-expanded={isExportOpen}
+              disabled={refunds.length === 0}
+              title={refunds.length === 0 ? 'No refund requests to export' : undefined}
+              onClick={() => setIsExportOpen((prev) => !prev)}
+              className="h-8 px-2.5 text-slate-600 hover:text-slate-900 border-slate-300"
+            >
+              <Download className="h-3.5 w-3.5 mr-1.5" aria-hidden="true" />
+              <span>Export</span>
+            </Button>
+
+            {isExportOpen && (
+              <div
+                role="menu"
+                aria-orientation="vertical"
+                aria-labelledby="export-dropdown-button"
+                className="absolute right-0 mt-1 w-36 origin-top-right rounded-md bg-white py-1 shadow-lg ring-1 ring-black ring-opacity-5 z-20 focus:outline-none border border-slate-200"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="export-csv-button"
+                  onClick={handleExportCsv}
+                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors flex items-center"
+                >
+                  Export as CSV
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="export-json-button"
+                  onClick={handleExportJson}
+                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors flex items-center"
+                >
+                  Export as JSON
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

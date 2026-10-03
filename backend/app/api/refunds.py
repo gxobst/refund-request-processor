@@ -1,4 +1,6 @@
 import asyncio
+import csv
+from datetime import datetime, timezone
 from email.parser import BytesParser
 from email.policy import default
 import io
@@ -9,7 +11,7 @@ from typing import Any
 import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from starlette.datastructures import UploadFile
-from starlette.responses import StreamingResponse
+from starlette.responses import Response, StreamingResponse
 
 from app.agents.proof_notifier import generate_reviewer_proof_email
 from app.db.repository import RefundNotFoundError, RefundRepository
@@ -385,6 +387,111 @@ async def subscribe_refund_events(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+CSV_EXPORT_HEADERS = [
+    "Refund ID",
+    "Order ID",
+    "Status",
+    "Decision",
+    "Category",
+    "Refund Amount",
+    "Confidence Score",
+    "Customer Request",
+    "Decision Reasoning",
+    "Override Decision",
+    "Override Reason",
+    "Created At",
+    "Updated At",
+]
+
+
+def _format_export_csv(records: list[RefundRecord]) -> str:
+    output = io.StringIO()
+    writer = csv.writer(output, lineterminator="\r\n", quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(CSV_EXPORT_HEADERS)
+
+    for r in records:
+        rec_dict = r.model_dump() if hasattr(r, "model_dump") else r.__dict__
+        refund_amount = rec_dict.get("refund_amount")
+        if refund_amount is None:
+            refund_amount = rec_dict.get("order_amount")
+
+        conf_score = getattr(r, "confidence_score", None)
+        confidence_str = "" if conf_score is None else str(conf_score)
+        amount_str = "" if refund_amount is None else str(refund_amount)
+
+        writer.writerow([
+            getattr(r, "refund_id", "") or "",
+            getattr(r, "order_id", "") or "",
+            getattr(r, "status", "") or "",
+            getattr(r, "decision", "") or "",
+            getattr(r, "category", "") or "",
+            amount_str,
+            confidence_str,
+            getattr(r, "customer_request_text", "") or "",
+            getattr(r, "reasoning", "") or "",
+            getattr(r, "override_decision", "") or "",
+            getattr(r, "override_reason", "") or "",
+            getattr(r, "created_at", "") or "",
+            getattr(r, "updated_at", "") or "",
+        ])
+
+    return output.getvalue()
+
+
+@router.get(
+    "/export",
+    status_code=status.HTTP_200_OK,
+    summary="Export refund queue records as CSV or JSON",
+)
+async def export_refund_requests(
+    request: Request,
+    format: str = Query(default="csv"),
+    status: RefundStatus | None = Query(default=None),
+    repo: RefundRepository = Depends(get_repository),
+) -> Response:
+    """Export refund requests matching the optional status filter in CSV or JSON format."""
+    normalized_format = format.strip().lower() if format else ""
+    if normalized_format not in ("csv", "json"):
+        raise HTTPException(
+            status_code=HTTP_422_STATUS,
+            detail={
+                "type": "urn:problem:validation-error",
+                "title": "Validation Error",
+                "status": 422,
+                "detail": f"Invalid export format '{format}'. Supported formats are 'csv' and 'json'.",
+                "instance": request.url.path,
+                "invalidParams": [{"name": "format", "reason": "Must be 'csv' or 'json'"}],
+            },
+        )
+
+    records = repo.list_refund_requests(status=status, limit=10000)
+
+    now = datetime.now(timezone.utc)
+    timestamp = now.strftime("%Y%m%d-%H%M%S")
+    status_str = status.strip().lower() if status else "all"
+
+    if normalized_format == "csv":
+        filename = f"refunds-{status_str}-{timestamp}.csv"
+        csv_content = _format_export_csv(records)
+        return Response(
+            content=csv_content,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    else:
+        filename = f"refunds-{status_str}-{timestamp}.json"
+        json_data = [
+            r.model_dump(mode="json") if hasattr(r, "model_dump") else r
+            for r in records
+        ]
+        json_content = json.dumps(json_data, indent=2)
+        return Response(
+            content=json_content,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
 
 @router.get(
