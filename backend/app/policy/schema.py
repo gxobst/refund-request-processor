@@ -211,3 +211,32 @@ class PolicyEvaluationResult(BaseModel):
     details: str | dict[str, str] = ""
     matched_policy_rule: CategoryPolicy | dict[str, Any] | None = None
 
+
+class PolicyFieldChange(BaseModel):
+    """Field-level diff tracking previous and new threshold values."""
+
+    old_value: Any = Field(..., description="Previous threshold or rule value.")
+    new_value: Any = Field(..., description="Updated threshold or rule value.")
+
+
+class PolicyAuditEntry(BaseModel):
+    """Audit log entry capturing policy rule changes and rollback snapshots."""
+
+    audit_id: str = Field(..., description="Unique audit entry identifier.")
+    category: str = Field(..., description="Refund category name.")
+    timestamp: str = Field(..., description="ISO-8601 UTC timestamp of change.")
+    operator_id: str = Field(
+        default="supervisor",
+        description="Identifier or role of the operator making the change.",
+    )
+    changes: dict[str, PolicyFieldChange | dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Dictionary mapping field names to old and new values.",
+    )
+    previous_state: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Snapshot dictionary of the category policy prior to this change.",
+    )
+    action: str = Field(default="update", description="Type of action: update or rollback.")
+
+

@@ -5,9 +5,15 @@ from fastapi import APIRouter, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from app.policy.loader import get_active_policies, update_category_policy
+from app.policy.loader import (
+    get_active_policies,
+    get_policy_history,
+    rollback_policy,
+    update_category_policy,
+)
 from app.policy.schema import (
     CategoryPolicyUpdate,
+    PolicyAuditEntry,
     PolicyItemResponse,
     RefundCategory,
 )
@@ -43,6 +49,126 @@ async def list_policies() -> list[PolicyItemResponse]:
             )
         )
     return results
+
+
+@router.get(
+    "/history",
+    response_model=list[PolicyAuditEntry],
+    status_code=status.HTTP_200_OK,
+    summary="Retrieve policy configuration version history and audit log",
+)
+async def get_policies_history(
+    request: Request,
+    category: str | None = None,
+) -> Any:
+    """Retrieve audit history entries, optionally filtered by category.
+
+    Returns HTTP 200 with list[PolicyAuditEntry] sorted reverse chronologically.
+    Returns HTTP 404 ProblemDetails if category is unrecognized.
+    """
+    if category is not None:
+        normalized_category = str(category).strip().lower()
+        if normalized_category not in VALID_CATEGORIES:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={
+                    "type": "urn:problem:not-found",
+                    "title": "Not Found",
+                    "status": 404,
+                    "detail": (
+                        f"Refund category '{category}' is not valid. "
+                        f"Valid categories: {', '.join(VALID_CATEGORIES)}."
+                    ),
+                    "instance": request.url.path,
+                },
+                media_type="application/problem+json",
+            )
+        return get_policy_history(category=normalized_category)
+    return get_policy_history()
+
+
+@router.post(
+    "/{category}/rollback",
+    response_model=PolicyItemResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Rollback policy configuration for a specific refund category",
+)
+async def rollback_category_policy(
+    category: str,
+    request: Request,
+    audit_id: str | None = None,
+) -> Any:
+    """Restore policy configuration to previous state from audit log.
+
+    Accepts optional audit_id via query parameter or JSON body.
+    Broadcasts policy_update event via SSE.
+    """
+    normalized_category = str(category).strip().lower()
+    if normalized_category not in VALID_CATEGORIES:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "type": "urn:problem:not-found",
+                "title": "Not Found",
+                "status": 404,
+                "detail": (
+                    f"Refund category '{category}' is not valid. "
+                    f"Valid categories: {', '.join(VALID_CATEGORIES)}."
+                ),
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
+        )
+
+    target_audit_id = audit_id
+    if not target_audit_id:
+        try:
+            content_type = request.headers.get("content-type", "")
+            if "application/json" in content_type:
+                body = await request.json()
+                if isinstance(body, dict):
+                    target_audit_id = body.get("audit_id") or body.get("auditId")
+        except Exception:
+            pass
+
+    operator_id = (
+        request.headers.get("X-User-Id")
+        or request.headers.get("X-User-Role")
+        or "supervisor"
+    )
+
+    try:
+        updated_policy, _ = rollback_policy(
+            category=normalized_category,
+            audit_id=target_audit_id,
+            operator_id=operator_id,
+        )
+    except (KeyError, ValueError) as err:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "type": "urn:problem:not-found",
+                "title": "Not Found",
+                "status": 404,
+                "detail": str(err),
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
+        )
+
+    response_item = PolicyItemResponse(
+        category=normalized_category,
+        return_window_days=updated_policy.return_window_days,
+        max_refund_amount=updated_policy.max_refund_amount,
+        auto_approve_threshold=updated_policy.auto_approve_threshold,
+        requires_proof=updated_policy.requires_proof,
+        eligible_delivery_statuses=updated_policy.eligible_delivery_statuses,
+        refund_window_days=updated_policy.refund_window_days,
+        max_order_amount=updated_policy.max_order_amount,
+    )
+    await broadcaster.publish("policy_update", response_item.model_dump())
+    return response_item
+
 
 
 @router.put(
@@ -128,9 +254,20 @@ async def update_policy(category: str, request: Request) -> Any:
             media_type="application/problem+json",
         )
 
+    operator_id = (
+        request.headers.get("X-User-Id")
+        or request.headers.get("X-User-Role")
+        or "supervisor"
+    )
+
     try:
-        updated_policy = update_category_policy(normalized_category, update_model)
+        updated_policy = update_category_policy(
+            normalized_category,
+            update_model,
+            operator_id=operator_id,
+        )
     except KeyError:
+
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
             content={

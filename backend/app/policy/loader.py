@@ -1,13 +1,24 @@
 """Static policy loader module."""
 
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
-from app.policy.schema import CategoryPolicy, CategoryPolicyUpdate, PolicyConfig, RefundCategory
+import uuid
+from app.policy.schema import (
+    CategoryPolicy,
+    CategoryPolicyUpdate,
+    PolicyAuditEntry,
+    PolicyConfig,
+    PolicyFieldChange,
+    RefundCategory,
+)
 
 DEFAULT_POLICY_PATH = Path(__file__).resolve().parent.parent / "data" / "policies.json"
 
 _active_policy_config: PolicyConfig | None = None
+_policy_audit_history: list[PolicyAuditEntry] = []
+
 
 
 def load_policies(file_path: Path | str | None = None) -> PolicyConfig:
@@ -51,20 +62,23 @@ def reset_active_policies() -> PolicyConfig:
 
     Useful for test isolation.
     """
-    global _active_policy_config
+    global _active_policy_config, _policy_audit_history
     _active_policy_config = load_policies()
+    _policy_audit_history = []
     return _active_policy_config
 
 
 def update_category_policy(
     category: str,
     update_data: CategoryPolicyUpdate | dict[str, Any],
+    operator_id: str = "supervisor",
 ) -> CategoryPolicy:
     """Validate and update the active policy rules for a given refund category.
 
     Args:
         category: Refund category name (e.g. 'damaged', 'late_delivery').
         update_data: CategoryPolicyUpdate model or dictionary with updated policy fields.
+        operator_id: Operator or role identifier performing the change (default: 'supervisor').
 
     Returns:
         Updated CategoryPolicy instance.
@@ -83,6 +97,7 @@ def update_category_policy(
 
     active_config = get_active_policies()
     current_policy = getattr(active_config, normalized_category)
+    previous_state = current_policy.model_dump()
 
     if isinstance(update_data, CategoryPolicyUpdate):
         update_dict = update_data.model_dump(exclude_unset=True)
@@ -108,5 +123,123 @@ def update_category_policy(
         merged["max_refund_amount"] = update_dict["max_order_amount"]
 
     updated_policy = CategoryPolicy.model_validate(merged)
+    new_state = updated_policy.model_dump()
+
+    changes: dict[str, PolicyFieldChange | dict[str, Any]] = {}
+    for key, new_val in new_state.items():
+        old_val = previous_state.get(key)
+        if old_val != new_val:
+            changes[key] = PolicyFieldChange(old_value=old_val, new_value=new_val)
+
+    audit_entry = PolicyAuditEntry(
+        audit_id=f"audit_{uuid.uuid4().hex[:10]}",
+        category=normalized_category,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        operator_id=operator_id or "supervisor",
+        changes=changes,
+        previous_state=previous_state,
+        action="update",
+    )
+    _policy_audit_history.append(audit_entry)
+
     setattr(active_config, normalized_category, updated_policy)
     return updated_policy
+
+
+def get_policy_history(category: str | None = None) -> list[PolicyAuditEntry]:
+    """Retrieve policy audit entries sorted reverse chronological (newest first).
+
+    Args:
+        category: Optional category filter.
+
+    Returns:
+        List of PolicyAuditEntry instances.
+
+    Raises:
+        KeyError: If category is specified but invalid.
+    """
+    if category is not None:
+        normalized = str(category).strip().lower()
+        valid_categories = {c.value for c in RefundCategory}
+        if normalized not in valid_categories:
+            raise KeyError(
+                f"Category '{category}' is not a valid refund category. "
+                f"Valid categories are: {', '.join(sorted(valid_categories))}"
+            )
+        entries = [e for e in _policy_audit_history if e.category == normalized]
+    else:
+        entries = list(_policy_audit_history)
+
+    return sorted(entries, key=lambda e: e.timestamp, reverse=True)
+
+
+def rollback_policy(
+    category: str,
+    audit_id: str | None = None,
+    operator_id: str = "supervisor",
+) -> tuple[CategoryPolicy, PolicyAuditEntry]:
+    """Restore a category policy to its state before a specific audit change or to the immediate predecessor.
+
+    Args:
+        category: Refund category name.
+        audit_id: Optional ID of the audit entry whose previous_state should be restored.
+        operator_id: Operator performing rollback (default: 'supervisor').
+
+    Returns:
+        Tuple of (restored CategoryPolicy, newly created rollback PolicyAuditEntry).
+
+    Raises:
+        KeyError: If category is invalid.
+        ValueError: If audit_id does not exist or if no history exists for the category.
+    """
+    normalized_category = str(category).strip().lower()
+    valid_categories = {c.value for c in RefundCategory}
+    if normalized_category not in valid_categories:
+        raise KeyError(
+            f"Category '{category}' is not a valid refund category. "
+            f"Valid categories are: {', '.join(sorted(valid_categories))}"
+        )
+
+    category_entries = [e for e in _policy_audit_history if e.category == normalized_category]
+    if not category_entries:
+        raise ValueError(f"No audit history found for category '{category}' to rollback")
+
+    target_entry: PolicyAuditEntry | None = None
+    if audit_id is not None:
+        for entry in reversed(category_entries):
+            if entry.audit_id == audit_id:
+                target_entry = entry
+                break
+        if target_entry is None:
+            raise ValueError(f"Audit entry '{audit_id}' not found for category '{category}'")
+    else:
+        target_entry = category_entries[-1]
+
+    active_config = get_active_policies()
+    current_policy = getattr(active_config, normalized_category)
+    current_state = current_policy.model_dump()
+    restored_state = target_entry.previous_state
+
+    updated_policy = CategoryPolicy.model_validate(restored_state)
+    setattr(active_config, normalized_category, updated_policy)
+
+    new_state = updated_policy.model_dump()
+    changes: dict[str, PolicyFieldChange | dict[str, Any]] = {}
+    for key, new_val in new_state.items():
+        old_val = current_state.get(key)
+        if old_val != new_val:
+            changes[key] = PolicyFieldChange(old_value=old_val, new_value=new_val)
+
+    rollback_entry = PolicyAuditEntry(
+        audit_id=f"audit_{uuid.uuid4().hex[:10]}",
+        category=normalized_category,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        operator_id=operator_id or "supervisor",
+        changes=changes,
+        previous_state=current_state,
+        action="rollback",
+    )
+    _policy_audit_history.append(rollback_entry)
+
+    return updated_policy, rollback_entry
+

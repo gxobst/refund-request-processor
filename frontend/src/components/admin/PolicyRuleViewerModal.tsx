@@ -10,6 +10,10 @@ import {
   DollarSign,
   Camera,
   Truck,
+  History,
+  RotateCcw,
+  Clock,
+  User,
 } from 'lucide-react'
 import {
   Dialog,
@@ -22,11 +26,15 @@ import { Button } from '@/components/ui/Button'
 import {
   fetchPolicies,
   updatePolicy,
+  fetchPolicyHistory,
+  rollbackPolicy,
   type PolicyRule,
   type UpdatePolicyPayload,
+  type PolicyAuditEntry,
 } from '@/services/policyService'
 import { isApiError } from '@/services/apiClient'
 import { cn } from '@/lib/utils'
+
 
 export interface PolicyRuleViewerModalProps {
   isOpen: boolean
@@ -419,8 +427,20 @@ function CategoryPolicyCard({ rule, onUpdate, isUpdating }: CategoryCardProps) {
   )
 }
 
+function formatDiffValue(val: unknown): string {
+  if (val === undefined || val === null) return 'none'
+  if (typeof val === 'boolean') return val ? 'Yes' : 'No'
+  if (Array.isArray(val)) return val.join(', ')
+  if (typeof val === 'number') return String(val)
+  return String(val)
+}
+
 export function PolicyRuleViewerModal({ isOpen, onClose }: PolicyRuleViewerModalProps) {
   const queryClient = useQueryClient()
+
+  const [activeTab, setActiveTab] = React.useState<'active' | 'history'>('active')
+  const [historyCategory, setHistoryCategory] = React.useState<string>('all')
+  const [rollingBackId, setRollingBackId] = React.useState<string | null>(null)
 
   const {
     data: policies = [],
@@ -430,6 +450,18 @@ export function PolicyRuleViewerModal({ isOpen, onClose }: PolicyRuleViewerModal
   } = useQuery<PolicyRule[]>({
     queryKey: ['policies'],
     queryFn: fetchPolicies,
+    enabled: isOpen,
+  })
+
+  const {
+    data: historyEntries = [],
+    isLoading: isHistoryLoading,
+    isError: isHistoryError,
+    error: historyError,
+  } = useQuery<PolicyAuditEntry[]>({
+    queryKey: ['policies', 'history', historyCategory],
+    queryFn: () =>
+      fetchPolicyHistory(historyCategory === 'all' ? undefined : historyCategory),
     enabled: isOpen,
   })
 
@@ -449,6 +481,7 @@ export function PolicyRuleViewerModal({ isOpen, onClose }: PolicyRuleViewerModal
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['policies'] })
+      queryClient.invalidateQueries({ queryKey: ['policies', 'history'] })
       setGlobalSuccess('Policy rule updated successfully.')
       setGlobalError(null)
     },
@@ -465,6 +498,47 @@ export function PolicyRuleViewerModal({ isOpen, onClose }: PolicyRuleViewerModal
       setUpdatingCategory(null)
     },
   })
+
+  const rollbackMutation = useMutation({
+    mutationFn: async ({
+      category,
+      auditId,
+    }: {
+      category: string
+      auditId?: string
+    }) => {
+      return rollbackPolicy(category, auditId)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['policies'] })
+      queryClient.invalidateQueries({ queryKey: ['policies', 'history'] })
+      setGlobalSuccess('Policy restored to previous state successfully.')
+      setGlobalError(null)
+    },
+    onError: (err: unknown) => {
+      const msg = isApiError(err)
+        ? err.problem.detail || err.message
+        : err instanceof Error
+        ? err.message
+        : 'Failed to rollback policy'
+      setGlobalError(msg)
+      setGlobalSuccess(null)
+    },
+    onSettled: () => {
+      setRollingBackId(null)
+    },
+  })
+
+  const handleRollback = async (category: string, auditId: string) => {
+    setRollingBackId(auditId)
+    setGlobalError(null)
+    setGlobalSuccess(null)
+    try {
+      await rollbackMutation.mutateAsync({ category, auditId })
+    } catch {
+      // Handled in onError
+    }
+  }
 
   const handleUpdate = async (category: string, payload: UpdatePolicyPayload) => {
     setUpdatingCategory(category)
@@ -498,6 +572,46 @@ export function PolicyRuleViewerModal({ isOpen, onClose }: PolicyRuleViewerModal
           </div>
         </DialogHeader>
 
+        {/* Navigation Tabs */}
+        <div className="flex border-b border-slate-200">
+          <button
+            type="button"
+            data-testid="tab-active-policies"
+            onClick={() => {
+              setActiveTab('active')
+              setGlobalError(null)
+              setGlobalSuccess(null)
+            }}
+            className={cn(
+              'flex items-center px-4 py-2 text-xs sm:text-sm font-medium border-b-2 -mb-px transition-colors',
+              activeTab === 'active'
+                ? 'border-slate-900 text-slate-900 font-semibold'
+                : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+            )}
+          >
+            <Sliders className="h-4 w-4 mr-2" />
+            Active Policies
+          </button>
+          <button
+            type="button"
+            data-testid="tab-policy-history"
+            onClick={() => {
+              setActiveTab('history')
+              setGlobalError(null)
+              setGlobalSuccess(null)
+            }}
+            className={cn(
+              'flex items-center px-4 py-2 text-xs sm:text-sm font-medium border-b-2 -mb-px transition-colors',
+              activeTab === 'history'
+                ? 'border-slate-900 text-slate-900 font-semibold'
+                : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+            )}
+          >
+            <History className="h-4 w-4 mr-2" />
+            Version History
+          </button>
+        </div>
+
         {/* Global Notifications */}
         {globalSuccess && (
           <div
@@ -522,35 +636,212 @@ export function PolicyRuleViewerModal({ isOpen, onClose }: PolicyRuleViewerModal
         )}
 
         {/* Content Body */}
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center py-12 space-y-3">
-            <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
-            <p className="text-xs text-slate-500">Loading active refund policies...</p>
-          </div>
-        ) : isError ? (
-          <div
-            role="alert"
-            data-testid="policy-error-alert"
-            className="rounded-lg bg-rose-50 p-4 border border-rose-200 text-rose-800 text-xs flex items-start space-x-2"
-          >
-            <AlertCircle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold">Failed to load policy rules</p>
-              <p className="mt-0.5">
-                {error instanceof Error ? error.message : 'Please check network connectivity.'}
-              </p>
+        {activeTab === 'active' ? (
+          isLoading ? (
+            <div className="flex flex-col items-center justify-center py-12 space-y-3">
+              <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+              <p className="text-xs text-slate-500">Loading active refund policies...</p>
             </div>
-          </div>
+          ) : isError ? (
+            <div
+              role="alert"
+              data-testid="policy-error-alert"
+              className="rounded-lg bg-rose-50 p-4 border border-rose-200 text-rose-800 text-xs flex items-start space-x-2"
+            >
+              <AlertCircle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold">Failed to load policy rules</p>
+                <p className="mt-0.5">
+                  {error instanceof Error ? error.message : 'Please check network connectivity.'}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {policies.map((rule) => (
+                <CategoryPolicyCard
+                  key={rule.category}
+                  rule={rule}
+                  onUpdate={handleUpdate}
+                  isUpdating={updatingCategory === rule.category}
+                />
+              ))}
+            </div>
+          )
         ) : (
+          /* Version History Tab */
           <div className="space-y-4">
-            {policies.map((rule) => (
-              <CategoryPolicyCard
-                key={rule.category}
-                rule={rule}
-                onUpdate={handleUpdate}
-                isUpdating={updatingCategory === rule.category}
-              />
-            ))}
+            {/* Filter bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+              <div className="flex items-center space-x-2">
+                <label
+                  htmlFor="history-category-filter"
+                  className="text-xs font-medium text-slate-700"
+                >
+                  Category Filter:
+                </label>
+                <select
+                  id="history-category-filter"
+                  data-testid="history-category-filter"
+                  value={historyCategory}
+                  onChange={(e) => setHistoryCategory(e.target.value)}
+                  className="text-xs rounded-md border border-slate-300 bg-white px-2.5 py-1.5 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400"
+                >
+                  <option value="all">All Categories</option>
+                  <option value="damaged">Damaged Item</option>
+                  <option value="wrong_item">Wrong Item</option>
+                  <option value="changed_mind">Changed Mind</option>
+                  <option value="late_delivery">Late Delivery</option>
+                  <option value="missing_item">Missing Item</option>
+                </select>
+              </div>
+
+              <span className="text-xs text-slate-500">
+                {historyEntries.length} {historyEntries.length === 1 ? 'change logged' : 'changes logged'}
+              </span>
+            </div>
+
+            {isHistoryLoading ? (
+              <div className="flex flex-col items-center justify-center py-12 space-y-3">
+                <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+                <p className="text-xs text-slate-500">Loading policy version history...</p>
+              </div>
+            ) : isHistoryError ? (
+              <div
+                role="alert"
+                data-testid="policy-error-alert"
+                className="rounded-lg bg-rose-50 p-4 border border-rose-200 text-rose-800 text-xs flex items-start space-x-2"
+              >
+                <AlertCircle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-semibold">Failed to load policy version history</p>
+                  <p className="mt-0.5">
+                    {historyError instanceof Error ? historyError.message : 'Please check network connectivity.'}
+                  </p>
+                </div>
+              </div>
+            ) : historyEntries.length === 0 ? (
+              <div
+                data-testid="audit-empty-state"
+                className="rounded-lg border border-dashed border-slate-200 p-8 text-center text-xs text-slate-500"
+              >
+                No policy version history found.
+              </div>
+            ) : (
+              <div data-testid="audit-history-list" className="space-y-3">
+                {historyEntries.map((entry) => {
+                  const categoryLabel = CATEGORY_LABELS[entry.category] || entry.category
+                  const isRollbackPending =
+                    rollbackMutation.isPending && rollingBackId === entry.audit_id
+
+                  return (
+                    <div
+                      key={entry.audit_id}
+                      data-testid={`audit-entry-${entry.audit_id}`}
+                      className="rounded-lg border border-slate-200 bg-white p-3.5 shadow-sm space-y-2.5"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center space-x-2">
+                          <span
+                            data-testid={`audit-category-${entry.audit_id}`}
+                            className="inline-flex items-center rounded-md bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white tracking-wide uppercase"
+                          >
+                            {categoryLabel}
+                          </span>
+                          <span
+                            className={cn(
+                              'inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium border uppercase tracking-wider',
+                              entry.action === 'rollback'
+                                ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                : 'bg-blue-50 text-blue-800 border-blue-200'
+                            )}
+                          >
+                            {entry.action}
+                          </span>
+                        </div>
+
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={isRollbackPending}
+                          data-testid={`rollback-button-${entry.audit_id}`}
+                          onClick={() => handleRollback(entry.category, entry.audit_id)}
+                          className="text-xs h-7 px-2.5 hover:bg-slate-100 border-slate-300"
+                        >
+                          {isRollbackPending ? (
+                            <>
+                              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                              Rolling back...
+                            </>
+                          ) : (
+                            <>
+                              <RotateCcw className="h-3 w-3 mr-1" />
+                              Rollback
+                            </>
+                          )}
+                        </Button>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                        <div className="flex items-center space-x-1">
+                          <Clock className="h-3.5 w-3.5 text-slate-400" />
+                          <span data-testid={`audit-timestamp-${entry.audit_id}`}>
+                            {entry.timestamp}
+                          </span>
+                        </div>
+                        <div className="flex items-center space-x-1">
+                          <User className="h-3.5 w-3.5 text-slate-400" />
+                          <span>Operator:</span>
+                          <span
+                            data-testid={`audit-operator-${entry.audit_id}`}
+                            className="font-medium text-slate-700 font-mono"
+                          >
+                            {entry.operator_id}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Diffs */}
+                      <div
+                        data-testid={`audit-diffs-${entry.audit_id}`}
+                        className="flex flex-wrap gap-1.5 pt-1 text-xs"
+                      >
+                        {entry.changes && Object.keys(entry.changes).length > 0 ? (
+                          Object.entries(entry.changes).map(([field, change]) => {
+                            const oldVal =
+                              change && typeof change === 'object' && 'old_value' in change
+                                ? (change as any).old_value
+                                : undefined
+                            const newVal =
+                              change && typeof change === 'object' && 'new_value' in change
+                                ? (change as any).new_value
+                                : undefined
+                            return (
+                              <span
+                                key={field}
+                                className="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 text-slate-700 border border-slate-200"
+                              >
+                                <span className="font-medium text-slate-900 mr-1">{field}:</span>
+                                <span className="line-through text-slate-400 mr-1">
+                                  {formatDiffValue(oldVal)}
+                                </span>
+                                <span className="text-slate-500 mr-1">→</span>
+                                <span className="font-semibold text-emerald-700">
+                                  {formatDiffValue(newVal)}
+                                </span>
+                              </span>
+                            )
+                          })
+                        ) : (
+                          <span className="text-slate-400 italic">No threshold differences recorded.</span>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         )}
 
