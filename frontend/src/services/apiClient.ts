@@ -1,4 +1,5 @@
 import type { ProblemDetails, ValidationProblemDetails, InvalidParam } from '../types/api'
+import { getActiveUserRole } from '../context/RoleContext'
 
 /**
  * ApiError wraps RFC 9457 ProblemDetails and ValidationProblemDetails errors
@@ -107,15 +108,21 @@ async function parseErrorResponse(
     body = null
   }
 
-  // 1. Direct RFC 9457 ProblemDetails or ValidationProblemDetails
-  if (
-    body &&
-    typeof body === 'object' &&
-    'type' in body &&
-    'title' in body &&
-    'status' in body
-  ) {
-    const raw = body as Record<string, unknown>
+  // 1. Direct RFC 9457 ProblemDetails or ValidationProblemDetails (or wrapped in FastAPI detail object)
+  const problemCandidate =
+    body && typeof body === 'object' && 'type' in body && 'title' in body && 'status' in body
+      ? (body as Record<string, unknown>)
+      : body &&
+        typeof body === 'object' &&
+        'detail' in body &&
+        typeof (body as Record<string, unknown>).detail === 'object' &&
+        (body as Record<string, unknown>).detail !== null &&
+        'type' in ((body as Record<string, unknown>).detail as Record<string, unknown>)
+      ? ((body as Record<string, unknown>).detail as Record<string, unknown>)
+      : null
+
+  if (problemCandidate) {
+    const raw = problemCandidate
     const problem: ProblemDetails | ValidationProblemDetails = {
       type: String(raw.type),
       title: String(raw.title),
@@ -203,6 +210,10 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   const isMultipart = options.body instanceof FormData
 
   const headers = new Headers(options.headers || {})
+
+  if (!headers.has('X-User-Role')) {
+    headers.set('X-User-Role', getActiveUserRole())
+  }
 
   if (!headers.has('Accept')) {
     headers.set('Accept', 'application/json, application/problem+json')

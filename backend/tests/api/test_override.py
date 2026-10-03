@@ -58,6 +58,7 @@ class MockRefundRepository:
         override_reason: str,
         approval_email_text: str | None = None,
         denial_email_text: str | None = None,
+        overridden_by: str | None = "supervisor",
     ) -> RefundRecord:
         record = self.records.get(refund_id)
         if record is None:
@@ -87,6 +88,7 @@ class MockRefundRepository:
                 "override_decision": override_decision,
                 "override_reason": override_reason,
                 "overridden_at": now_iso,
+                "overridden_by": overridden_by,
                 "updated_at": now_iso,
                 "decision": override_decision,
                 "status": "completed",
@@ -342,7 +344,11 @@ async def test_override_refund_decision_approve(mock_repo: MockRefundRepository)
 
     # Act
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post("/refunds/ref-esc-1/override", json=override_payload)
+        response = await client.post(
+            "/refunds/ref-esc-1/override",
+            json=override_payload,
+            headers={"X-User-Role": "supervisor"},
+        )
 
     # Assert
     assert response.status_code == 200
@@ -388,7 +394,11 @@ async def test_override_refund_decision_deny(mock_repo: MockRefundRepository):
 
     # Act
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post("/refunds/ref-esc-2/override", json=override_payload)
+        response = await client.post(
+            "/refunds/ref-esc-2/override",
+            json=override_payload,
+            headers={"X-User-Role": "supervisor"},
+        )
 
     # Assert
     assert response.status_code == 200
@@ -435,7 +445,11 @@ async def test_override_refund_decision_validation_errors(
     transport = ASGITransport(app=app)
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post("/refunds/ref-esc-3/override", json=invalid_payload)
+        response = await client.post(
+            "/refunds/ref-esc-3/override",
+            json=invalid_payload,
+            headers={"X-User-Role": "supervisor"},
+        )
 
     assert response.status_code == 422
 
@@ -449,7 +463,11 @@ async def test_override_refund_nonexistent_id_returns_404(mock_repo: MockRefundR
     }
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post("/refunds/nonexistent-ref-id/override", json=override_payload)
+        response = await client.post(
+            "/refunds/nonexistent-ref-id/override",
+            json=override_payload,
+            headers={"X-User-Role": "supervisor"},
+        )
 
     assert response.status_code == 404
     data = response.json()

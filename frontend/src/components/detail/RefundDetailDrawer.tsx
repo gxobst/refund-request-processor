@@ -11,7 +11,9 @@ import {
   FileText,
   AlertTriangle,
   HelpCircle,
+  Lock,
 } from 'lucide-react'
+import { useUserRole } from '@/context/RoleContext'
 import { getRefundById } from '@/services/refundService'
 import {
   Drawer,
@@ -75,6 +77,7 @@ export function RefundDetailDrawer({
 }: RefundDetailDrawerProps) {
   const [activeEmailTab, setActiveEmailTab] = React.useState<EmailTabType>('approval')
   const [isInternalClarifyOpen, setIsInternalClarifyOpen] = React.useState(false)
+  const { role } = useUserRole()
 
   const {
     data: refund,
@@ -560,16 +563,31 @@ export function RefundDetailDrawer({
             </Button>
 
             {/* Manual Override Button */}
-            <Button
-              variant="default"
-              size="sm"
-              disabled={!effectiveRefundId}
-              onClick={() => onTriggerOverride?.(effectiveRefundId)}
-              className="bg-slate-900 text-white hover:bg-slate-800"
-            >
-              <AlertTriangle className="h-3.5 w-3.5 mr-1 text-amber-400" />
-              Manual Override
-            </Button>
+            {role === 'agent' ? (
+              <Button
+                variant="default"
+                size="sm"
+                disabled
+                title="Supervisor role required to manual override"
+                data-testid="override-button-disabled"
+                className="bg-slate-300 text-slate-500 cursor-not-allowed"
+              >
+                <Lock className="h-3.5 w-3.5 mr-1 text-slate-400" />
+                Manual Override
+              </Button>
+            ) : (
+              <Button
+                variant="default"
+                size="sm"
+                disabled={!effectiveRefundId}
+                data-testid="override-action-button"
+                onClick={() => onTriggerOverride?.(effectiveRefundId)}
+                className="bg-slate-900 text-white hover:bg-slate-800"
+              >
+                <AlertTriangle className="h-3.5 w-3.5 mr-1 text-amber-400" />
+                Manual Override
+              </Button>
+            )}
           </div>
         </div>
       </DrawerFooter>

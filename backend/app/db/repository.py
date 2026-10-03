@@ -245,6 +245,7 @@ class RefundRepository:
         override_reason: str,
         approval_email_text: str | None = None,
         denial_email_text: str | None = None,
+        overridden_by: str | None = "supervisor",
     ) -> RefundRecord:
         """Record a human manual override and update final decision.
 
@@ -254,6 +255,7 @@ class RefundRepository:
             override_reason: Justification for the override.
             approval_email_text: Optional custom or pre-generated approval email text.
             denial_email_text: Optional custom or pre-generated denial email text.
+            overridden_by: Identifier or role of the operator who applied the manual override.
 
         Returns:
             Updated RefundRecord instance.
@@ -270,6 +272,7 @@ class RefundRepository:
         updated_dict["override_decision"] = override_decision
         updated_dict["override_reason"] = override_reason
         updated_dict["overridden_at"] = now_iso
+        updated_dict["overridden_by"] = overridden_by
         updated_dict["updated_at"] = now_iso
         updated_dict["decision"] = override_decision
         updated_dict["status"] = "completed"

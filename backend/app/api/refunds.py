@@ -14,6 +14,7 @@ from starlette.datastructures import UploadFile
 from starlette.responses import Response, StreamingResponse
 
 from app.agents.proof_notifier import generate_reviewer_proof_email
+from app.auth.rbac import require_supervisor_role
 from app.db.repository import RefundNotFoundError, RefundRepository
 from app.graph.runner import resume_refund_workflow, run_refund_workflow
 from app.schemas.order import ORDER_ID_PATTERN
@@ -316,14 +317,18 @@ async def submit_refund_request(
 async def override_refund_decision(
     refund_id: str,
     payload: RefundOverrideRequest,
+    request: Request,
+    role: str = Depends(require_supervisor_role),
     repo: RefundRepository = Depends(get_repository),
 ) -> RefundRecord:
     """Apply a human operator decision override to a refund request."""
+    operator_id = request.headers.get("X-User-Id", "").strip() or "supervisor"
     try:
         updated = repo.apply_override(
             refund_id=refund_id,
             override_decision=payload.override_decision,
             override_reason=payload.reason,
+            overridden_by=operator_id,
         )
     except (RefundNotFoundError, KeyError):
         raise HTTPException(
@@ -337,6 +342,7 @@ async def override_refund_decision(
             "status": updated.status,
             "override_decision": payload.override_decision,
             "reasoning": payload.reason,
+            "overridden_by": operator_id,
         },
     )
     return updated

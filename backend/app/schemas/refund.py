@@ -112,6 +112,10 @@ class RefundRecord(BaseModel):
     overridden_at: str | None = Field(
         default=None, description="ISO-8601 timestamp when override was applied."
     )
+    overridden_by: str | None = Field(
+        default=None,
+        description="Identifier or role of the operator who applied the manual override.",
+    )
     clarification_prompt: str | None = Field(
         default=None, description="Question asked to customer for request clarification."
     )
@@ -168,6 +172,10 @@ class RefundOverrideUpdate(BaseModel):
     override_decision: str
     override_reason: str = Field(..., min_length=1)
     denial_email_text: str | None = None
+    overridden_by: str | None = Field(
+        default=None,
+        description="Identifier or role of the operator who applied the manual override.",
+    )
 
 
 OverrideDecisionType = Literal["approve", "deny"]

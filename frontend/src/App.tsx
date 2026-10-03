@@ -23,6 +23,7 @@ import {
 import { PolicyRuleViewerModal } from '@/components/admin'
 import { AnalyticsDashboardModal } from '@/components/analytics'
 import { Button } from '@/components/ui/Button'
+import { RoleProvider, RoleContext } from '@/context/RoleContext'
 import type { RefundRecord } from '@/types/api'
 
 const defaultQueryClient = new QueryClient({
@@ -217,11 +218,15 @@ export interface AppProps {
 
 export function App({ client }: AppProps) {
   const existingClient = React.useContext(QueryClientContext)
+  const existingRole = React.useContext(RoleContext)
+
+  const content = <AppContent />
+  const withRole = existingRole ? content : <RoleProvider>{content}</RoleProvider>
 
   if (!existingClient && !client) {
     return (
       <QueryClientProvider client={defaultQueryClient}>
-        <AppContent />
+        {withRole}
       </QueryClientProvider>
     )
   }
@@ -229,12 +234,12 @@ export function App({ client }: AppProps) {
   if (client) {
     return (
       <QueryClientProvider client={client}>
-        <AppContent />
+        {withRole}
       </QueryClientProvider>
     )
   }
 
-  return <AppContent />
+  return withRole
 }
 
 export default App
