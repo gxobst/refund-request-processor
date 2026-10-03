@@ -480,4 +480,47 @@ export const handlers = [
 
     return HttpResponse.json(record, { status: 200 })
   }),
+
+  http.get('*/v1/analytics/metrics', () => {
+    return HttpResponse.json(
+      {
+        total_requests: 0,
+        status_breakdown: {
+          pending: 0,
+          completed: 0,
+          escalated: 0,
+          awaiting_clarification: 0,
+        },
+        decision_breakdown: {
+          auto_approve: 0,
+          deny: 0,
+          escalate: 0,
+          pending: 0,
+        },
+        auto_approval_rate: 0.0,
+        override_rate: 0.0,
+        average_confidence: 0.0,
+        category_breakdown: {},
+        average_latency_ms: 0.0,
+        node_latency_breakdown: {
+          classifier: 0.0,
+          policy_checker: 0.0,
+          decision_agent: 0.0,
+        },
+      },
+      { status: 200 }
+    )
+  }),
+
+  http.get('*/v1/analytics/trends', () => {
+    return HttpResponse.json(
+      {
+        interval: 'daily',
+        start_date: null,
+        end_date: null,
+        points: [],
+      },
+      { status: 200 }
+    )
+  }),
 ]

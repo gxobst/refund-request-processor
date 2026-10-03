@@ -26,9 +26,54 @@ export interface AnalyticsMetrics {
   node_latency_breakdown: Record<string, number>
 }
 
+export interface TrendDataPoint {
+  period: string
+  total_requests: number
+  auto_approved: number
+  denied: number
+  escalated: number
+  average_confidence: number
+  average_latency_ms: number
+}
+
+export interface AnalyticsTrendsResponse {
+  interval: 'daily' | 'weekly'
+  start_date: string | null
+  end_date: string | null
+  points: TrendDataPoint[]
+}
+
 /**
  * Fetches aggregate operational analytics and AI metrics.
  */
-export async function fetchAnalyticsMetrics(): Promise<AnalyticsMetrics> {
-  return apiClient.get<AnalyticsMetrics>('/v1/analytics/metrics')
+export async function fetchAnalyticsMetrics(
+  startDate?: string,
+  endDate?: string
+): Promise<AnalyticsMetrics> {
+  const params = new URLSearchParams()
+  if (startDate) params.append('start_date', startDate)
+  if (endDate) params.append('end_date', endDate)
+  const queryString = params.toString()
+  return apiClient.get<AnalyticsMetrics>(
+    `/v1/analytics/metrics${queryString ? `?${queryString}` : ''}`
+  )
 }
+
+/**
+ * Fetches historical trend time-series analytics.
+ */
+export async function fetchAnalyticsTrends(
+  startDate?: string,
+  endDate?: string,
+  interval?: 'daily' | 'weekly'
+): Promise<AnalyticsTrendsResponse> {
+  const params = new URLSearchParams()
+  if (startDate) params.append('start_date', startDate)
+  if (endDate) params.append('end_date', endDate)
+  if (interval) params.append('interval', interval)
+  const queryString = params.toString()
+  return apiClient.get<AnalyticsTrendsResponse>(
+    `/v1/analytics/trends${queryString ? `?${queryString}` : ''}`
+  )
+}
+

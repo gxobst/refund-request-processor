@@ -2,12 +2,18 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 import uuid
 import boto3
 
 from app.core.config import get_settings
-from app.schemas.analytics import AnalyticsMetricsResponse, DecisionBreakdown, StatusBreakdown
+from app.schemas.analytics import (
+    AnalyticsMetricsResponse,
+    AnalyticsTrendsResponse,
+    DecisionBreakdown,
+    StatusBreakdown,
+    TrendDataPoint,
+)
 from app.schemas.refund import ClarificationTurn, EvidenceItem, RefundRecord
 
 
@@ -43,6 +49,46 @@ def _convert_decimals_to_float(val: Any) -> Any:
     if isinstance(val, list):
         return [_convert_decimals_to_float(v) for v in val]
     return val
+
+
+def _filter_items_by_date_range(
+    raw_items: list[dict],
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict]:
+    """Filter raw DynamoDB items by created_at falling within [start_date, end_date] (inclusive)."""
+    if not start_date and not end_date:
+        return raw_items
+
+    filtered: list[dict] = []
+    for item in raw_items:
+        created_at = item.get("created_at")
+        if not created_at or not isinstance(created_at, str):
+            continue
+        created_at_str = created_at.strip()
+        if not created_at_str:
+            continue
+
+        # Check start_date
+        if start_date:
+            if len(start_date) == 10:
+                if created_at_str[:10] < start_date:
+                    continue
+            else:
+                if created_at_str < start_date:
+                    continue
+
+        # Check end_date (inclusive through end of day if 10-char YYYY-MM-DD)
+        if end_date:
+            if len(end_date) == 10:
+                if created_at_str[:10] > end_date:
+                    continue
+            else:
+                if created_at_str > end_date:
+                    continue
+
+        filtered.append(item)
+    return filtered
 
 
 class RefundRepository:
@@ -543,11 +589,17 @@ class RefundRepository:
         self.table.put_item(Item=item)
         return RefundRecord.model_validate(updated_dict)
 
-    def get_analytics_metrics(self) -> AnalyticsMetricsResponse:
+    def get_analytics_metrics(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> AnalyticsMetricsResponse:
         """Scan DynamoDB refund records and compute aggregate operational and AI metrics."""
         table = getattr(self, "_table", self.table)
         response = table.scan()
         raw_items = response.get("Items", []) if isinstance(response, dict) else (response or [])
+
+        raw_items = _filter_items_by_date_range(raw_items, start_date=start_date, end_date=end_date)
 
         total_requests = len(raw_items)
         if total_requests == 0:
@@ -686,6 +738,139 @@ class RefundRepository:
             average_latency_ms=average_latency_ms,
             node_latency_breakdown=node_latency_breakdown,
         )
+
+    def get_analytics_trends(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        interval: Literal["daily", "weekly"] = "daily",
+    ) -> AnalyticsTrendsResponse:
+        """Compute time-series historical trend analytics bucketed by daily or weekly intervals."""
+        table = getattr(self, "_table", self.table)
+        response = table.scan()
+        raw_items = response.get("Items", []) if isinstance(response, dict) else (response or [])
+
+        filtered_items = _filter_items_by_date_range(raw_items, start_date=start_date, end_date=end_date)
+
+        if not filtered_items:
+            return AnalyticsTrendsResponse(
+                interval=interval,
+                start_date=start_date,
+                end_date=end_date,
+                points=[],
+            )
+
+        buckets: dict[str, dict[str, Any]] = {}
+
+        for item in filtered_items:
+            created_at = item.get("created_at")
+            if not created_at or not isinstance(created_at, str):
+                continue
+            created_at_str = created_at.strip()
+            if not created_at_str:
+                continue
+
+            try:
+                clean_ts = created_at_str.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(clean_ts)
+            except Exception:
+                try:
+                    dt = datetime.strptime(created_at_str[:10], "%Y-%m-%d")
+                except Exception:
+                    continue
+
+            if interval == "weekly":
+                iso_year, iso_week, _ = dt.isocalendar()
+                period = f"{iso_year}-W{iso_week:02d}"
+            else:
+                period = dt.strftime("%Y-%m-%d")
+
+            if period not in buckets:
+                buckets[period] = {
+                    "total_requests": 0,
+                    "auto_approved": 0,
+                    "denied": 0,
+                    "escalated": 0,
+                    "confidence_scores": [],
+                    "latencies": [],
+                }
+
+            bucket = buckets[period]
+            bucket["total_requests"] += 1
+
+            raw_status = str(item.get("status") or "").strip().lower()
+            raw_decision = str(item.get("decision") or "").strip().lower()
+
+            if raw_status in ("auto_approved", "auto_approve") or raw_decision in ("auto_approved", "auto_approve"):
+                bucket["auto_approved"] += 1
+            elif raw_status in ("denied", "deny") or raw_decision in ("denied", "deny"):
+                bucket["denied"] += 1
+            elif raw_status in ("escalated", "escalate") or raw_decision in ("escalated", "escalate"):
+                bucket["escalated"] += 1
+
+            # AI confidence score
+            raw_conf = item.get("confidence_score")
+            if raw_conf is not None:
+                try:
+                    bucket["confidence_scores"].append(float(raw_conf))
+                except (ValueError, TypeError):
+                    pass
+
+            # Latency metrics aggregation
+            raw_lat = item.get("latency_ms")
+            item_total_latency: float | None = None
+            if raw_lat is not None:
+                try:
+                    item_total_latency = float(raw_lat)
+                except (ValueError, TypeError):
+                    item_total_latency = None
+
+            raw_nl = item.get("node_latencies")
+            if isinstance(raw_nl, dict):
+                nl_sum = 0.0
+                has_nl_values = False
+                for node_key in ("classifier", "policy_checker", "decision_agent"):
+                    val = raw_nl.get(node_key)
+                    if val is not None:
+                        try:
+                            f_val = float(val)
+                            nl_sum += f_val
+                            has_nl_values = True
+                        except (ValueError, TypeError):
+                            pass
+                if item_total_latency is None and has_nl_values:
+                    item_total_latency = nl_sum
+
+            if item_total_latency is not None:
+                bucket["latencies"].append(item_total_latency)
+
+        points: list[TrendDataPoint] = []
+        for period in sorted(buckets.keys()):
+            b = buckets[period]
+            conf_list = b["confidence_scores"]
+            lat_list = b["latencies"]
+            avg_conf = round(sum(conf_list) / len(conf_list), 4) if conf_list else 0.0
+            avg_lat = round(sum(lat_list) / len(lat_list), 2) if lat_list else 0.0
+
+            points.append(
+                TrendDataPoint(
+                    period=period,
+                    total_requests=b["total_requests"],
+                    auto_approved=b["auto_approved"],
+                    denied=b["denied"],
+                    escalated=b["escalated"],
+                    average_confidence=avg_conf,
+                    average_latency_ms=avg_lat,
+                )
+            )
+
+        return AnalyticsTrendsResponse(
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
+            points=points,
+        )
+
 
 
 

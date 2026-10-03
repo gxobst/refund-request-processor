@@ -1,5 +1,6 @@
 """Analytics metrics schemas and data models."""
 
+from typing import Literal
 from pydantic import BaseModel, Field
 
 
@@ -57,3 +58,33 @@ class AnalyticsMetricsResponse(BaseModel):
         default_factory=lambda: {"classifier": 0.0, "policy_checker": 0.0, "decision_agent": 0.0},
         description="Average latency in milliseconds broken down by agent node.",
     )
+
+
+class TrendDataPoint(BaseModel):
+    """Historical trend aggregate metrics for a single time period."""
+
+    period: str = Field(description="Period bucket identifier ('YYYY-MM-DD' or 'YYYY-Www').")
+    total_requests: int = Field(default=0, ge=0, description="Total requests submitted in period.")
+    auto_approved: int = Field(default=0, ge=0, description="Requests automatically approved.")
+    denied: int = Field(default=0, ge=0, description="Requests denied.")
+    escalated: int = Field(default=0, ge=0, description="Requests escalated.")
+    average_confidence: float = Field(
+        default=0.0, ge=0.0, le=1.0, description="Average AI confidence score (0.0 - 1.0)."
+    )
+    average_latency_ms: float = Field(
+        default=0.0, ge=0.0, description="Average processing latency in milliseconds."
+    )
+
+
+class AnalyticsTrendsResponse(BaseModel):
+    """Historical time-series trend response with bucketed data points."""
+
+    interval: Literal["daily", "weekly"] = Field(
+        default="daily", description="Time bucket interval ('daily' or 'weekly')."
+    )
+    start_date: str | None = Field(default=None, description="Start date filter applied.")
+    end_date: str | None = Field(default=None, description="End date filter applied.")
+    points: list[TrendDataPoint] = Field(
+        default_factory=list, description="Chronologically sorted trend data points."
+    )
+

@@ -1,3 +1,4 @@
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   BarChart3,
@@ -12,6 +13,7 @@ import {
   FileQuestion,
   HelpCircle,
   Timer,
+  Calendar,
 } from 'lucide-react'
 import {
   Dialog,
@@ -22,7 +24,12 @@ import {
 } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card'
-import { fetchAnalyticsMetrics, type AnalyticsMetrics } from '@/services/analyticsService'
+import {
+  fetchAnalyticsMetrics,
+  fetchAnalyticsTrends,
+  type AnalyticsMetrics,
+  type AnalyticsTrendsResponse,
+} from '@/services/analyticsService'
 import { cn } from '@/lib/utils'
 
 export interface AnalyticsDashboardModalProps {
@@ -40,19 +47,64 @@ const CATEGORY_NAMES: Record<string, string> = {
 }
 
 export function AnalyticsDashboardModal({ isOpen, onClose }: AnalyticsDashboardModalProps) {
+  const [datePreset, setDatePreset] = useState<'all' | '7d' | '30d'>('all')
+  const [interval, setInterval] = useState<'daily' | 'weekly'>('daily')
+
+  const { startDate, endDate } = useMemo(() => {
+    if (datePreset === '7d') {
+      const end = new Date().toISOString().split('T')[0]
+      const d = new Date()
+      d.setDate(d.getDate() - 7)
+      const start = d.toISOString().split('T')[0]
+      return { startDate: start, endDate: end }
+    }
+    if (datePreset === '30d') {
+      const end = new Date().toISOString().split('T')[0]
+      const d = new Date()
+      d.setDate(d.getDate() - 30)
+      const start = d.toISOString().split('T')[0]
+      return { startDate: start, endDate: end }
+    }
+    return { startDate: undefined, endDate: undefined }
+  }, [datePreset])
+
   const {
     data: metrics,
-    isLoading,
-    isError,
-    error,
-    refetch,
-    isFetching,
+    isLoading: isMetricsLoading,
+    isError: isMetricsError,
+    error: metricsError,
+    refetch: refetchMetrics,
+    isFetching: isMetricsFetching,
   } = useQuery<AnalyticsMetrics>({
-    queryKey: ['analytics', 'metrics'],
-    queryFn: fetchAnalyticsMetrics,
+    queryKey: ['analytics-metrics', startDate, endDate],
+    queryFn: () => fetchAnalyticsMetrics(startDate, endDate),
     enabled: isOpen,
     staleTime: 5000,
   })
+
+  const {
+    data: trendsData,
+    isLoading: isTrendsLoading,
+    isError: isTrendsError,
+    error: trendsError,
+    refetch: refetchTrends,
+    isFetching: isTrendsFetching,
+  } = useQuery<AnalyticsTrendsResponse>({
+    queryKey: ['analytics-trends', startDate, endDate, interval],
+    queryFn: () => fetchAnalyticsTrends(startDate, endDate, interval),
+    enabled: isOpen,
+    staleTime: 5000,
+  })
+
+  const isLoading = isMetricsLoading || isTrendsLoading
+  const isError = isMetricsError || isTrendsError
+  const error = metricsError || trendsError
+  const isFetching = isMetricsFetching || isTrendsFetching
+
+  const handleRefresh = () => {
+    refetchMetrics()
+    refetchTrends()
+  }
 
   const total = metrics?.total_requests || 0
 
@@ -117,7 +169,7 @@ export function AnalyticsDashboardModal({ isOpen, onClose }: AnalyticsDashboardM
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => refetch()}
+              onClick={handleRefresh}
               disabled={isFetching}
               data-testid="analytics-refresh-button"
               aria-label="Refresh analytics metrics"
@@ -128,6 +180,90 @@ export function AnalyticsDashboardModal({ isOpen, onClose }: AnalyticsDashboardM
             </Button>
           </div>
         </DialogHeader>
+
+        {/* Filter & Controls Toolbar */}
+        {!isLoading && !isError && (
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+            {/* Date Filter Presets */}
+            <div data-testid="analytics-date-filter" className="flex items-center space-x-1">
+              <span className="text-xs font-medium text-slate-500 mr-1.5 flex items-center">
+                <Calendar className="h-3.5 w-3.5 mr-1" /> Range:
+              </span>
+              <button
+                type="button"
+                data-testid="analytics-date-filter-preset-all"
+                onClick={() => setDatePreset('all')}
+                className={cn(
+                  'px-2.5 py-1 text-xs font-medium rounded-md transition-colors',
+                  datePreset === 'all'
+                    ? 'bg-white text-slate-900 shadow-sm border border-slate-200 font-semibold'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                )}
+              >
+                All Time
+              </button>
+              <button
+                type="button"
+                data-testid="analytics-date-filter-preset-7d"
+                onClick={() => setDatePreset('7d')}
+                className={cn(
+                  'px-2.5 py-1 text-xs font-medium rounded-md transition-colors',
+                  datePreset === '7d'
+                    ? 'bg-white text-slate-900 shadow-sm border border-slate-200 font-semibold'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                )}
+              >
+                Last 7 Days
+              </button>
+              <button
+                type="button"
+                data-testid="analytics-date-filter-preset-30d"
+                onClick={() => setDatePreset('30d')}
+                className={cn(
+                  'px-2.5 py-1 text-xs font-medium rounded-md transition-colors',
+                  datePreset === '30d'
+                    ? 'bg-white text-slate-900 shadow-sm border border-slate-200 font-semibold'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                )}
+              >
+                Last 30 Days
+              </button>
+            </div>
+
+            {/* Interval Toggle */}
+            <div className="flex items-center space-x-1">
+              <span className="text-xs font-medium text-slate-500 mr-1.5">Interval:</span>
+              <div className="inline-flex rounded-md bg-slate-200/70 p-0.5 border border-slate-200">
+                <button
+                  type="button"
+                  data-testid="analytics-interval-daily"
+                  onClick={() => setInterval('daily')}
+                  className={cn(
+                    'px-2.5 py-0.5 text-xs font-medium rounded transition-colors',
+                    interval === 'daily'
+                      ? 'bg-white text-slate-900 shadow-sm font-semibold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  )}
+                >
+                  Daily
+                </button>
+                <button
+                  type="button"
+                  data-testid="analytics-interval-weekly"
+                  onClick={() => setInterval('weekly')}
+                  className={cn(
+                    'px-2.5 py-0.5 text-xs font-medium rounded transition-colors',
+                    interval === 'weekly'
+                      ? 'bg-white text-slate-900 shadow-sm font-semibold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  )}
+                >
+                  Weekly
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Loading State */}
         {isLoading && (
@@ -160,7 +296,7 @@ export function AnalyticsDashboardModal({ isOpen, onClose }: AnalyticsDashboardM
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => refetch()}
+              onClick={handleRefresh}
               className="text-xs text-rose-800 border-rose-300 hover:bg-rose-100"
             >
               Retry
@@ -170,15 +306,36 @@ export function AnalyticsDashboardModal({ isOpen, onClose }: AnalyticsDashboardM
 
         {/* Empty State */}
         {!isLoading && !isError && metrics && metrics.total_requests === 0 && (
-          <div
-            data-testid="analytics-empty"
-            className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center"
-          >
-            <FileQuestion className="mx-auto h-10 w-10 text-slate-400" />
-            <h3 className="mt-2 text-sm font-semibold text-slate-900">No Analytics Data Available</h3>
-            <p className="mt-1 text-xs text-slate-500">
-              No refund requests have been submitted yet. Once requests are processed, operational KPIs and AI metrics will appear here.
-            </p>
+          <div className="space-y-6">
+            <div
+              data-testid="analytics-empty"
+              className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center"
+            >
+              <FileQuestion className="mx-auto h-10 w-10 text-slate-400" />
+              <h3 className="mt-2 text-sm font-semibold text-slate-900">No Analytics Data Available</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                No refund requests have been submitted yet. Once requests are processed, operational KPIs and AI metrics will appear here.
+              </p>
+            </div>
+
+            {/* Time-Series Trend visualization section for empty state */}
+            <div
+              data-testid="analytics-trend-chart"
+              className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm space-y-4"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900">Historical Request Trends</h3>
+                  <p className="text-xs text-slate-500">Volume and decision breakdown over time ({interval})</p>
+                </div>
+              </div>
+              <div
+                data-testid="analytics-trend-empty"
+                className="rounded-lg border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center text-xs text-slate-500"
+              >
+                No historical trend data available for the selected period.
+              </div>
+            </div>
           </div>
         )}
 
@@ -266,6 +423,102 @@ export function AnalyticsDashboardModal({ isOpen, onClose }: AnalyticsDashboardM
                   <p className="text-[11px] text-slate-500 mt-0.5">End-to-end evaluation</p>
                 </CardContent>
               </Card>
+            </div>
+
+            {/* Time-Series Trend visualization section */}
+            <div
+              data-testid="analytics-trend-chart"
+              className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm space-y-4"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900">Historical Request Trends</h3>
+                  <p className="text-xs text-slate-500">Volume and decision breakdown over time ({interval})</p>
+                </div>
+                <span className="text-xs text-slate-400">
+                  {trendsData?.points.length || 0} {interval === 'daily' ? 'days' : 'weeks'}
+                </span>
+              </div>
+
+              {!trendsData || trendsData.points.length === 0 ? (
+                <div
+                  data-testid="analytics-trend-empty"
+                  className="rounded-lg border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center text-xs text-slate-500"
+                >
+                  No historical trend data available for the selected period.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {trendsData.points.map((pt) => {
+                    const totalReqs = pt.total_requests || 1
+                    const autoPct = Math.round((pt.auto_approved / totalReqs) * 100)
+                    const denyPct = Math.round((pt.denied / totalReqs) * 100)
+                    const escPct = Math.round((pt.escalated / totalReqs) * 100)
+
+                    return (
+                      <div
+                        key={pt.period}
+                        data-testid={`trend-point-${pt.period}`}
+                        className="rounded-md border border-slate-100 bg-slate-50/40 p-3 space-y-2 text-xs"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-slate-800">{pt.period}</span>
+                          <span className="text-slate-600 font-medium">
+                            {pt.total_requests} {pt.total_requests === 1 ? 'request' : 'requests'}
+                          </span>
+                        </div>
+
+                        {/* Stacked decision breakdown bar */}
+                        <div className="h-2.5 w-full rounded-full bg-slate-200 overflow-hidden flex">
+                          {pt.auto_approved > 0 && (
+                            <div
+                              className="bg-emerald-500 h-full"
+                              style={{ width: `${autoPct}%` }}
+                              title={`Auto-approved: ${pt.auto_approved}`}
+                            />
+                          )}
+                          {pt.denied > 0 && (
+                            <div
+                              className="bg-rose-500 h-full"
+                              style={{ width: `${denyPct}%` }}
+                              title={`Denied: ${pt.denied}`}
+                            />
+                          )}
+                          {pt.escalated > 0 && (
+                            <div
+                              className="bg-amber-500 h-full"
+                              style={{ width: `${escPct}%` }}
+                              title={`Escalated: ${pt.escalated}`}
+                            />
+                          )}
+                        </div>
+
+                        {/* Decision metrics and averages */}
+                        <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-500 pt-0.5 gap-2">
+                          <div className="flex items-center space-x-3">
+                            <span className="flex items-center text-emerald-700 font-medium">
+                              <span className="h-2 w-2 rounded-full bg-emerald-500 mr-1" />
+                              Auto-approved: {pt.auto_approved}
+                            </span>
+                            <span className="flex items-center text-rose-700 font-medium">
+                              <span className="h-2 w-2 rounded-full bg-rose-500 mr-1" />
+                              Denied: {pt.denied}
+                            </span>
+                            <span className="flex items-center text-amber-700 font-medium">
+                              <span className="h-2 w-2 rounded-full bg-amber-500 mr-1" />
+                              Escalated: {pt.escalated}
+                            </span>
+                          </div>
+                          <div className="flex items-center space-x-3 text-slate-400">
+                            <span>Avg Conf: {(pt.average_confidence * 100).toFixed(1)}%</span>
+                            <span>Avg Latency: {Math.round(pt.average_latency_ms)} ms</span>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
 
             {/* Agent Latency Breakdown Section */}
