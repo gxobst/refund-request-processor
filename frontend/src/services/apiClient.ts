@@ -1,5 +1,5 @@
 import type { ProblemDetails, ValidationProblemDetails, InvalidParam } from '../types/api'
-import { getActiveUserRole } from '../context/RoleContext'
+import { getActiveUserRole, getAuthToken } from '../context/RoleContext'
 
 /**
  * ApiError wraps RFC 9457 ProblemDetails and ValidationProblemDetails errors
@@ -210,6 +210,13 @@ export async function request<T>(path: string, options: RequestInit = {}): Promi
   const isMultipart = options.body instanceof FormData
 
   const headers = new Headers(options.headers || {})
+
+  if (!headers.has('Authorization')) {
+    const token = getAuthToken()
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`)
+    }
+  }
 
   if (!headers.has('X-User-Role')) {
     headers.set('X-User-Role', getActiveUserRole())

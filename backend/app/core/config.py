@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     # AWS SES
     ses_sender_email: str = "noreply@refunds.example.com"
 
+    # Amazon Cognito & OAuth2 JWT
+    cognito_user_pool_id: str | None = None
+    cognito_client_id: str | None = None
+    jwt_secret_key: str = "dev-secret-key-change-in-production"
+    auth_require_jwt: bool = False
+
     # Environment
     app_env: str = "development"
 

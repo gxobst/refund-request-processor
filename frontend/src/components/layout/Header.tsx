@@ -1,4 +1,4 @@
-import { ShieldCheck, RefreshCw, Sliders, BarChart3, UserCheck, User } from 'lucide-react'
+import { ShieldCheck, RefreshCw, Sliders, BarChart3, UserCheck, User, LogIn, LogOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useUserRole } from '@/context/RoleContext'
 
@@ -14,6 +14,23 @@ export interface HeaderProps {
   sseConnected?: boolean
   onOpenPolicyRules?: () => void
   onOpenAnalytics?: () => void
+}
+
+function createDemoJwt(groups: string[] = ['supervisors'], sub: string = 'demo-supervisor-01'): string {
+  const header = { alg: 'HS256', typ: 'JWT' }
+  const payload = {
+    sub,
+    'cognito:groups': groups,
+    'cognito:username': sub,
+    token_use: 'id',
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  }
+  const b64Url = (obj: object) =>
+    btoa(JSON.stringify(obj))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '')
+  return `${b64Url(header)}.${b64Url(payload)}.demo_signature`
 }
 
 export function Header({
@@ -55,11 +72,20 @@ export function Header({
   }
 
   const currentHealth = healthBadgeConfig[systemHealth]
-  const { role, setRole, isSupervisor } = useUserRole()
+  const { role, setRole, isSupervisor, authToken, setAuthToken, userSub } = useUserRole()
 
   const handleToggleRole = () => {
     const nextRole = role === 'supervisor' ? 'agent' : 'supervisor'
     setRole(nextRole)
+  }
+
+  const handleToggleAuth = () => {
+    if (authToken) {
+      setAuthToken(null)
+    } else {
+      const demoToken = createDemoJwt(['supervisors'], 'demo-supervisor-01')
+      setAuthToken(demoToken)
+    }
   }
 
   return (
@@ -137,7 +163,56 @@ export function Header({
             <span>{currentHealth.label}</span>
           </div>
 
-          {/* Role Switcher Badge/Button */}
+          {/* Authentication Status Badge */}
+          <div
+            data-testid="auth-status-badge"
+            className={cn(
+              'inline-flex items-center space-x-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium border',
+              authToken
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-slate-50 text-slate-600 border-slate-200'
+            )}
+          >
+            <span
+              className={cn(
+                'h-1.5 w-1.5 rounded-full',
+                authToken ? 'bg-emerald-500' : 'bg-slate-400'
+              )}
+              aria-hidden="true"
+            />
+            <span>
+              {authToken
+                ? `Cognito: Connected${userSub ? ` (${userSub})` : ''}`
+                : 'Dev Mode: Simulated'}
+            </span>
+          </div>
+
+          {/* Demo Cognito Authentication Toggle Button */}
+          <button
+            type="button"
+            onClick={handleToggleAuth}
+            data-testid="auth-token-button"
+            aria-label={authToken ? 'Sign out' : 'Sign in with Cognito (Demo)'}
+            className={cn(
+              'inline-flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium rounded-md border shadow-sm transition-colors',
+              'focus:outline-none focus:ring-2 focus:ring-slate-400',
+              authToken
+                ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+            )}
+          >
+            {authToken ? (
+              <>
+                <LogOut className="h-3.5 w-3.5 text-rose-600" aria-hidden="true" />
+                <span>Sign out</span>
+              </>
+            ) : (
+              <>
+                <LogIn className="h-3.5 w-3.5 text-indigo-600" aria-hidden="true" />
+                <span>Sign in with Cognito (Demo)</span>
+              </>
+            )}
+          </button>
           <button
             type="button"
             onClick={handleToggleRole}
