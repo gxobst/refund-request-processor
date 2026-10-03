@@ -166,11 +166,11 @@ def get_policy_history(category: str | None = None) -> list[PolicyAuditEntry]:
                 f"Category '{category}' is not a valid refund category. "
                 f"Valid categories are: {', '.join(sorted(valid_categories))}"
             )
-        entries = [e for e in _policy_audit_history if e.category == normalized]
+        indexed_entries = [(idx, e) for idx, e in enumerate(_policy_audit_history) if e.category == normalized]
     else:
-        entries = list(_policy_audit_history)
+        indexed_entries = list(enumerate(_policy_audit_history))
 
-    return sorted(entries, key=lambda e: e.timestamp, reverse=True)
+    return [e for _, e in sorted(indexed_entries, key=lambda x: (x[1].timestamp, x[0]), reverse=True)]
 
 
 def rollback_policy(

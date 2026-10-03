@@ -278,3 +278,28 @@ async def test_reset_active_policies_clears_audit_history():
     reset_active_policies()
     assert len(get_policy_history()) == 0
     assert get_active_policies().damaged.return_window_days == 30
+
+
+@pytest.mark.asyncio
+async def test_get_history_tie_breaking_identical_timestamps():
+    """Verify that entries with identical timestamps break ties by insertion order (newest/later first)."""
+    from app.policy.loader import _policy_audit_history, get_policy_history, update_category_policy
+
+    update_category_policy("damaged", {"return_window_days": 35})
+    update_category_policy("late_delivery", {"return_window_days": 20})
+    update_category_policy("damaged", {"return_window_days": 40})
+
+    # Force identical timestamps on all 3 entries to simulate rapid clock tie
+    fixed_ts = "2026-10-03T12:00:00+00:00"
+    for entry in _policy_audit_history:
+        entry.timestamp = fixed_ts
+
+    history = get_policy_history()
+    assert len(history) == 3
+    # Reverse insertion order: damaged (40), late_delivery (20), damaged (35)
+    assert history[0].category == "damaged"
+    assert history[0].changes["return_window_days"].new_value == 40
+    assert history[1].category == "late_delivery"
+    assert history[1].changes["return_window_days"].new_value == 20
+    assert history[2].category == "damaged"
+    assert history[2].changes["return_window_days"].new_value == 35
