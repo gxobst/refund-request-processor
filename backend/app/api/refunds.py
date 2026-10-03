@@ -19,10 +19,16 @@ from app.db.repository import RefundNotFoundError, RefundRepository
 from app.graph.runner import resume_refund_workflow, run_refund_workflow
 from app.schemas.order import ORDER_ID_PATTERN
 from app.services.broadcaster import broadcaster
+from app.core.config import get_settings
+from app.services.email_delivery import send_export_report_email
 from app.schemas.refund import (
     BulkExportJobRequest,
     BulkExportJobResponse,
     EvidenceItem,
+    ExportScheduleCreate,
+    ExportScheduleResponse,
+    ExportScheduleUpdate,
+    ExportTriggerResponse,
     RefundClarificationRequest,
     RefundCreateRequest,
     RefundCreateResponse,
@@ -986,6 +992,288 @@ async def get_bulk_export_job(
 
     return BulkExportJobResponse(**_export_jobs[job_id])
 
+
+# In-memory export schedule store
+_export_schedules: dict[str, dict[str, Any]] = {}
+
+
+def reset_export_schedules() -> None:
+    """Reset the in-memory export schedule store (used for test isolation)."""
+    _export_schedules.clear()
+
+
+def get_export_schedules_store() -> dict[str, dict[str, Any]]:
+    """Return reference to in-memory export schedule store."""
+    return _export_schedules
+
+
+@router.post(
+    "/export/schedules",
+    response_model=ExportScheduleResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a recurring queue export schedule",
+)
+async def create_export_schedule(
+    body: ExportScheduleCreate,
+    request: Request,
+) -> Any:
+    """Create a new automated recurring export schedule."""
+    resolved_cols: list[str] | None = None
+    if body.columns is not None:
+        resolved_cols, err_resp = _parse_and_validate_columns(body.columns, request=request)
+        if err_resp:
+            return err_resp
+
+    schedule_id = f"sch_{uuid.uuid4().hex[:10]}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    schedule_data: dict[str, Any] = {
+        "schedule_id": schedule_id,
+        "name": body.name,
+        "recipients": body.recipients,
+        "frequency": body.frequency,
+        "format": body.format,
+        "status_filter": body.status_filter,
+        "columns": resolved_cols if resolved_cols is not None else body.columns,
+        "enabled": body.enabled,
+        "created_at": now_iso,
+        "last_run": None,
+        "last_status": "never_run",
+    }
+    _export_schedules[schedule_id] = schedule_data
+    return JSONResponse(
+        status_code=status.HTTP_201_CREATED,
+        content=ExportScheduleResponse(**schedule_data).model_dump(mode="json"),
+    )
+
+
+@router.get(
+    "/export/schedules",
+    response_model=list[ExportScheduleResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List all recurring queue export schedules",
+)
+async def list_export_schedules() -> Any:
+    """List all configured export schedules."""
+    return [ExportScheduleResponse(**s) for s in _export_schedules.values()]
+
+
+@router.get(
+    "/export/schedules/{schedule_id}",
+    response_model=ExportScheduleResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get export schedule details",
+)
+async def get_export_schedule(
+    schedule_id: str,
+    request: Request,
+) -> Any:
+    """Retrieve details for a specific export schedule."""
+    if schedule_id not in _export_schedules:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "type": "urn:problem:not-found",
+                "title": "Not Found",
+                "status": 404,
+                "detail": f"Export schedule '{schedule_id}' not found.",
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
+        )
+    return ExportScheduleResponse(**_export_schedules[schedule_id])
+
+
+@router.put(
+    "/export/schedules/{schedule_id}",
+    response_model=ExportScheduleResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update an existing export schedule",
+)
+async def update_export_schedule(
+    schedule_id: str,
+    body: ExportScheduleUpdate,
+    request: Request,
+) -> Any:
+    """Update configuration fields on an existing export schedule."""
+    if schedule_id not in _export_schedules:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "type": "urn:problem:not-found",
+                "title": "Not Found",
+                "status": 404,
+                "detail": f"Export schedule '{schedule_id}' not found.",
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
+        )
+
+    resolved_cols: list[str] | None = None
+    if body.columns is not None:
+        resolved_cols, err_resp = _parse_and_validate_columns(body.columns, request=request)
+        if err_resp:
+            return err_resp
+
+    schedule = _export_schedules[schedule_id]
+    if body.name is not None:
+        schedule["name"] = body.name
+    if body.recipients is not None:
+        schedule["recipients"] = body.recipients
+    if body.frequency is not None:
+        schedule["frequency"] = body.frequency
+    if body.format is not None:
+        schedule["format"] = body.format
+    if "status_filter" in body.model_fields_set:
+        schedule["status_filter"] = body.status_filter
+    if "columns" in body.model_fields_set:
+        schedule["columns"] = resolved_cols if resolved_cols is not None else body.columns
+    if body.enabled is not None:
+        schedule["enabled"] = body.enabled
+
+    return ExportScheduleResponse(**schedule)
+
+
+@router.delete(
+    "/export/schedules/{schedule_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete an export schedule",
+)
+async def delete_export_schedule(
+    schedule_id: str,
+    request: Request,
+) -> Response:
+    """Delete an existing export schedule."""
+    if schedule_id not in _export_schedules:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "type": "urn:problem:not-found",
+                "title": "Not Found",
+                "status": 404,
+                "detail": f"Export schedule '{schedule_id}' not found.",
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
+        )
+    del _export_schedules[schedule_id]
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/export/schedules/{schedule_id}/trigger",
+    response_model=ExportTriggerResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Manually trigger an export schedule run and email delivery",
+)
+async def trigger_export_schedule(
+    schedule_id: str,
+    request: Request,
+    repo: RefundRepository = Depends(get_repository),
+) -> Any:
+    """Manually trigger immediate execution and email delivery for an export schedule."""
+    if schedule_id not in _export_schedules:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "type": "urn:problem:not-found",
+                "title": "Not Found",
+                "status": 404,
+                "detail": f"Export schedule '{schedule_id}' not found.",
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
+        )
+
+    schedule = _export_schedules[schedule_id]
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    try:
+        status_filter = schedule.get("status_filter")
+        records = repo.list_refund_requests(status=status_filter, limit=10000)
+
+        fmt = schedule.get("format", "csv")
+        cols = schedule.get("columns")
+
+        if fmt == "csv":
+            content_str = _format_export_csv(records, columns=cols)
+            payload_bytes = content_str.encode("utf-8")
+            ext = "csv"
+            mime_type = "text/csv"
+        else:
+            if cols is not None:
+                json_data = [
+                    {col_id: _get_json_column_value(r, col_id) for col_id in cols}
+                    for r in records
+                ]
+            else:
+                json_data = [
+                    r.model_dump(mode="json") if hasattr(r, "model_dump") else r
+                    for r in records
+                ]
+            content_str = json.dumps(json_data, indent=2)
+            payload_bytes = content_str.encode("utf-8")
+            ext = "json"
+            mime_type = "application/json"
+
+        settings = get_settings()
+        sender = settings.ses_sender_email
+        filename = f"refunds-export-{schedule_id}.{ext}"
+        subject = f"Refund Queue Export Report: {schedule['name']}"
+        body_text = (
+            f"Scheduled refund queue export report for '{schedule['name']}'.\n\n"
+            f"Frequency: {schedule.get('frequency')}\n"
+            f"Status filter: {status_filter or 'All'}\n"
+            f"Total records exported: {len(records)}\n"
+            f"Generated at: {now_iso}\n"
+        )
+        body_html = (
+            f"<h2>Refund Queue Export Report</h2>"
+            f"<p>Scheduled export report for <strong>{schedule['name']}</strong>.</p>"
+            f"<ul>"
+            f"<li><strong>Frequency:</strong> {schedule.get('frequency')}</li>"
+            f"<li><strong>Status Filter:</strong> {status_filter or 'All'}</li>"
+            f"<li><strong>Total Records:</strong> {len(records)}</li>"
+            f"<li><strong>Generated At:</strong> {now_iso}</li>"
+            f"</ul>"
+        )
+
+        send_export_report_email(
+            sender=sender,
+            recipients=schedule["recipients"],
+            subject=subject,
+            body_text=body_text,
+            body_html=body_html,
+            attachment_filename=filename,
+            attachment_bytes=payload_bytes,
+            attachment_mime_type=mime_type,
+            settings=settings,
+        )
+
+        schedule["last_run"] = now_iso
+        schedule["last_status"] = "success"
+
+        return ExportTriggerResponse(
+            schedule_id=schedule_id,
+            records_exported=len(records),
+            recipients_delivered=schedule["recipients"],
+            status="success",
+            executed_at=now_iso,
+        )
+    except Exception as e:
+        schedule["last_run"] = now_iso
+        schedule["last_status"] = "failure"
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "type": "urn:problem:internal-server-error",
+                "title": "Internal Server Error",
+                "status": 500,
+                "detail": f"Failed to execute export schedule '{schedule_id}': {e}",
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
+        )
 
 
 @router.get(

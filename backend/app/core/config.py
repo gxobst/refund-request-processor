@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     s3_endpoint_url: str | None = None
     local_storage_dir: str = "uploads"
 
+    # AWS SES
+    ses_sender_email: str = "noreply@refunds.example.com"
+
     # Environment
     app_env: str = "development"
 

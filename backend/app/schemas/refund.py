@@ -1,6 +1,7 @@
 """Refund request schemas and data models."""
 
 from datetime import datetime, timezone
+import re
 from typing import Any, Literal
 import uuid
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -295,6 +296,106 @@ class BulkExportJobResponse(BaseModel):
     download_url: str | None = Field(default=None, description="Direct presigned S3 download URL or local download route.")
     record_count: int | None = Field(default=None, description="Number of exported refund records.")
     error: str | None = Field(default=None, description="Error message if export job failed.")
+
+
+EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class ExportScheduleCreate(BaseModel):
+    """Request payload for creating a new recurring export delivery schedule."""
+
+    name: str = Field(..., min_length=1, max_length=100, description="Friendly schedule name.")
+    recipients: list[str] = Field(..., min_length=1, description="List of recipient email addresses.")
+    frequency: Literal["daily", "weekly"] = Field(default="daily", description="Schedule trigger frequency.")
+    format: Literal["csv", "json"] = Field(default="csv", description="Export attachment format.")
+    status_filter: RefundStatus | None = Field(default=None, description="Optional refund status filter.")
+    columns: list[str] | None = Field(default=None, description="Optional list of column names or identifiers.")
+    enabled: bool = Field(default=True, description="Whether the schedule is currently enabled.")
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Schedule name cannot be blank or whitespace-only.")
+        return v.strip()
+
+    @field_validator("recipients")
+    @classmethod
+    def validate_recipients(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("Recipients list cannot be empty.")
+        cleaned: list[str] = []
+        for email in v:
+            if not isinstance(email, str):
+                raise ValueError("Recipient email must be a string.")
+            stripped = email.strip()
+            if not stripped or not EMAIL_REGEX.match(stripped):
+                raise ValueError(f"Invalid email address format: '{email}'.")
+            cleaned.append(stripped)
+        return cleaned
+
+
+class ExportScheduleUpdate(BaseModel):
+    """Request payload for updating an existing recurring export delivery schedule."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=100, description="Friendly schedule name.")
+    recipients: list[str] | None = Field(default=None, min_length=1, description="List of recipient email addresses.")
+    frequency: Literal["daily", "weekly"] | None = Field(default=None, description="Schedule trigger frequency.")
+    format: Literal["csv", "json"] | None = Field(default=None, description="Export attachment format.")
+    status_filter: RefundStatus | None = Field(default=None, description="Optional refund status filter.")
+    columns: list[str] | None = Field(default=None, description="Optional list of column names or identifiers.")
+    enabled: bool | None = Field(default=None, description="Whether the schedule is enabled.")
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str | None) -> str | None:
+        if v is not None and (not v or not v.strip()):
+            raise ValueError("Schedule name cannot be blank or whitespace-only.")
+        return v.strip() if v is not None else None
+
+    @field_validator("recipients")
+    @classmethod
+    def validate_recipients(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        if not v:
+            raise ValueError("Recipients list cannot be empty.")
+        cleaned: list[str] = []
+        for email in v:
+            if not isinstance(email, str):
+                raise ValueError("Recipient email must be a string.")
+            stripped = email.strip()
+            if not stripped or not EMAIL_REGEX.match(stripped):
+                raise ValueError(f"Invalid email address format: '{email}'.")
+            cleaned.append(stripped)
+        return cleaned
+
+
+class ExportScheduleResponse(BaseModel):
+    """Response payload representing an export schedule configuration and status."""
+
+    schedule_id: str
+    name: str
+    recipients: list[str]
+    frequency: Literal["daily", "weekly"]
+    format: Literal["csv", "json"]
+    status_filter: RefundStatus | None = None
+    columns: list[str] | None = None
+    enabled: bool
+    created_at: str
+    last_run: str | None = None
+    last_status: Literal["success", "failure", "never_run"] = "never_run"
+
+
+class ExportTriggerResponse(BaseModel):
+    """Response payload returned when manually triggering an export schedule."""
+
+    schedule_id: str
+    records_exported: int
+    recipients_delivered: list[str]
+    status: Literal["success", "failure"]
+    executed_at: str
+
 
 
 

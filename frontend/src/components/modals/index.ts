@@ -12,3 +12,7 @@ export type { CustomerClarificationModalProps } from './CustomerClarificationMod
 
 export { ExportCustomizationModal } from './ExportCustomizationModal'
 export type { ExportCustomizationModalProps } from './ExportCustomizationModal'
+
+export { ScheduledExportsModal } from './ScheduledExportsModal'
+export type { ScheduledExportsModalProps } from './ScheduledExportsModal'
+

@@ -3,6 +3,8 @@ import type {
   RefundRecord,
   RefundCreateResponse,
   ProblemDetails,
+  ExportSchedule,
+  ExportTriggerResponse,
 } from '@/types/api'
 
 export const INITIAL_MOCK_REFUNDS: RefundRecord[] = [
@@ -202,6 +204,29 @@ export let mockRefunds: RefundRecord[] = JSON.parse(JSON.stringify(INITIAL_MOCK_
 export function resetMockRefunds() {
   mockRefunds = JSON.parse(JSON.stringify(INITIAL_MOCK_REFUNDS))
 }
+
+export const INITIAL_MOCK_SCHEDULES: ExportSchedule[] = [
+  {
+    schedule_id: 'sch_default_1',
+    name: 'Daily Queue Summary',
+    recipients: ['admin@example.com', 'ops@example.com'],
+    frequency: 'daily',
+    format: 'csv',
+    status_filter: null,
+    columns: null,
+    enabled: true,
+    created_at: '2026-10-01T10:00:00Z',
+    last_run: '2026-10-02T10:00:00Z',
+    last_status: 'success',
+  },
+]
+
+export let mockSchedules: ExportSchedule[] = JSON.parse(JSON.stringify(INITIAL_MOCK_SCHEDULES))
+
+export function resetMockSchedules() {
+  mockSchedules = JSON.parse(JSON.stringify(INITIAL_MOCK_SCHEDULES))
+}
+
 
 export const handlers = [
   // GET /v1/refunds (list with optional status filter)
@@ -523,4 +548,119 @@ export const handlers = [
       { status: 200 }
     )
   }),
+
+  // GET /v1/refunds/export/schedules
+  http.get('*/v1/refunds/export/schedules', () => {
+    return HttpResponse.json(mockSchedules, { status: 200 })
+  }),
+
+  // POST /v1/refunds/export/schedules
+  http.post('*/v1/refunds/export/schedules', async ({ request }) => {
+    const body = (await request.json()) as Record<string, unknown>
+    const newSchedule: ExportSchedule = {
+      schedule_id: `sch_${Date.now().toString(16)}`,
+      name: String(body.name || 'Unnamed Schedule'),
+      recipients: Array.isArray(body.recipients) ? (body.recipients as string[]) : [],
+      frequency: (body.frequency as 'daily' | 'weekly') || 'daily',
+      format: (body.format as 'csv' | 'json') || 'csv',
+      status_filter: (body.status_filter as any) || null,
+      columns: Array.isArray(body.columns) ? (body.columns as string[]) : null,
+      enabled: body.enabled !== false,
+      created_at: new Date().toISOString(),
+      last_run: null,
+      last_status: 'never_run',
+    }
+    mockSchedules.push(newSchedule)
+    return HttpResponse.json(newSchedule, { status: 201 })
+  }),
+
+  // GET /v1/refunds/export/schedules/:scheduleId
+  http.get('*/v1/refunds/export/schedules/:scheduleId', ({ params }) => {
+    const { scheduleId } = params
+    const sch = mockSchedules.find((s) => s.schedule_id === scheduleId)
+    if (!sch) {
+      return HttpResponse.json(
+        {
+          type: 'urn:problem:not-found',
+          title: 'Not Found',
+          status: 404,
+          detail: `Schedule ${scheduleId} not found.`,
+        },
+        { status: 404 }
+      )
+    }
+    return HttpResponse.json(sch, { status: 200 })
+  }),
+
+  // PUT /v1/refunds/export/schedules/:scheduleId
+  http.put('*/v1/refunds/export/schedules/:scheduleId', async ({ params, request }) => {
+    const { scheduleId } = params
+    const sch = mockSchedules.find((s) => s.schedule_id === scheduleId)
+    if (!sch) {
+      return HttpResponse.json(
+        {
+          type: 'urn:problem:not-found',
+          title: 'Not Found',
+          status: 404,
+          detail: `Schedule ${scheduleId} not found.`,
+        },
+        { status: 404 }
+      )
+    }
+    const body = (await request.json()) as Record<string, unknown>
+    if (body.name !== undefined) sch.name = String(body.name)
+    if (body.recipients !== undefined) sch.recipients = body.recipients as string[]
+    if (body.frequency !== undefined) sch.frequency = body.frequency as 'daily' | 'weekly'
+    if (body.format !== undefined) sch.format = body.format as 'csv' | 'json'
+    if (body.enabled !== undefined) sch.enabled = Boolean(body.enabled)
+    return HttpResponse.json(sch, { status: 200 })
+  }),
+
+  // DELETE /v1/refunds/export/schedules/:scheduleId
+  http.delete('*/v1/refunds/export/schedules/:scheduleId', ({ params }) => {
+    const { scheduleId } = params
+    const idx = mockSchedules.findIndex((s) => s.schedule_id === scheduleId)
+    if (idx === -1) {
+      return HttpResponse.json(
+        {
+          type: 'urn:problem:not-found',
+          title: 'Not Found',
+          status: 404,
+          detail: `Schedule ${scheduleId} not found.`,
+        },
+        { status: 404 }
+      )
+    }
+    mockSchedules.splice(idx, 1)
+    return new HttpResponse(null, { status: 204 })
+  }),
+
+  // POST /v1/refunds/export/schedules/:scheduleId/trigger
+  http.post('*/v1/refunds/export/schedules/:scheduleId/trigger', ({ params }) => {
+    const { scheduleId } = params
+    const sch = mockSchedules.find((s) => s.schedule_id === scheduleId)
+    if (!sch) {
+      return HttpResponse.json(
+        {
+          type: 'urn:problem:not-found',
+          title: 'Not Found',
+          status: 404,
+          detail: `Schedule ${scheduleId} not found.`,
+        },
+        { status: 404 }
+      )
+    }
+    const nowIso = new Date().toISOString()
+    sch.last_run = nowIso
+    sch.last_status = 'success'
+    const response: ExportTriggerResponse = {
+      schedule_id: String(scheduleId),
+      records_exported: 12,
+      recipients_delivered: sch.recipients,
+      status: 'success',
+      executed_at: nowIso,
+    }
+    return HttpResponse.json(response, { status: 200 })
+  }),
 ]
+

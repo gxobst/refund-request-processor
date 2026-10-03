@@ -54,3 +54,57 @@ export interface BulkExportJobResponse {
   error?: string | null
 }
 
+export interface ExportSchedule {
+  schedule_id: string
+  scheduleId?: string
+  name: string
+  recipients: string[]
+  frequency: 'daily' | 'weekly'
+  format: 'csv' | 'json'
+  status_filter?: RefundStatus | null
+  statusFilter?: RefundStatus | null
+  columns?: string[] | null
+  enabled: boolean
+  created_at: string
+  createdAt?: string
+  last_run?: string | null
+  lastRun?: string | null
+  last_status?: 'success' | 'failure' | 'never_run'
+  lastStatus?: 'success' | 'failure' | 'never_run'
+}
+
+export interface CreateExportSchedulePayload {
+  name: string
+  recipients: string[]
+  frequency?: 'daily' | 'weekly'
+  format?: 'csv' | 'json'
+  status_filter?: RefundStatus | null
+  statusFilter?: RefundStatus | null
+  columns?: string[] | null
+  enabled?: boolean
+}
+
+export interface UpdateExportSchedulePayload {
+  name?: string
+  recipients?: string[]
+  frequency?: 'daily' | 'weekly'
+  format?: 'csv' | 'json'
+  status_filter?: RefundStatus | null
+  statusFilter?: RefundStatus | null
+  columns?: string[] | null
+  enabled?: boolean
+}
+
+export interface ExportTriggerResponse {
+  schedule_id: string
+  scheduleId?: string
+  records_exported: number
+  recordsExported?: number
+  recipients_delivered: string[]
+  recipientsDelivered?: string[]
+  status: 'success' | 'failure'
+  executed_at: string
+  executedAt?: string
+}
+
+

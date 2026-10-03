@@ -19,6 +19,7 @@ import {
 import { DecisionBadge } from '@/components/badges/DecisionBadge'
 import { StatusBadge } from '@/components/badges/StatusBadge'
 import { ExportCustomizationModal } from '@/components/modals/ExportCustomizationModal'
+import { ScheduledExportsModal } from '@/components/modals/ScheduledExportsModal'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import type { RefundRecord, RefundStatus, ProblemDetails } from '@/types/api'
@@ -207,6 +208,7 @@ export function RefundQueueTable({
   // Export dropdown state and click-outside / escape listeners
   const [isExportOpen, setIsExportOpen] = React.useState(false)
   const [isCustomizeExportOpen, setIsCustomizeExportOpen] = React.useState(false)
+  const [isScheduledExportsOpen, setIsScheduledExportsOpen] = React.useState(false)
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
 
   React.useEffect(() => {
@@ -471,6 +473,18 @@ export function RefundQueueTable({
                 >
                   Bulk Export (Async)
                 </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="scheduled-exports-button"
+                  onClick={() => {
+                    setIsExportOpen(false)
+                    setIsScheduledExportsOpen(true)
+                  }}
+                  className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors flex items-center border-t border-slate-100 mt-1 pt-1"
+                >
+                  Scheduled Reports...
+                </button>
               </div>
             )}
           </div>
@@ -713,6 +727,11 @@ export function RefundQueueTable({
         onClose={() => setIsCustomizeExportOpen(false)}
         records={refunds}
         statusFilter={activeTab === 'all' ? 'all' : (currentTabConfig.statusFilter || activeTab)}
+      />
+
+      <ScheduledExportsModal
+        isOpen={isScheduledExportsOpen}
+        onClose={() => setIsScheduledExportsOpen(false)}
       />
     </div>
   )
