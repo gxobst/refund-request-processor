@@ -503,6 +503,83 @@ def _extract_image_block(item: Any, storage_service: Any = None) -> dict[str, An
     }
 
 
+def build_image_spatial_context(evidence_items: list[Any] | None) -> str:
+    """Build spatial reasoning and resolution tier guidance from evidence image dimensions."""
+    if not evidence_items:
+        return ""
+
+    lines: list[str] = []
+    idx = 1
+    for ev in evidence_items:
+        if ev is None:
+            continue
+        if hasattr(ev, "model_dump"):
+            d = ev.model_dump()
+        elif isinstance(ev, dict):
+            d = ev
+        else:
+            d = {}
+
+        width = d.get("width") if isinstance(d, dict) and "width" in d else getattr(ev, "width", None)
+        height = d.get("height") if isinstance(d, dict) and "height" in d else getattr(ev, "height", None)
+
+        if isinstance(width, bool) or isinstance(height, bool):
+            continue
+        if not isinstance(width, (int, float)) or not isinstance(height, (int, float)):
+            continue
+        if width <= 0 or height <= 0:
+            continue
+
+        w = int(width)
+        h = int(height)
+        if w <= 0 or h <= 0:
+            continue
+
+        raw_filename = d.get("filename") if isinstance(d, dict) and "filename" in d else getattr(ev, "filename", None)
+        if raw_filename and isinstance(raw_filename, str) and raw_filename.strip():
+            filename = raw_filename.strip()
+        else:
+            filename = f"image_{idx}"
+
+        aspect_ratio = round(w / h, 2)
+
+        if w > h * 1.15:
+            orientation = "landscape"
+        elif h > w * 1.15:
+            orientation = "portrait"
+        else:
+            orientation = "square"
+
+        if (w <= 600 and h <= 600) or (w * h < 360000):
+            tier = "macro/close-up"
+            guidance = (
+                "Macro / Close-up perspective: Focus on micro-defects, surface cracks, "
+                "fine texture, serial numbers, or localized hardware flaws."
+            )
+        elif (w >= 2000 or h >= 2000) or (w * h >= 4000000):
+            tier = "wide/high-resolution"
+            guidance = (
+                "Wide / High-resolution perspective: Evaluate overall item composition, "
+                "surrounding packaging condition, complete item integrity, and spatial defect location."
+            )
+        else:
+            tier = "standard"
+            guidance = (
+                "Standard perspective: Perform balanced item recognition and defect "
+                "localization across product body and immediate packaging."
+            )
+
+        lines.append(
+            f"- Image {idx} ({filename}): {w}x{h} (aspect ratio {aspect_ratio}, {orientation}, {tier}). {guidance}"
+        )
+        idx += 1
+
+    if not lines:
+        return ""
+
+    return "Evidence Image Spatial Guidance:\n" + "\n".join(lines)
+
+
 def check_policy(
     category: str,
     order: dict[str, Any],
@@ -715,10 +792,17 @@ def check_policy(
             "If multimodal inspection determines the photo is blurry, corrupted, unrecognizable, or inconclusive, conclude policy_status: 'ambiguous' and failed_rules: ['wrong_item_verification']."
         )
 
+    spatial_guidance = (
+        build_image_spatial_context(evidence)
+        if (image_blocks and evidence)
+        else ""
+    )
+    spatial_block = f"\n\n{spatial_guidance}" if spatial_guidance else ""
+
     human_text = f"""Category: {category}
 Order Details: {order}{customer_line}{high_value_mandate}{wrong_item_mandate}
 Deterministic Findings: {eval_result.details}
-Policy Rule: {rule_repr}
+Policy Rule: {rule_repr}{spatial_block}
 
 Analyze the situation and provide your determination:"""
 
