@@ -27,6 +27,7 @@ import { DecisionBadge } from '@/components/badges/DecisionBadge'
 import { StatusBadge } from '@/components/badges/StatusBadge'
 import { cn } from '@/lib/utils'
 import { CustomerClarificationModal } from '@/components/modals/CustomerClarificationModal'
+import { EvidenceGallery } from '@/components/evidence/EvidenceGallery'
 import type { RefundRecord, ProblemDetails } from '@/types/api'
 
 export interface RefundDetailDrawerProps {
@@ -528,11 +529,15 @@ export function RefundDetailDrawer({
             </section>
 
             {/* Child Slots Container (Evidence Gallery, Clarification History, Tool Execution Audit) */}
-            {children && (
+            {children ? (
               <div data-testid="detail-drawer-children-slot" className="space-y-6 pt-2">
                 {children}
               </div>
-            )}
+            ) : refund?.evidence && refund.evidence.length > 0 ? (
+              <div data-testid="detail-drawer-children-slot" className="space-y-6 pt-2">
+                <EvidenceGallery evidence={refund.evidence} />
+              </div>
+            ) : null}
           </>
         )}
       </DrawerContent>

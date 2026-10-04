@@ -42,6 +42,7 @@ from app.schemas.refund import (
     RefundStatus,
     ReviewerProofRequest,
 )
+from app.services.malware_scanner import scan_evidence_file
 from app.services.storage import EvidenceStorageService, get_evidence_storage_service
 
 router = APIRouter(prefix="/refunds", tags=["refunds"])
@@ -89,6 +90,40 @@ def _parse_multipart_request(
 def get_repository() -> RefundRepository:
     """Dependency provider for RefundRepository."""
     return RefundRepository()
+
+
+async def _run_scan_task(
+    refund_id: str,
+    storage_key: str,
+    file_bytes: bytes,
+    repo: RefundRepository | None = None,
+) -> None:
+    """Execute asynchronous malware scanning and update stored evidence status."""
+    scan_status, threat_name, scanned_at = scan_evidence_file(file_bytes)
+    if repo is None:
+        repo = get_repository()
+    if hasattr(repo, "update_evidence_scan_status"):
+        repo.update_evidence_scan_status(
+            refund_id=refund_id,
+            storage_key=storage_key,
+            scan_status=scan_status,
+            threat_name=threat_name,
+            scanned_at=scanned_at,
+        )
+    elif hasattr(repo, "get_refund_request"):
+        rec = repo.get_refund_request(refund_id)
+        if rec is not None:
+            for item in getattr(rec, "evidence", []):
+                k = getattr(item, "storage_key", None) if hasattr(item, "storage_key") else (item.get("storage_key") if isinstance(item, dict) else None)
+                if k == storage_key:
+                    if hasattr(item, "scan_status"):
+                        item.scan_status = scan_status
+                        item.threat_name = threat_name
+                        item.scanned_at = scanned_at
+                    elif isinstance(item, dict):
+                        item["scan_status"] = scan_status
+                        item["threat_name"] = threat_name
+                        item["scanned_at"] = scanned_at
 
 
 @router.get(
@@ -298,6 +333,9 @@ async def submit_refund_request(
             refund_id=refund_id,
             order_id=order_id,
         )
+        saved_meta["scan_status"] = "pending"
+        saved_meta["threat_name"] = None
+        saved_meta["scanned_at"] = None
         evidence.append(saved_meta)
 
     # 1. Create initial pending record in DynamoDB
@@ -311,6 +349,15 @@ async def submit_refund_request(
         record = repo.create_refund_request(
             order_id=order_id,
             customer_request_text=customer_request_text,
+        )
+
+    if uploaded_file is not None and evidence:
+        background_tasks.add_task(
+            _run_scan_task,
+            refund_id=record.refund_id,
+            storage_key=evidence[0]["storage_key"],
+            file_bytes=file_bytes,
+            repo=repo,
         )
 
     # 2. Schedule async LangGraph workflow execution in the background
@@ -1479,10 +1526,21 @@ async def upload_refund_evidence(
         refund_id=refund_id,
         order_id=record.order_id,
     )
+    saved_meta["scan_status"] = "pending"
+    saved_meta["threat_name"] = None
+    saved_meta["scanned_at"] = None
 
     updated = repo.add_evidence(
         refund_id=refund_id,
         evidence_item=saved_meta,
+    )
+
+    background_tasks.add_task(
+        _run_scan_task,
+        refund_id=refund_id,
+        storage_key=saved_meta["storage_key"],
+        file_bytes=file_bytes,
+        repo=repo,
     )
 
     if record.status == "awaiting_clarification":
@@ -1500,6 +1558,90 @@ async def upload_refund_evidence(
         )
 
     return updated
+
+
+@router.get(
+    "/{refund_id}/evidence/{evidence_id}",
+    summary="Retrieve or download refund evidence file",
+)
+@router.get(
+    "/{refund_id}/evidence/{evidence_id}/download",
+    summary="Download refund evidence file",
+)
+async def get_refund_evidence(
+    refund_id: str,
+    evidence_id: str,
+    request: Request,
+    repo: RefundRepository = Depends(get_repository),
+    storage_service: EvidenceStorageService = Depends(get_evidence_storage_service),
+):
+    """Retrieve or download evidence attachment, enforcing malware quarantine blocking."""
+    record = repo.get_refund_request(refund_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Refund request '{refund_id}' not found",
+        )
+
+    matched_item = None
+    for item in record.evidence:
+        if (
+            item.evidence_id == evidence_id
+            or item.storage_key == evidence_id
+            or item.filename == evidence_id
+        ):
+            matched_item = item
+            break
+
+    if matched_item is None and evidence_id.isdigit():
+        idx = int(evidence_id)
+        if 0 <= idx < len(record.evidence):
+            matched_item = record.evidence[idx]
+
+    if matched_item is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evidence item '{evidence_id}' not found for refund '{refund_id}'.",
+        )
+
+    if matched_item.scan_status == "infected":
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={
+                "type": "urn:problem:infected-evidence",
+                "title": "Infected Evidence File",
+                "status": status.HTTP_403_FORBIDDEN,
+                "detail": "Evidence file blocked: flagged as infected by security scan",
+                "instance": request.url.path,
+            },
+            media_type="application/problem+json",
+        )
+
+    if matched_item.url and matched_item.url.startswith("http"):
+        return RedirectResponse(
+            url=matched_item.url,
+            status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+        )
+
+    try:
+        content = storage_service.get_file(matched_item.storage_key)
+        return Response(
+            content=content,
+            media_type=matched_item.content_type or "application/octet-stream",
+            headers={
+                "Content-Disposition": f'inline; filename="{matched_item.filename}"'
+            },
+        )
+    except Exception:
+        if matched_item.url:
+            return RedirectResponse(
+                url=matched_item.url,
+                status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evidence file not found in storage.",
+        )
 
 
 CLARIFY_REQUEST_OPENAPI_EXTRA: dict[str, Any] = {
@@ -1665,7 +1807,18 @@ async def clarify_refund_request(
             refund_id=refund_id,
             order_id=record.order_id,
         )
+        saved_meta["scan_status"] = "pending"
+        saved_meta["threat_name"] = None
+        saved_meta["scanned_at"] = None
         repo.add_evidence(refund_id=refund_id, evidence_item=saved_meta)
+
+        background_tasks.add_task(
+            _run_scan_task,
+            refund_id=refund_id,
+            storage_key=saved_meta["storage_key"],
+            file_bytes=file_bytes,
+            repo=repo,
+        )
 
     updated = repo.submit_clarification_response(
         refund_id=refund_id,

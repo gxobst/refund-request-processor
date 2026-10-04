@@ -3,6 +3,9 @@ import {
   ImageOff,
   ExternalLink,
   ZoomIn,
+  CheckCircle,
+  Clock,
+  AlertTriangle,
 } from 'lucide-react'
 import {
   Dialog,
@@ -29,6 +32,9 @@ interface NormalizedEvidence {
   sizeBytes: number
   url: string
   createdAt?: string
+  scanStatus: 'clean' | 'pending' | 'infected'
+  scannedAt?: string
+  threatName?: string
 }
 
 export function formatFileSize(bytes?: number | null): string {
@@ -58,6 +64,27 @@ function normalizeEvidenceItem(item: EvidenceItem, index: number): NormalizedEvi
   const url = item.url || (rec.storage_key as string) || ''
   const createdAt = item.createdAt || (rec.created_at as string) || undefined
 
+  const rawStatus =
+    item.scanStatus ||
+    (rec.scan_status as 'clean' | 'pending' | 'infected') ||
+    (rec.scanStatus as 'clean' | 'pending' | 'infected')
+  const scanStatus: 'clean' | 'pending' | 'infected' =
+    rawStatus === 'infected'
+      ? 'infected'
+      : rawStatus === 'pending'
+      ? 'pending'
+      : 'clean'
+  const scannedAt =
+    item.scannedAt ||
+    (rec.scanned_at as string) ||
+    (rec.scannedAt as string) ||
+    undefined
+  const threatName =
+    item.threatName ||
+    (rec.threat_name as string) ||
+    (rec.threatName as string) ||
+    undefined
+
   return {
     id,
     filename,
@@ -65,6 +92,9 @@ function normalizeEvidenceItem(item: EvidenceItem, index: number): NormalizedEvi
     sizeBytes,
     url,
     createdAt,
+    scanStatus,
+    scannedAt,
+    threatName,
   }
 }
 
@@ -135,26 +165,42 @@ export function EvidenceGallery({
       >
         {normalizedList.map((item) => {
           const isBroken = failedImages[item.id]
+          const isInfected = item.scanStatus === 'infected'
 
           return (
             <div
               key={item.id}
               data-testid="evidence-card"
-              className="group relative flex flex-col rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm transition-all hover:border-slate-300 hover:shadow-md cursor-pointer"
-              onClick={() => setSelectedItem(item)}
+              className={cn(
+                'group relative flex flex-col rounded-lg border bg-white p-2.5 shadow-sm transition-all',
+                isInfected
+                  ? 'border-red-300 bg-red-50/20 cursor-not-allowed'
+                  : 'border-slate-200 hover:border-slate-300 hover:shadow-md cursor-pointer'
+              )}
+              onClick={isInfected ? undefined : () => setSelectedItem(item)}
               role="button"
-              tabIndex={0}
+              tabIndex={isInfected ? -1 : 0}
               onKeyDown={(e) => {
+                if (isInfected) return
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
                   setSelectedItem(item)
                 }
               }}
-              aria-label={`View evidence ${item.filename}`}
+              aria-label={isInfected ? `Quarantined evidence ${item.filename}` : `View evidence ${item.filename}`}
             >
               {/* Thumbnail Container */}
               <div className="relative aspect-square w-full overflow-hidden rounded bg-slate-100 border border-slate-200/80 mb-2">
-                {isBroken ? (
+                {isInfected ? (
+                  <div
+                    data-testid="evidence-infected-blocked"
+                    className="flex h-full w-full flex-col items-center justify-center bg-red-50 p-2 text-center text-red-600 select-none"
+                  >
+                    <AlertTriangle className="h-8 w-8 mb-1 text-red-600 stroke-1" />
+                    <span className="text-xs font-semibold text-red-700">Preview Blocked</span>
+                    <span className="text-[10px] text-red-500">Security Threat Detected</span>
+                  </div>
+                ) : isBroken ? (
                   <div
                     data-testid="image-fallback"
                     className="flex h-full w-full flex-col items-center justify-center bg-slate-100 p-2 text-center text-slate-400"
@@ -185,12 +231,14 @@ export function EvidenceGallery({
 
               {/* Card Metadata */}
               <div className="space-y-1">
-                <p
-                  className="truncate text-xs font-semibold text-slate-900"
-                  title={item.filename}
-                >
-                  {item.filename}
-                </p>
+                <div className="flex items-center justify-between gap-1">
+                  <p
+                    className="truncate text-xs font-semibold text-slate-900"
+                    title={item.filename}
+                  >
+                    {item.filename}
+                  </p>
+                </div>
 
                 <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
                   <span>{formatFileSize(item.sizeBytes)}</span>
@@ -198,6 +246,48 @@ export function EvidenceGallery({
                     {item.contentType}
                   </span>
                 </div>
+
+                {/* Scan Status Badge */}
+                <div className="pt-1 flex items-center gap-1.5 flex-wrap">
+                  {item.scanStatus === 'clean' && (
+                    <span
+                      data-testid="evidence-scan-badge-clean"
+                      className="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 border border-emerald-200"
+                    >
+                      <CheckCircle className="h-3 w-3 text-emerald-600" />
+                      Clean
+                    </span>
+                  )}
+                  {item.scanStatus === 'pending' && (
+                    <span
+                      data-testid="evidence-scan-badge-pending"
+                      className="inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 border border-amber-200"
+                    >
+                      <Clock className="h-3 w-3 text-amber-600 animate-spin" />
+                      Scanning...
+                    </span>
+                  )}
+                  {item.scanStatus === 'infected' && (
+                    <span
+                      data-testid="evidence-scan-badge-infected"
+                      className="inline-flex items-center gap-1 rounded bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 border border-red-200"
+                    >
+                      <AlertTriangle className="h-3 w-3 text-red-600" />
+                      {item.threatName || 'Infected'}
+                    </span>
+                  )}
+                </div>
+
+                {/* Quarantined Warning Banner */}
+                {isInfected && (
+                  <div
+                    data-testid="infected-evidence-warning"
+                    className="mt-2 rounded bg-red-100 p-2 text-xs font-medium text-red-800 border border-red-200 flex items-start gap-1.5"
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5 text-red-600 shrink-0 mt-0.5" />
+                    <span>This file has been quarantined by automated malware inspection.</span>
+                  </div>
+                )}
               </div>
             </div>
           )

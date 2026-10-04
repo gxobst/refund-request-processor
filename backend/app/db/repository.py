@@ -553,6 +553,63 @@ class RefundRepository:
         self.table.put_item(Item=item)
         return RefundRecord.model_validate(updated_dict)
 
+    def update_evidence_scan_status(
+        self,
+        refund_id: str,
+        storage_key: str,
+        scan_status: str,
+        threat_name: str | None = None,
+        scanned_at: str | None = None,
+    ) -> RefundRecord:
+        """Update antivirus and malware scan status for an evidence item identified by storage_key.
+
+        Args:
+            refund_id: Target refund request ID.
+            storage_key: Unique S3/local storage key path (or evidence_id/filename).
+            scan_status: Scan status ('clean', 'pending', or 'infected').
+            threat_name: Identified threat or signature name if infected.
+            scanned_at: Optional ISO-8601 timestamp of completed scan.
+
+        Returns:
+            Updated RefundRecord instance.
+
+        Raises:
+            RefundNotFoundError: If the refund request does not exist.
+        """
+        existing = self.get_refund_request(refund_id)
+        if existing is None:
+            raise RefundNotFoundError(f"Refund request with id '{refund_id}' not found.")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        scanned_at_iso = scanned_at or now_iso
+        updated_dict = existing.model_dump()
+        current_evidence = list(updated_dict.get("evidence") or [])
+
+        found = False
+        for item in current_evidence:
+            if item.get("storage_key") == storage_key:
+                item["scan_status"] = scan_status
+                item["threat_name"] = threat_name
+                item["scanned_at"] = scanned_at_iso
+                found = True
+                break
+
+        if not found:
+            for item in current_evidence:
+                if item.get("evidence_id") == storage_key or item.get("filename") == storage_key:
+                    item["scan_status"] = scan_status
+                    item["threat_name"] = threat_name
+                    item["scanned_at"] = scanned_at_iso
+                    found = True
+                    break
+
+        updated_dict["evidence"] = current_evidence
+        updated_dict["updated_at"] = now_iso
+
+        item = _convert_floats_to_decimal(updated_dict)
+        self.table.put_item(Item=item)
+        return RefundRecord.model_validate(updated_dict)
+
     def request_reviewer_proof(
         self,
         refund_id: str,

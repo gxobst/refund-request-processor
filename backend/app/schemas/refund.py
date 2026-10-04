@@ -33,6 +33,22 @@ class EvidenceItem(BaseModel):
     format: str | None = Field(
         default=None, description="Detected image format ('jpeg', 'png', 'webp')."
     )
+    scan_status: Literal["clean", "pending", "infected"] = Field(
+        default="pending", description="Antivirus scan status."
+    )
+    scanned_at: str | None = Field(
+        default=None, description="ISO-8601 timestamp of completed scan."
+    )
+    threat_name: str | None = Field(
+        default=None, description="Identified threat or signature name if infected."
+    )
+
+    @field_validator("scan_status", mode="before")
+    @classmethod
+    def validate_scan_status(cls, v: Any) -> str:
+        if v is None or v == "":
+            return "pending"
+        return v
 
 
 class ClarificationTurn(BaseModel):

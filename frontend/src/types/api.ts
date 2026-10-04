@@ -23,7 +23,14 @@ export interface RefundOverrideRequest {
 }
 export type ReviewerProofRequest = components['schemas']['ReviewerProofRequest']
 
-export type EvidenceItem = components['schemas']['EvidenceItem']
+export type EvidenceItem = components['schemas']['EvidenceItem'] & {
+  scanStatus?: 'clean' | 'pending' | 'infected'
+  scan_status?: 'clean' | 'pending' | 'infected'
+  scannedAt?: string
+  scanned_at?: string
+  threatName?: string
+  threat_name?: string
+}
 export type ClarificationTurn = components['schemas']['ClarificationTurn']
 export type ToolCallAudit = components['schemas']['ToolCallAudit']
 export type MatchedPolicyRule = components['schemas']['MatchedPolicyRule']
