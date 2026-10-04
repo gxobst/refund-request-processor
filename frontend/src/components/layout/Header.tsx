@@ -1,6 +1,6 @@
 import { ShieldCheck, RefreshCw, Sliders, BarChart3, UserCheck, User, LogIn, LogOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useUserRole } from '@/context/RoleContext'
+import { useUserRole, type UserRole } from '@/context/RoleContext'
 
 export type SystemHealthStatus = 'operational' | 'degraded' | 'offline'
 
@@ -72,7 +72,7 @@ export function Header({
   }
 
   const currentHealth = healthBadgeConfig[systemHealth]
-  const { role, setRole, isSupervisor, authToken, setAuthToken, userSub } = useUserRole()
+  const { role, setRole, authToken, setAuthToken, userSub } = useUserRole()
 
   const roleDisplayConfig: Record<
     UserRole,

@@ -27,9 +27,9 @@ function renderRefundQueueTable(initialStatus = 'all') {
 }
 
 describe('Customizable Queue Export Integration Tests', () => {
-  let clickSpy: ReturnType<typeof vi.spyOn>
-  let createObjectURLSpy: ReturnType<typeof vi.fn>
-  let revokeObjectURLSpy: ReturnType<typeof vi.fn>
+  let clickSpy: any
+  let createObjectURLSpy: any
+  let revokeObjectURLSpy: any
 
   beforeEach(() => {
     localStorage.clear()

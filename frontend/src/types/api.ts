@@ -16,10 +16,11 @@ export type RefundCreateRequest = components['schemas']['RefundCreateRequest']
 export type RefundCreateResponse = components['schemas']['RefundCreateResponse']
 export type RefundClarificationRequest = components['schemas']['RefundClarificationRequest']
 export interface RefundOverrideRequest {
-  override_decision: OverrideDecisionType
+  override_decision?: OverrideDecisionType
   overrideDecision?: OverrideDecisionType
-  reason: string
+  reason?: string
   override_reason?: string
+  overrideReason?: string
 }
 export type ReviewerProofRequest = components['schemas']['ReviewerProofRequest']
 

@@ -6,7 +6,6 @@ import {
   Download,
   Square,
   SlidersHorizontal,
-  X,
   AlertCircle,
 } from 'lucide-react'
 import {

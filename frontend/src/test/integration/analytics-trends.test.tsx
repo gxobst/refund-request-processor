@@ -202,7 +202,7 @@ describe('Time-Series Historical Trend Analytics and Date Range Filtering Tests'
         capturedEndDate = url.searchParams.get('end_date')
         return HttpResponse.json(MOCK_METRICS, { status: 200 })
       }),
-      http.get('*/v1/analytics/trends', ({ request }) => {
+      http.get('*/v1/analytics/trends', () => {
         return HttpResponse.json(MOCK_DAILY_TRENDS, { status: 200 })
       })
     )

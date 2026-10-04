@@ -79,7 +79,6 @@ describe('exportUtils', () => {
       }
 
       const csv = serializeToCsv([mockRecord])
-      const lines = csv.split('\r\n')
 
       // Customer request should wrap in quotes and escape internal quotes
       expect(csv).toContain('"Received ""red"" boots, not blue.\nPackage was also crushed."')
@@ -184,8 +183,8 @@ describe('exportUtils', () => {
   })
 
   describe('downloadExportFile', () => {
-    let mockCreateObjectURL: ReturnType<typeof vi.fn>
-    let mockRevokeObjectURL: ReturnType<typeof vi.fn>
+    let mockCreateObjectURL: any
+    let mockRevokeObjectURL: any
 
     beforeEach(() => {
       mockCreateObjectURL = vi.fn().mockReturnValue('blob:http://localhost/mock-uuid')

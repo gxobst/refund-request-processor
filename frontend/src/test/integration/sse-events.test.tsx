@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import * as React from 'react'
 import { subscribeToRefundEvents, type RefundEventPayload } from '@/services/refundService'
 import { useRefundEvents } from '@/hooks/useRefundEvents'
 import { Header } from '@/components/layout/Header'

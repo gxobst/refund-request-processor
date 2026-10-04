@@ -26,7 +26,7 @@ function renderRefundQueueTable(initialStatus = 'all') {
 }
 
 describe('Bulk Export Queue Integration Tests', () => {
-  let clickSpy: ReturnType<typeof vi.spyOn>
+  let clickSpy: any
 
   beforeEach(() => {
     clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})

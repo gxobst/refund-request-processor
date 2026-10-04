@@ -28,7 +28,7 @@ function renderRefundQueueTable(initialStatus = 'all') {
 }
 
 describe('Refund Queue Export Integration Tests', () => {
-  let downloadSpy: ReturnType<typeof vi.spyOn>
+  let downloadSpy: any
 
   beforeEach(() => {
     downloadSpy = vi.spyOn(exportUtils, 'downloadExportFile').mockImplementation(() => {})
@@ -193,7 +193,7 @@ describe('Refund Queue Export Integration Tests', () => {
     expect(filename).toMatch(/^refunds-pending-\d{8}-\d{6}\.json$/)
 
     // Verify JSON content represents pending records
-    const parsed = JSON.parse(content)
+    const parsed = JSON.parse(content as string)
     expect(Array.isArray(parsed)).toBe(true)
     expect(parsed.every((r: { status: string }) => r.status === 'pending')).toBe(true)
   })

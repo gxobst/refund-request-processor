@@ -69,9 +69,9 @@ function renderModal(onClose = vi.fn()) {
 }
 
 describe('Operational Analytics CSV & PDF Export Integration Tests', () => {
-  let createObjectURLSpy: ReturnType<typeof vi.fn>
-  let revokeObjectURLSpy: ReturnType<typeof vi.fn>
-  let anchorClickSpy: ReturnType<typeof vi.spyOn>
+  let createObjectURLSpy: any
+  let revokeObjectURLSpy: any
+  let anchorClickSpy: any
 
   beforeEach(() => {
     createObjectURLSpy = vi.fn().mockReturnValue('blob:mock-export-url')

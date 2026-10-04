@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { EvidenceGallery } from '@/components/evidence/EvidenceGallery'
 import type { EvidenceItem } from '@/types/api'
@@ -6,25 +6,30 @@ import type { EvidenceItem } from '@/types/api'
 describe('Evidence Malware Inspection Integration Tests', () => {
   const cleanItem: EvidenceItem = {
     evidenceId: 'evi-clean-1',
+    storageKey: 'evidence/clean_receipt.png',
     filename: 'clean_receipt.png',
     contentType: 'image/png',
     sizeBytes: 102400,
     url: 'https://storage.example.com/clean_receipt.png',
     scanStatus: 'clean',
     scannedAt: '2026-10-04T12:00:00Z',
+    createdAt: '2026-10-04T12:00:00Z',
   }
 
   const pendingItem: EvidenceItem = {
     evidenceId: 'evi-pending-2',
+    storageKey: 'evidence/uploading_photo.jpg',
     filename: 'uploading_photo.jpg',
     contentType: 'image/jpeg',
     sizeBytes: 204800,
     url: 'https://storage.example.com/uploading_photo.jpg',
     scanStatus: 'pending',
+    createdAt: '2026-10-04T12:00:00Z',
   }
 
   const infectedItem: EvidenceItem = {
     evidenceId: 'evi-infected-3',
+    storageKey: 'evidence/trojan_attachment.png',
     filename: 'trojan_attachment.png',
     contentType: 'image/png',
     sizeBytes: 51200,
@@ -32,6 +37,7 @@ describe('Evidence Malware Inspection Integration Tests', () => {
     scanStatus: 'infected',
     threatName: 'Win32.Eicar.TestFile',
     scannedAt: '2026-10-04T12:05:00Z',
+    createdAt: '2026-10-04T12:00:00Z',
   }
 
   it('renders green scan status badge for clean evidence attachment', () => {
