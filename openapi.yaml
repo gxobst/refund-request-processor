@@ -5,568 +5,1937 @@ info:
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
-  description: |
-    Automated back-office e-commerce refund evaluation engine powered by LangGraph,
-    AWS Bedrock (Amazon Nova 2), and DynamoDB. Provides asynchronous multi-agent
-    evaluation, queue status polling, multimodal evidence verification, and human-in-the-loop
-    clarifications and decision overrides.
+  description: Automated back-office e-commerce refund evaluation engine powered by
+    LangGraph, AWS Bedrock (Amazon Nova 2 / Claude), and DynamoDB. Provides asynchronous
+    multi-agent evaluation, queue status polling, multimodal evidence verification,
+    operational analytics, and human-in-the-loop clarifications and decision overrides.
 servers:
-  - url: http://127.0.0.1:8000
-    description: Local development server
+- url: http://127.0.0.1:8000
+  description: Local development server
+- url: http://localhost:8000
+  description: Local alternative host
+tags:
+- name: Service
+  description: Application health, metadata, and status checks
+- name: Refunds
+  description: Refund request lifecycle, queue polling, and evaluations
+- name: Evidence
+  description: Photo evidence upload, inspection, and quarantine management
+- name: Policies
+  description: Refund policy configuration, audit history, and rollbacks
+- name: Analytics
+  description: Operational metrics, trend analytics, and report exports
+- name: Exports
+  description: Bulk asynchronous exports and scheduled report deliveries
 security: []
-
 paths:
-  /:
-    get:
-      operationId: getServiceInfo
-      summary: Get service metadata
-      description: Retrieve top-level service health and identity information.
-      tags:
-        - Service
-      x-source: backend/app/main.py:root
-      responses:
-        '200':
-          description: Service information successfully retrieved.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ServiceInfo'
-              example:
-                status: ok
-                service: refund-request-processor
-        '400':
-          $ref: '#/components/responses/ProblemBadRequest'
-        '500':
-          $ref: '#/components/responses/ProblemInternalServerError'
-
-  /v1/health:
-    get:
-      operationId: getHealthStatus
-      summary: Health check
-      description: Probe endpoint for container orchestrators and load balancers to assess application liveness.
-      tags:
-        - Service
-      x-source: backend/app/main.py:health
-      responses:
-        '200':
-          description: Service is healthy and responsive.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HealthStatus'
-              example:
-                status: healthy
-        '400':
-          $ref: '#/components/responses/ProblemBadRequest'
-        '500':
-          $ref: '#/components/responses/ProblemInternalServerError'
-        '503':
-          description: Service Unavailable - System dependencies are degraded or unhealthy.
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/ProblemDetails'
-              example:
-                type: "urn:problem:service-unavailable"
-                title: "Service Unavailable"
-                status: 503
-                detail: "Service is temporarily unable to handle incoming requests."
-                instance: "/v1/health"
-
   /v1/refunds:
     get:
-      operationId: listRefundRequests
-      summary: List refund requests
-      description: |
-        Retrieve a list of refund requests from the evaluation queue with optional
-        status filtering. Records are ordered by creation timestamp descending.
       tags:
-        - Refunds
-      x-source: backend/app/api/refunds.py:list_refund_requests
+      - refunds
+      summary: List refund requests with optional status filtering
+      description: Retrieve refund queue records with optional status filtering.
+      operationId: list_refund_requests_v1_refunds_get
       parameters:
-        - name: status
-          in: query
-          required: false
-          description: Filter refund requests by current workflow processing status.
-          schema:
-            $ref: '#/components/schemas/RefundStatus'
-          example: escalated
-        - name: limit
-          in: query
-          required: false
-          description: Maximum number of refund records to return.
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 50
-          example: 20
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - enum:
+            - pending
+            - completed
+            - escalated
+            - awaiting_clarification
+            type: string
+          - type: 'null'
+          title: Status
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 50
+          title: Limit
       responses:
         '200':
-          description: Successfully retrieved list of refund requests.
+          description: Successful Response
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/RefundDetail'
-              example:
-                - refundId: ref_543c86069f0f
-                  orderId: ORD-1007
-                  customerRequestText: "The chair armrest arrived completely broken and cracked during delivery."
-                  status: completed
-                  decision: auto_approve
-                  reasoning: "Refund automatically approved. Category 'damaged' satisfied all policy rules."
-                  matchedPolicyRule:
-                    category: damaged
-                    policyName: standard_30_day_damaged
-                    action: auto_approve
-                    returnRequired: false
-                  confidenceScore: 0.95
-                  category: damaged
-                  clarificationPrompt: null
-                  clarificationResponse: null
-                  clarificationCount: 0
-                  clarificationHistory: []
-                  evidence: []
-                  toolCalls: []
-                  approvalEmailText: "Dear Customer,\n\nYour refund request has been approved. Your RMA number is RMA-1007-AB12CD.\n\nSincerely,\nCustomer Support Team"
-                  denialEmailText: null
-                  clarificationEmailText: null
-                  createdAt: "2026-09-23T14:10:00Z"
-                  updatedAt: "2026-09-23T14:10:05Z"
-                  overrideDecision: null
-                  overrideReason: null
-                  overriddenAt: null
-        '400':
-          $ref: '#/components/responses/ProblemBadRequest'
+                  $ref: '#/components/schemas/RefundRecord'
+                title: Response List Refund Requests V1 Refunds Get
         '422':
-          $ref: '#/components/responses/ProblemUnprocessableEntity'
-        '500':
-          $ref: '#/components/responses/ProblemInternalServerError'
-
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
     post:
-      operationId: submitRefundRequest
-      summary: Submit refund request for evaluation
-      description: |
-        Accept an incoming customer refund request, persist a pending record in DynamoDB,
-        and schedule asynchronous multi-agent evaluation via LangGraph and AWS Bedrock.
-        Supports JSON payload or multipart form data with an optional initial evidence photo.
       tags:
-        - Refunds
-      x-source: backend/app/api/refunds.py:submit_refund_request
-      requestBody:
-        required: true
-        description: Customer order identifier, explanation, and optional evidence image.
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RefundCreateRequest'
-            example:
-              orderId: ORD-1001
-              customerRequestText: "The ceramic vase arrived shattered inside the package with no protective bubble wrap."
-          multipart/form-data:
-            schema:
-              type: object
-              required:
-                - orderId
-                - customerRequestText
-              properties:
-                orderId:
-                  type: string
-                  pattern: '^ORD-\d{4}$'
-                  description: Identifier of the order to evaluate.
-                  example: ORD-1001
-                customerRequestText:
-                  type: string
-                  minLength: 1
-                  description: Customer refund explanation.
-                  example: "The ceramic vase arrived shattered inside the package."
-                file:
-                  type: string
-                  format: binary
-                  description: Optional supporting proof photo (JPEG, PNG, WebP up to 5MB).
+      - refunds
+      summary: Submit a refund request for automated evaluation
+      description: Accept and initiate asynchronous multi-agent processing for a refund
+        request.
+      operationId: submit_refund_request_v1_refunds_post
       responses:
         '202':
-          description: Refund request accepted for background processing.
+          description: Successful Response
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/RefundCreateResponse'
-              example:
-                refundId: ref_7f9b1c2e3a4d
-                orderId: ORD-1001
-                status: pending
-                createdAt: "2026-09-23T14:15:30Z"
-        '400':
-          $ref: '#/components/responses/ProblemBadRequest'
-        '413':
-          $ref: '#/components/responses/ProblemPayloadTooLarge'
-        '422':
-          $ref: '#/components/responses/ProblemUnprocessableEntity'
-        '500':
-          $ref: '#/components/responses/ProblemInternalServerError'
-
-  /v1/refunds/{refundId}:
-    get:
-      operationId: getRefundRequestById
-      summary: Get refund request details
-      description: |
-        Retrieve the latest status, agent classification, policy check outcome, evidence attachments,
-        and final decision for a specific refund request.
-      tags:
-        - Refunds
-      x-source: backend/app/api/refunds.py:get_refund_request_by_id
-      parameters:
-        - $ref: '#/components/parameters/RefundIdPathParam'
-      responses:
-        '200':
-          description: Detailed refund request record.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RefundDetail'
-              example:
-                refundId: ref_543c86069f0f
-                orderId: ORD-1007
-                customerRequestText: "Received wrong shoe size (ordered 10, received 8.5)."
-                status: escalated
-                decision: escalate
-                reasoning: "Escalated to human review due to ambiguous item condition."
-                matchedPolicyRule:
-                  category: wrong_item
-                  policyName: wrong_item_exchange_policy
-                  action: manual_review
-                  returnRequired: true
-                confidenceScore: 0.88
-                category: wrong_item
-                clarificationPrompt: null
-                clarificationResponse: null
-                clarificationCount: 0
-                clarificationHistory: []
-                evidence: []
-                toolCalls: []
-                approvalEmailText: null
-                denialEmailText: null
-                clarificationEmailText: null
-                createdAt: "2026-09-23T14:10:00Z"
-                updatedAt: "2026-09-23T14:10:04Z"
-                overrideDecision: null
-                overrideReason: null
-                overriddenAt: null
-        '400':
-          $ref: '#/components/responses/ProblemBadRequest'
-        '404':
-          $ref: '#/components/responses/ProblemNotFound'
-        '422':
-          $ref: '#/components/responses/ProblemUnprocessableEntity'
-        '500':
-          $ref: '#/components/responses/ProblemInternalServerError'
-
-  /v1/refunds/{refundId}/override:
-    post:
-      operationId: overrideRefundDecision
-      summary: Manually override refund decision
-      description: |
-        Apply a human operator decision override to an existing refund request (typically
-        one escalated for human review). Transitions status to `completed` and records an
-        audit trail of operator decision and rationale.
-      tags:
-        - Refunds
-      x-source: backend/app/api/refunds.py:override_refund_decision
-      parameters:
-        - $ref: '#/components/parameters/RefundIdPathParam'
       requestBody:
         required: true
-        description: Operator manual decision and justification.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                order_id:
+                  type: string
+                  pattern: ^ORD-\d{4}$
+                  description: Identifier of the order to evaluate.
+                customer_request_text:
+                  type: string
+                  description: Customer explanation for the refund request.
+              required:
+              - order_id
+              - customer_request_text
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                order_id:
+                  type: string
+                  pattern: ^ORD-\d{4}$
+                  description: Identifier of the order to evaluate.
+                customer_request_text:
+                  type: string
+                  description: Customer explanation for the refund request.
+                file:
+                  type: string
+                  format: binary
+                  description: Optional supporting evidence image file.
+              required:
+              - order_id
+              - customer_request_text
+  /v1/refunds/{refund_id}/override:
+    post:
+      tags:
+      - refunds
+      summary: Manually override a refund request decision
+      description: Apply a human operator decision override to a refund request.
+      operationId: override_refund_decision_v1_refunds__refund_id__override_post
+      parameters:
+      - name: refund_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Refund Id
+      requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/RefundOverrideRequest'
-            example:
-              overrideDecision: approve
-              overrideReason: "Verified return tracking code delivered to warehouse. Discretionary customer satisfaction approval."
       responses:
         '200':
-          description: Override successfully recorded.
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RefundDetail'
-              example:
-                refundId: ref_543c86069f0f
-                orderId: ORD-1007
-                customerRequestText: "Received wrong shoe size (ordered 10, received 8.5)."
-                status: completed
-                decision: approve
-                reasoning: "Escalated to human review due to ambiguous item condition."
-                matchedPolicyRule:
-                  category: wrong_item
-                  policyName: wrong_item_exchange_policy
-                  action: manual_review
-                  returnRequired: true
-                confidenceScore: 0.88
-                category: wrong_item
-                clarificationPrompt: null
-                clarificationResponse: null
-                clarificationCount: 0
-                clarificationHistory: []
-                evidence: []
-                toolCalls: []
-                approvalEmailText: null
-                denialEmailText: null
-                clarificationEmailText: null
-                createdAt: "2026-09-23T14:10:00Z"
-                updatedAt: "2026-09-23T14:25:12Z"
-                overrideDecision: approve
-                overrideReason: "Verified return tracking code delivered to warehouse. Discretionary customer satisfaction approval."
-                overriddenAt: "2026-09-23T14:25:12Z"
-        '400':
-          $ref: '#/components/responses/ProblemBadRequest'
-        '404':
-          $ref: '#/components/responses/ProblemNotFound'
+                $ref: '#/components/schemas/RefundRecord'
         '422':
-          $ref: '#/components/responses/ProblemUnprocessableEntity'
-        '500':
-          $ref: '#/components/responses/ProblemInternalServerError'
-
-  /v1/refunds/{refundId}/clarify:
-    post:
-      operationId: submitRefundClarification
-      summary: Submit customer clarification
-      description: |
-        Provide customer clarification response for a refund request that is paused in
-        `awaiting_clarification` status. Supports plain JSON text responses or multipart form
-        data with an optional attached evidence image. Automatically resumes multi-agent evaluation
-        in the background.
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/refunds/events:
+    get:
       tags:
-        - Refunds
-      x-source: backend/app/api/refunds.py:clarify_refund_request
+      - refunds
+      summary: Subscribe to real-time refund server-sent events (SSE)
+      description: Stream real-time refund update events to connected SSE clients.
+      operationId: subscribe_refund_events_v1_refunds_events_get
       parameters:
-        - $ref: '#/components/parameters/RefundIdPathParam'
+      - name: limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/refunds/export:
+    get:
+      tags:
+      - refunds
+      summary: Export refund queue records as CSV or JSON
+      description: Export refund requests matching the optional status filter in CSV
+        or JSON format.
+      operationId: export_refund_requests_v1_refunds_export_get
+      parameters:
+      - name: format
+        in: query
+        required: false
+        schema:
+          type: string
+          default: csv
+          title: Format
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - enum:
+            - pending
+            - completed
+            - escalated
+            - awaiting_clarification
+            type: string
+          - type: 'null'
+          title: Status
+      - name: columns
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: array
+            items:
+              type: string
+          - type: 'null'
+          title: Columns
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/refunds/export/jobs:
+    post:
+      tags:
+      - refunds
+      summary: Create asynchronous bulk queue export job
+      description: Create a new asynchronous bulk queue export job.
+      operationId: create_bulk_export_job_v1_refunds_export_jobs_post
       requestBody:
-        required: true
-        description: Customer clarification response text and optional evidence image.
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/RefundClarificationRequest'
-            example:
-              responseText: "The package was left at the front porch in heavy rain, soaked through."
-          multipart/form-data:
-            schema:
-              type: object
-              required:
-                - responseText
-              properties:
-                responseText:
-                  type: string
-                  minLength: 1
-                  description: Customer clarification explanation.
-                  example: "Item arrived damaged with ripped outer box."
-                evidenceFile:
-                  type: string
-                  format: binary
-                  description: Optional supporting proof photo (JPEG, PNG, WebP up to 5MB).
+              $ref: '#/components/schemas/BulkExportJobRequest'
+        required: true
       responses:
-        '200':
-          description: Clarification accepted and workflow resumed.
+        '202':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RefundDetail'
-              example:
-                refundId: ref_543c86069f0f
-                orderId: ORD-1007
-                customerRequestText: "Received wrong shoe size (ordered 10, received 8.5)."
-                status: pending
-                decision: null
-                reasoning: null
-                matchedPolicyRule: null
-                confidenceScore: null
-                category: wrong_item
-                clarificationPrompt: "Could you please specify if the packaging was unopened?"
-                clarificationResponse: "The package was left at the front porch in heavy rain, soaked through."
-                clarificationCount: 1
-                clarificationHistory:
-                  - cycle: 1
-                    prompt: "Could you please specify if the packaging was unopened?"
-                    response: "The package was left at the front porch in heavy rain, soaked through."
-                    timestamp: "2026-09-23T14:15:30Z"
-                    evidenceIds: []
-                evidence: []
-                toolCalls: []
-                approvalEmailText: null
-                denialEmailText: null
-                clarificationEmailText: null
-                createdAt: "2026-09-23T14:10:00Z"
-                updatedAt: "2026-09-23T14:15:30Z"
-                overrideDecision: null
-                overrideReason: null
-                overriddenAt: null
-        '400':
-          $ref: '#/components/responses/ProblemBadRequest'
-        '404':
-          $ref: '#/components/responses/ProblemNotFound'
-        '413':
-          $ref: '#/components/responses/ProblemPayloadTooLarge'
+                $ref: '#/components/schemas/BulkExportJobResponse'
         '422':
-          $ref: '#/components/responses/ProblemUnprocessableEntity'
-        '500':
-          $ref: '#/components/responses/ProblemInternalServerError'
-
-  /v1/refunds/{refundId}/evidence:
-    post:
-      operationId: uploadRefundEvidence
-      summary: Upload photo evidence for a refund request
-      description: |
-        Upload a customer proof image (JPEG, PNG, WebP up to 5MB) for a refund request.
-        If the refund request is currently paused in `awaiting_clarification` status, uploading
-        evidence automatically enqueues background workflow resumption without requiring a separate
-        call to `/clarify`.
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/refunds/export/jobs/{job_id}/download:
+    get:
       tags:
-        - Refunds
-      x-source: backend/app/api/refunds.py:upload_refund_evidence
+      - refunds
+      summary: Download bulk export file
+      description: Download the generated export file from local filesystem or redirect
+        to S3.
+      operationId: download_bulk_export_v1_refunds_export_jobs__job_id__download_get
       parameters:
-        - $ref: '#/components/parameters/RefundIdPathParam'
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Job Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/refunds/export/jobs/{job_id}:
+    get:
+      tags:
+      - refunds
+      summary: Get bulk export job status
+      description: Retrieve status, metadata, and download URL for an export job.
+      operationId: get_bulk_export_job_v1_refunds_export_jobs__job_id__get
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Job Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkExportJobResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/refunds/export/schedules:
+    get:
+      tags:
+      - refunds
+      summary: List all recurring queue export schedules
+      description: List all configured export schedules.
+      operationId: list_export_schedules_v1_refunds_export_schedules_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ExportScheduleResponse'
+                type: array
+                title: Response List Export Schedules V1 Refunds Export Schedules
+                  Get
+    post:
+      tags:
+      - refunds
+      summary: Create a recurring queue export schedule
+      description: Create a new automated recurring export schedule.
+      operationId: create_export_schedule_v1_refunds_export_schedules_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportScheduleCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportScheduleResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/refunds/export/schedules/{schedule_id}:
+    get:
+      tags:
+      - refunds
+      summary: Get export schedule details
+      description: Retrieve details for a specific export schedule.
+      operationId: get_export_schedule_v1_refunds_export_schedules__schedule_id__get
+      parameters:
+      - name: schedule_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Schedule Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportScheduleResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - refunds
+      summary: Update an existing export schedule
+      description: Update configuration fields on an existing export schedule.
+      operationId: update_export_schedule_v1_refunds_export_schedules__schedule_id__put
+      parameters:
+      - name: schedule_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Schedule Id
       requestBody:
         required: true
-        description: Multipart image file to attach as proof.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportScheduleUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportScheduleResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - refunds
+      summary: Delete an export schedule
+      description: Delete an existing export schedule.
+      operationId: delete_export_schedule_v1_refunds_export_schedules__schedule_id__delete
+      parameters:
+      - name: schedule_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Schedule Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/refunds/export/schedules/{schedule_id}/trigger:
+    post:
+      tags:
+      - refunds
+      summary: Manually trigger an export schedule run and email delivery
+      description: Manually trigger immediate execution and email delivery for an
+        export schedule.
+      operationId: trigger_export_schedule_v1_refunds_export_schedules__schedule_id__trigger_post
+      parameters:
+      - name: schedule_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Schedule Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportTriggerResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/refunds/{refund_id}:
+    get:
+      tags:
+      - refunds
+      summary: Poll or inspect refund request status and decision
+      description: Retrieve refund request details, workflow status, and agent decision.
+      operationId: get_refund_request_by_id_v1_refunds__refund_id__get
+      parameters:
+      - name: refund_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Refund Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundRecord'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/refunds/{refund_id}/evidence:
+    post:
+      tags:
+      - refunds
+      summary: Upload photo evidence for a refund request
+      description: Accept multipart file upload, validate, store, and append evidence
+        metadata.
+      operationId: upload_refund_evidence_v1_refunds__refund_id__evidence_post
+      parameters:
+      - name: refund_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Refund Id
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundRecord'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      requestBody:
+        required: true
         content:
           multipart/form-data:
             schema:
               type: object
-              required:
-                - file
               properties:
                 file:
                   type: string
                   format: binary
-                  description: Evidence photo file (JPEG, PNG, WebP up to 5MB).
+                  description: Evidence image file.
+              required:
+              - file
+  /v1/refunds/{refund_id}/evidence/{evidence_id}/download:
+    get:
+      tags:
+      - refunds
+      summary: Download refund evidence file
+      description: Retrieve or download evidence attachment, enforcing malware quarantine
+        blocking.
+      operationId: get_refund_evidence_v1_refunds__refund_id__evidence__evidence_id__download_get
+      parameters:
+      - name: refund_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Refund Id
+      - name: evidence_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Evidence Id
       responses:
-        '201':
-          description: Photo evidence successfully uploaded and attached to refund record.
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RefundDetail'
-              example:
-                refundId: ref_543c86069f0f
-                orderId: ORD-1007
-                customerRequestText: "Received wrong shoe size (ordered 10, received 8.5)."
-                status: pending
-                decision: null
-                reasoning: null
-                matchedPolicyRule: null
-                confidenceScore: null
-                category: wrong_item
-                clarificationPrompt: "Please provide a clear photo of the shoe box label."
-                clarificationResponse: null
-                clarificationCount: 1
-                clarificationHistory:
-                  - cycle: 1
-                    prompt: "Please provide a clear photo of the shoe box label."
-                    response: null
-                    timestamp: "2026-09-23T14:15:30Z"
-                    evidenceIds:
-                      - evi_a1b2c3d4
-                evidence:
-                  - evidenceId: evi_a1b2c3d4
-                    storageKey: refunds/ref_543c86069f0f/box_label.jpg
-                    filename: box_label.jpg
-                    contentType: image/jpeg
-                    sizeBytes: 154230
-                    url: /uploads/refunds/ref_543c86069f0f/box_label.jpg
-                    createdAt: "2026-09-23T14:16:00Z"
-                toolCalls: []
-                approvalEmailText: null
-                denialEmailText: null
-                clarificationEmailText: null
-                createdAt: "2026-09-23T14:10:00Z"
-                updatedAt: "2026-09-23T14:16:00Z"
-                overrideDecision: null
-                overrideReason: null
-                overriddenAt: null
-        '400':
-          $ref: '#/components/responses/ProblemBadRequest'
-        '404':
-          $ref: '#/components/responses/ProblemNotFound'
-        '413':
-          $ref: '#/components/responses/ProblemPayloadTooLarge'
-        '422':
-          $ref: '#/components/responses/ProblemUnprocessableEntity'
-        '500':
-          $ref: '#/components/responses/ProblemInternalServerError'
-
-  /v1/refunds/{refundId}/request-proof:
-    post:
-      operationId: requestReviewerProof
-      summary: Submit reviewer proof request for an escalated refund
-      description: |
-        Accept an inquiry prompt from a human supervisor for an escalated refund request,
-        generate a formal customer notification email instructing supported upload formats,
-        and transition the refund record from `escalated` back to `awaiting_clarification`.
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/refunds/{refund_id}/evidence/{evidence_id}:
+    get:
       tags:
-        - Refunds
-      x-source: backend/app/api/refunds.py:request_reviewer_proof_endpoint
+      - refunds
+      summary: Retrieve or download refund evidence file
+      description: Retrieve or download evidence attachment, enforcing malware quarantine
+        blocking.
+      operationId: get_refund_evidence_v1_refunds__refund_id__evidence__evidence_id__get
       parameters:
-        - $ref: '#/components/parameters/RefundIdPathParam'
+      - name: refund_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Refund Id
+      - name: evidence_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Evidence Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/refunds/{refund_id}/clarify:
+    post:
+      tags:
+      - refunds
+      summary: Submit customer clarification response and resume evaluation
+      description: Submit customer clarification response to resume paused evaluation.
+      operationId: clarify_refund_request_v1_refunds__refund_id__clarify_post
+      parameters:
+      - name: refund_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Refund Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundRecord'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
       requestBody:
         required: true
-        description: Reviewer proof prompt and optional customer greeting name.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                response_text:
+                  type: string
+                  description: Customer clarification response text.
+              required:
+              - response_text
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                response_text:
+                  type: string
+                  description: Customer clarification response text.
+                evidence_file:
+                  type: string
+                  format: binary
+                  description: Optional supporting evidence image file.
+              required:
+              - response_text
+  /v1/refunds/{refund_id}/request-proof:
+    post:
+      tags:
+      - refunds
+      summary: Submit reviewer proof request for an escalated refund
+      description: Accept reviewer proof request for an escalated refund, generate
+        customer notification email, and transition to awaiting_clarification.
+      operationId: request_reviewer_proof_endpoint_v1_refunds__refund_id__request_proof_post
+      parameters:
+      - name: refund_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Refund Id
+      requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ReviewerProofRequest'
-            example:
-              proofPrompt: "Please provide a clear photo of the serial number sticker on the base of the device."
-              customerName: "Alex Morgan"
       responses:
         '200':
-          description: Reviewer proof request recorded and transitioned to awaiting_clarification.
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RefundDetail'
-              example:
-                refundId: ref_543c86069f0f
-                orderId: ORD-1007
-                customerRequestText: "Device stopped charging after two weeks."
-                status: awaiting_clarification
-                decision: null
-                reasoning: null
-                matchedPolicyRule: null
-                confidenceScore: null
-                category: damaged
-                clarificationPrompt: "Please provide a clear photo of the serial number sticker on the base of the device."
-                clarificationResponse: null
-                clarificationCount: 1
-                clarificationHistory:
-                  - cycle: 1
-                    prompt: "Please provide a clear photo of the serial number sticker on the base of the device."
-                    response: null
-                    timestamp: "2026-09-23T14:30:00Z"
-                    evidenceIds: []
-                evidence: []
-                toolCalls: []
-                approvalEmailText: null
-                denialEmailText: null
-                clarificationEmailText: "Dear Alex Morgan,\n\nOur quality review team requires additional proof regarding order ORD-1007.\nPlease provide a clear photo of the serial number sticker on the base of the device.\n\nAccepted formats: JPEG, PNG, WebP up to 5MB."
-                createdAt: "2026-09-23T14:10:00Z"
-                updatedAt: "2026-09-23T14:30:00Z"
-                overrideDecision: null
-                overrideReason: null
-                overriddenAt: null
-        '400':
-          $ref: '#/components/responses/ProblemBadRequest'
-        '404':
-          $ref: '#/components/responses/ProblemNotFound'
+                $ref: '#/components/schemas/RefundRecord'
         '422':
-          $ref: '#/components/responses/ProblemUnprocessableEntity'
-        '500':
-          $ref: '#/components/responses/ProblemInternalServerError'
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /refunds:
+    get:
+      tags:
+      - refunds
+      summary: List refund requests with optional status filtering
+      description: Retrieve refund queue records with optional status filtering.
+      operationId: list_refund_requests_refunds_get
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - enum:
+            - pending
+            - completed
+            - escalated
+            - awaiting_clarification
+            type: string
+          - type: 'null'
+          title: Status
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 50
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RefundRecord'
+                title: Response List Refund Requests Refunds Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - refunds
+      summary: Submit a refund request for automated evaluation
+      description: Accept and initiate asynchronous multi-agent processing for a refund
+        request.
+      operationId: submit_refund_request_refunds_post
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundCreateResponse'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                order_id:
+                  type: string
+                  pattern: ^ORD-\d{4}$
+                  description: Identifier of the order to evaluate.
+                customer_request_text:
+                  type: string
+                  description: Customer explanation for the refund request.
+              required:
+              - order_id
+              - customer_request_text
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                order_id:
+                  type: string
+                  pattern: ^ORD-\d{4}$
+                  description: Identifier of the order to evaluate.
+                customer_request_text:
+                  type: string
+                  description: Customer explanation for the refund request.
+                file:
+                  type: string
+                  format: binary
+                  description: Optional supporting evidence image file.
+              required:
+              - order_id
+              - customer_request_text
+  /refunds/{refund_id}/override:
+    post:
+      tags:
+      - refunds
+      summary: Manually override a refund request decision
+      description: Apply a human operator decision override to a refund request.
+      operationId: override_refund_decision_refunds__refund_id__override_post
+      parameters:
+      - name: refund_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Refund Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundOverrideRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundRecord'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /refunds/events:
+    get:
+      tags:
+      - refunds
+      summary: Subscribe to real-time refund server-sent events (SSE)
+      description: Stream real-time refund update events to connected SSE clients.
+      operationId: subscribe_refund_events_refunds_events_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /refunds/export:
+    get:
+      tags:
+      - refunds
+      summary: Export refund queue records as CSV or JSON
+      description: Export refund requests matching the optional status filter in CSV
+        or JSON format.
+      operationId: export_refund_requests_refunds_export_get
+      parameters:
+      - name: format
+        in: query
+        required: false
+        schema:
+          type: string
+          default: csv
+          title: Format
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - enum:
+            - pending
+            - completed
+            - escalated
+            - awaiting_clarification
+            type: string
+          - type: 'null'
+          title: Status
+      - name: columns
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: array
+            items:
+              type: string
+          - type: 'null'
+          title: Columns
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /refunds/export/jobs:
+    post:
+      tags:
+      - refunds
+      summary: Create asynchronous bulk queue export job
+      description: Create a new asynchronous bulk queue export job.
+      operationId: create_bulk_export_job_refunds_export_jobs_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkExportJobRequest'
+        required: true
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkExportJobResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /refunds/export/jobs/{job_id}/download:
+    get:
+      tags:
+      - refunds
+      summary: Download bulk export file
+      description: Download the generated export file from local filesystem or redirect
+        to S3.
+      operationId: download_bulk_export_refunds_export_jobs__job_id__download_get
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Job Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /refunds/export/jobs/{job_id}:
+    get:
+      tags:
+      - refunds
+      summary: Get bulk export job status
+      description: Retrieve status, metadata, and download URL for an export job.
+      operationId: get_bulk_export_job_refunds_export_jobs__job_id__get
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Job Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkExportJobResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /refunds/export/schedules:
+    get:
+      tags:
+      - refunds
+      summary: List all recurring queue export schedules
+      description: List all configured export schedules.
+      operationId: list_export_schedules_refunds_export_schedules_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ExportScheduleResponse'
+                type: array
+                title: Response List Export Schedules Refunds Export Schedules Get
+    post:
+      tags:
+      - refunds
+      summary: Create a recurring queue export schedule
+      description: Create a new automated recurring export schedule.
+      operationId: create_export_schedule_refunds_export_schedules_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportScheduleCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportScheduleResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /refunds/export/schedules/{schedule_id}:
+    get:
+      tags:
+      - refunds
+      summary: Get export schedule details
+      description: Retrieve details for a specific export schedule.
+      operationId: get_export_schedule_refunds_export_schedules__schedule_id__get
+      parameters:
+      - name: schedule_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Schedule Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportScheduleResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - refunds
+      summary: Update an existing export schedule
+      description: Update configuration fields on an existing export schedule.
+      operationId: update_export_schedule_refunds_export_schedules__schedule_id__put
+      parameters:
+      - name: schedule_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Schedule Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportScheduleUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportScheduleResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - refunds
+      summary: Delete an export schedule
+      description: Delete an existing export schedule.
+      operationId: delete_export_schedule_refunds_export_schedules__schedule_id__delete
+      parameters:
+      - name: schedule_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Schedule Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /refunds/export/schedules/{schedule_id}/trigger:
+    post:
+      tags:
+      - refunds
+      summary: Manually trigger an export schedule run and email delivery
+      description: Manually trigger immediate execution and email delivery for an
+        export schedule.
+      operationId: trigger_export_schedule_refunds_export_schedules__schedule_id__trigger_post
+      parameters:
+      - name: schedule_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Schedule Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportTriggerResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /refunds/{refund_id}:
+    get:
+      tags:
+      - refunds
+      summary: Poll or inspect refund request status and decision
+      description: Retrieve refund request details, workflow status, and agent decision.
+      operationId: get_refund_request_by_id_refunds__refund_id__get
+      parameters:
+      - name: refund_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Refund Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundRecord'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /refunds/{refund_id}/evidence:
+    post:
+      tags:
+      - refunds
+      summary: Upload photo evidence for a refund request
+      description: Accept multipart file upload, validate, store, and append evidence
+        metadata.
+      operationId: upload_refund_evidence_refunds__refund_id__evidence_post
+      parameters:
+      - name: refund_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Refund Id
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundRecord'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Evidence image file.
+              required:
+              - file
+  /refunds/{refund_id}/evidence/{evidence_id}/download:
+    get:
+      tags:
+      - refunds
+      summary: Download refund evidence file
+      description: Retrieve or download evidence attachment, enforcing malware quarantine
+        blocking.
+      operationId: get_refund_evidence_refunds__refund_id__evidence__evidence_id__download_get
+      parameters:
+      - name: refund_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Refund Id
+      - name: evidence_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Evidence Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /refunds/{refund_id}/evidence/{evidence_id}:
+    get:
+      tags:
+      - refunds
+      summary: Retrieve or download refund evidence file
+      description: Retrieve or download evidence attachment, enforcing malware quarantine
+        blocking.
+      operationId: get_refund_evidence_refunds__refund_id__evidence__evidence_id__get
+      parameters:
+      - name: refund_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Refund Id
+      - name: evidence_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Evidence Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /refunds/{refund_id}/clarify:
+    post:
+      tags:
+      - refunds
+      summary: Submit customer clarification response and resume evaluation
+      description: Submit customer clarification response to resume paused evaluation.
+      operationId: clarify_refund_request_refunds__refund_id__clarify_post
+      parameters:
+      - name: refund_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Refund Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundRecord'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                response_text:
+                  type: string
+                  description: Customer clarification response text.
+              required:
+              - response_text
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                response_text:
+                  type: string
+                  description: Customer clarification response text.
+                evidence_file:
+                  type: string
+                  format: binary
+                  description: Optional supporting evidence image file.
+              required:
+              - response_text
+  /refunds/{refund_id}/request-proof:
+    post:
+      tags:
+      - refunds
+      summary: Submit reviewer proof request for an escalated refund
+      description: Accept reviewer proof request for an escalated refund, generate
+        customer notification email, and transition to awaiting_clarification.
+      operationId: request_reviewer_proof_endpoint_refunds__refund_id__request_proof_post
+      parameters:
+      - name: refund_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Refund Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewerProofRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundRecord'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/policies:
+    get:
+      tags:
+      - policies
+      summary: List active refund policy rules for all categories
+      description: Retrieve active policy rules across all 5 refund categories.
+      operationId: list_policies_v1_policies_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/PolicyItemResponse'
+                type: array
+                title: Response List Policies V1 Policies Get
+  /v1/policies/history:
+    get:
+      tags:
+      - policies
+      summary: Retrieve policy configuration version history and audit log
+      description: 'Retrieve audit history entries, optionally filtered by category.
 
+
+        Returns HTTP 200 with list[PolicyAuditEntry] sorted reverse chronologically.
+
+        Returns HTTP 404 ProblemDetails if category is unrecognized.'
+      operationId: get_policies_history_v1_policies_history_get
+      parameters:
+      - name: category
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Category
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PolicyAuditEntry'
+                title: Response Get Policies History V1 Policies History Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/policies/{category}/rollback:
+    post:
+      tags:
+      - policies
+      summary: Rollback policy configuration for a specific refund category
+      description: 'Restore policy configuration to previous state from audit log.
+
+
+        Accepts optional audit_id via query parameter or JSON body.
+
+        Broadcasts policy_update event via SSE.'
+      operationId: rollback_category_policy_v1_policies__category__rollback_post
+      parameters:
+      - name: category
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Category
+      - name: audit_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Audit Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyItemResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/policies/{category}:
+    put:
+      tags:
+      - policies
+      summary: Update policy configuration for a specific refund category
+      description: 'Update active thresholds and rules for a specified refund category.
+
+
+        Returns RFC 9457 ProblemDetails (HTTP 404) if category is unknown.
+
+        Returns RFC 9457 ValidationProblemDetails (HTTP 422) if parameters fail validation.'
+      operationId: update_policy_v1_policies__category__put
+      parameters:
+      - name: category
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Category
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyItemResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /policies:
+    get:
+      tags:
+      - policies
+      summary: List active refund policy rules for all categories
+      description: Retrieve active policy rules across all 5 refund categories.
+      operationId: list_policies_policies_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/PolicyItemResponse'
+                type: array
+                title: Response List Policies Policies Get
+  /policies/history:
+    get:
+      tags:
+      - policies
+      summary: Retrieve policy configuration version history and audit log
+      description: 'Retrieve audit history entries, optionally filtered by category.
+
+
+        Returns HTTP 200 with list[PolicyAuditEntry] sorted reverse chronologically.
+
+        Returns HTTP 404 ProblemDetails if category is unrecognized.'
+      operationId: get_policies_history_policies_history_get
+      parameters:
+      - name: category
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Category
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PolicyAuditEntry'
+                title: Response Get Policies History Policies History Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /policies/{category}/rollback:
+    post:
+      tags:
+      - policies
+      summary: Rollback policy configuration for a specific refund category
+      description: 'Restore policy configuration to previous state from audit log.
+
+
+        Accepts optional audit_id via query parameter or JSON body.
+
+        Broadcasts policy_update event via SSE.'
+      operationId: rollback_category_policy_policies__category__rollback_post
+      parameters:
+      - name: category
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Category
+      - name: audit_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Audit Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyItemResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /policies/{category}:
+    put:
+      tags:
+      - policies
+      summary: Update policy configuration for a specific refund category
+      description: 'Update active thresholds and rules for a specified refund category.
+
+
+        Returns RFC 9457 ProblemDetails (HTTP 404) if category is unknown.
+
+        Returns RFC 9457 ValidationProblemDetails (HTTP 422) if parameters fail validation.'
+      operationId: update_policy_policies__category__put
+      parameters:
+      - name: category
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Category
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyItemResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/analytics/metrics:
+    get:
+      tags:
+      - analytics
+      summary: Get aggregate operational analytics and AI metrics
+      description: Retrieve operational visibility metrics including decision/status
+        distributions and AI rates.
+      operationId: get_analytics_metrics_v1_analytics_metrics_get
+      parameters:
+      - name: start_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Start date filter (inclusive).
+          title: Start Date
+        description: Start date filter (inclusive).
+      - name: end_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: End date filter (inclusive).
+          title: End Date
+        description: End date filter (inclusive).
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsMetricsResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/analytics/trends:
+    get:
+      tags:
+      - analytics
+      summary: Get historical trend analytics
+      description: Retrieve historical time-series trends grouped by daily or weekly
+        intervals.
+      operationId: get_analytics_trends_v1_analytics_trends_get
+      parameters:
+      - name: start_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Start date filter (inclusive).
+          title: Start Date
+        description: Start date filter (inclusive).
+      - name: end_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: End date filter (inclusive).
+          title: End Date
+        description: End date filter (inclusive).
+      - name: interval
+        in: query
+        required: false
+        schema:
+          enum:
+          - daily
+          - weekly
+          type: string
+          description: Time aggregation interval.
+          default: daily
+          title: Interval
+        description: Time aggregation interval.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsTrendsResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/analytics/export:
+    get:
+      tags:
+      - analytics
+      summary: Export operational analytics reports as CSV or PDF
+      description: Export operational analytics KPI summary and trends in CSV or PDF
+        format.
+      operationId: export_analytics_report_v1_analytics_export_get
+      parameters:
+      - name: format
+        in: query
+        required: false
+        schema:
+          enum:
+          - csv
+          - pdf
+          type: string
+          description: Export format ('csv' or 'pdf').
+          default: csv
+          title: Format
+        description: Export format ('csv' or 'pdf').
+      - name: start_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Start date filter (inclusive).
+          title: Start Date
+        description: Start date filter (inclusive).
+      - name: end_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: End date filter (inclusive).
+          title: End Date
+        description: End date filter (inclusive).
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /analytics/metrics:
+    get:
+      tags:
+      - analytics
+      summary: Get aggregate operational analytics and AI metrics
+      description: Retrieve operational visibility metrics including decision/status
+        distributions and AI rates.
+      operationId: get_analytics_metrics_analytics_metrics_get
+      parameters:
+      - name: start_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Start date filter (inclusive).
+          title: Start Date
+        description: Start date filter (inclusive).
+      - name: end_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: End date filter (inclusive).
+          title: End Date
+        description: End date filter (inclusive).
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsMetricsResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /analytics/trends:
+    get:
+      tags:
+      - analytics
+      summary: Get historical trend analytics
+      description: Retrieve historical time-series trends grouped by daily or weekly
+        intervals.
+      operationId: get_analytics_trends_analytics_trends_get
+      parameters:
+      - name: start_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Start date filter (inclusive).
+          title: Start Date
+        description: Start date filter (inclusive).
+      - name: end_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: End date filter (inclusive).
+          title: End Date
+        description: End date filter (inclusive).
+      - name: interval
+        in: query
+        required: false
+        schema:
+          enum:
+          - daily
+          - weekly
+          type: string
+          description: Time aggregation interval.
+          default: daily
+          title: Interval
+        description: Time aggregation interval.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsTrendsResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /analytics/export:
+    get:
+      tags:
+      - analytics
+      summary: Export operational analytics reports as CSV or PDF
+      description: Export operational analytics KPI summary and trends in CSV or PDF
+        format.
+      operationId: export_analytics_report_analytics_export_get
+      parameters:
+      - name: format
+        in: query
+        required: false
+        schema:
+          enum:
+          - csv
+          - pdf
+          type: string
+          description: Export format ('csv' or 'pdf').
+          default: csv
+          title: Format
+        description: Export format ('csv' or 'pdf').
+      - name: start_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Start date filter (inclusive).
+          title: Start Date
+        description: Start date filter (inclusive).
+      - name: end_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: End date filter (inclusive).
+          title: End Date
+        description: End date filter (inclusive).
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /:
+    get:
+      summary: Root
+      operationId: root__get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /health:
+    get:
+      summary: Health
+      operationId: health_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /v1/health:
+    get:
+      summary: Health
+      operationId: getHealthStatus
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 'Amazon Cognito / OAuth2 Bearer JWT authorization header. Example:
+        ''Bearer <token>'''
   parameters:
     RefundIdPathParam:
       name: refundId
@@ -575,9 +1944,8 @@ components:
       description: Unique identifier of the refund request (e.g. `ref_543c86069f0f`).
       schema:
         type: string
-        pattern: '^ref_[a-zA-Z0-9]+$'
+        pattern: ^ref_[a-zA-Z0-9]+$
       example: ref_543c86069f0f
-
   responses:
     ProblemBadRequest:
       description: Bad Request - Malformed request parameters or invalid payload syntax.
@@ -586,12 +1954,11 @@ components:
           schema:
             $ref: '#/components/schemas/ProblemDetails'
           example:
-            type: "urn:problem:bad-request"
-            title: "Bad Request"
+            type: urn:problem:bad-request
+            title: Bad Request
             status: 400
-            detail: "The request query parameters could not be parsed."
-            instance: "/v1/refunds"
-
+            detail: The request query parameters could not be parsed.
+            instance: /v1/refunds
     ProblemNotFound:
       description: Not Found - The specified resource does not exist.
       content:
@@ -599,61 +1966,85 @@ components:
           schema:
             $ref: '#/components/schemas/ProblemDetails'
           example:
-            type: "urn:problem:not-found"
-            title: "Resource Not Found"
+            type: urn:problem:not-found
+            title: Resource Not Found
             status: 404
-            detail: "Refund request 'ref_nonexistent123' not found."
-            instance: "/v1/refunds/ref_nonexistent123"
-
+            detail: Refund request 'ref_nonexistent123' not found.
+            instance: /v1/refunds/ref_nonexistent123
     ProblemPayloadTooLarge:
-      description: Payload Too Large - Uploaded evidence exceeds maximum file size limit (5MB).
+      description: Payload Too Large - Uploaded evidence exceeds maximum file size
+        limit (5MB).
       content:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/ProblemDetails'
           example:
-            type: "urn:problem:payload-too-large"
-            title: "Payload Too Large"
+            type: urn:problem:payload-too-large
+            title: Payload Too Large
             status: 413
-            detail: "File size exceeds maximum allowed limit of 5.0 MB."
-            instance: "/v1/refunds/ref_543c86069f0f/evidence"
+            detail: File size exceeds maximum allowed limit of 5.0 MB.
+            instance: /v1/refunds/ref_543c86069f0f/evidence
       x-source: backend/app/api/refunds.py:HTTP_413_STATUS
-
     ProblemUnprocessableEntity:
-      description: Unprocessable Content - Request payload failed schema validation rules.
+      description: Unprocessable Content - Request payload failed schema validation
+        rules.
       content:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/ValidationProblemDetails'
           example:
-            type: "urn:problem:validation-error"
-            title: "Validation Error"
+            type: urn:problem:validation-error
+            title: Validation Error
             status: 422
-            detail: "One or more fields in the request body failed validation."
-            instance: "/v1/refunds"
+            detail: One or more fields in the request body failed validation.
+            instance: /v1/refunds
             invalidParams:
-              - name: "orderId"
-                reason: "Field cannot be blank or empty."
-
+            - name: orderId
+              reason: Field cannot be blank or empty.
     ProblemInternalServerError:
-      description: Internal Server Error - An unexpected error occurred while processing the request.
+      description: Internal Server Error - An unexpected error occurred while processing
+        the request.
       content:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/ProblemDetails'
           example:
-            type: "urn:problem:internal-server-error"
-            title: "Internal Server Error"
+            type: urn:problem:internal-server-error
+            title: Internal Server Error
             status: 500
-            detail: "An unexpected error occurred while accessing persistence storage."
-            instance: "/v1/refunds"
-
+            detail: An unexpected error occurred while accessing persistence storage.
+            instance: /v1/refunds
+    ProblemUnauthorized:
+      description: Unauthorized - Bearer token missing, invalid, or expired.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+          example:
+            type: urn:problem:unauthorized
+            title: Unauthorized
+            status: 401
+            detail: Invalid or expired authentication token
+            instance: /v1/refunds
+    ProblemForbidden:
+      description: Forbidden - Insufficient operator privileges or role approval limits
+        exceeded.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+          example:
+            type: urn:problem:forbidden
+            title: Forbidden
+            status: 403
+            detail: Refund amount exceeds your approval limit. Escalation required.
+            instance: /v1/refunds/ref_123/override
   schemas:
     ServiceInfo:
       type: object
       required:
-        - status
-        - service
+      - status
+      - service
       properties:
         status:
           type: string
@@ -664,96 +2055,102 @@ components:
           description: Microservice identifier name.
           example: refund-request-processor
       x-source: backend/app/main.py:root
-
     HealthStatus:
       type: object
       required:
-        - status
+      - status
       properties:
         status:
           type: string
           description: Liveness status of the API service.
           example: healthy
       x-source: backend/app/main.py:health
-
     RefundStatus:
       type: string
       enum:
-        - pending
-        - completed
-        - escalated
-        - awaiting_clarification
-      description: |
-        Lifecycle evaluation status of the refund request:
+      - pending
+      - completed
+      - escalated
+      - awaiting_clarification
+      description: 'Lifecycle evaluation status of the refund request:
+
         * `pending`: In queue or actively being evaluated by multi-agent workflow.
+
         * `completed`: Decision reached (automated or manually overridden).
-        * `escalated`: Escalated to human operator review due to low confidence, policy ambiguity, or order amount threshold.
+
+        * `escalated`: Escalated to human operator review due to low confidence, policy
+        ambiguity, or order amount threshold.
+
         * `awaiting_clarification`: Paused awaiting customer details or photo clarification.
+
+        '
       example: pending
       x-source: backend/app/schemas/refund.py:RefundStatus
-
     RefundDecision:
       type: string
       enum:
-        - auto_approve
-        - deny
-        - escalate
-        - approve
-      description: |
-        Outcome decision for the refund request:
+      - auto_approve
+      - deny
+      - escalate
+      - approve
+      description: 'Outcome decision for the refund request:
+
         * `auto_approve`: Automatically approved by policy evaluation.
+
         * `deny`: Ineligible under policy rules.
+
         * `escalate`: Transferred to human review queue.
+
         * `approve`: Manually approved by human operator override.
+
+        '
       example: auto_approve
       x-source: backend/app/schemas/refund.py:RefundDecision
-
     RefundCategory:
       type: string
       enum:
-        - damaged
-        - wrong_item
-        - changed_mind
-        - late_delivery
-        - missing_item
-      description: Classified reason category determining policy rules and evidence mandates.
+      - damaged
+      - wrong_item
+      - changed_mind
+      - late_delivery
+      - missing_item
+      description: Classified reason category determining policy rules and evidence
+        mandates.
       example: damaged
       x-source: backend/app/schemas/refund.py:RefundRecord.category
-
     OverrideDecisionType:
       type: string
       enum:
-        - approve
-        - deny
+      - approve
+      - deny
       description: Final determination selected by human reviewer.
       example: approve
       x-source: backend/app/schemas/refund.py:OverrideDecisionType
-
     RefundCreateRequest:
       type: object
       required:
-        - orderId
-        - customerRequestText
+      - orderId
+      - customerRequestText
       properties:
         orderId:
           type: string
-          pattern: '^ORD-\d{4}$'
+          pattern: ^ORD-\d{4}$
           description: Associated purchase order identifier.
           example: ORD-1001
         customerRequestText:
           type: string
           minLength: 1
           description: Customer-submitted explanation or reason for requesting a refund.
-          example: "The ceramic vase arrived shattered inside the package with no protective bubble wrap."
+          example: The ceramic vase arrived shattered inside the package with no protective
+            bubble wrap.
       x-source: backend/app/schemas/refund.py:RefundCreateRequest
-
     RefundCreateResponse:
       type: object
       required:
-        - refundId
-        - orderId
-        - status
-        - createdAt
+      - refundId
+      - orderId
+      - status
+      - createdAt
       properties:
         refundId:
           type: string
@@ -769,26 +2166,33 @@ components:
           type: string
           format: date-time
           description: ISO-8601 creation timestamp.
-          example: "2026-09-23T14:15:30Z"
+          example: '2026-09-23T14:15:30Z'
+        refund_id:
+          type: string
+          description: Created refund ID.
+        order_id:
+          type: string
+          description: Order identifier.
+        created_at:
+          type: string
+          description: Creation timestamp.
       x-source: backend/app/schemas/refund.py:RefundCreateResponse
-
     RefundClarificationRequest:
       type: object
       required:
-        - responseText
+      - responseText
       properties:
         responseText:
           type: string
           minLength: 1
           description: Customer-provided clarification response text.
-          example: "The package was left at the front porch in heavy rain, soaked through."
+          example: The package was left at the front porch in heavy rain, soaked through.
       x-source: backend/app/schemas/refund.py:RefundClarificationRequest
-
     RefundOverrideRequest:
       type: object
       required:
-        - overrideDecision
-        - overrideReason
+      - overrideDecision
+      - overrideReason
       properties:
         overrideDecision:
           $ref: '#/components/schemas/OverrideDecisionType'
@@ -796,39 +2200,44 @@ components:
           type: string
           minLength: 1
           description: Operator explanation justifying the manual decision override.
-          example: "Photographic proof confirmed package damage prior to delivery."
+          example: Photographic proof confirmed package damage prior to delivery.
           x-tentative: true
       x-source: backend/app/schemas/refund.py:RefundOverrideRequest
-
     ReviewerProofRequest:
       type: object
       required:
-        - proofPrompt
+      - proofPrompt
       properties:
         proofPrompt:
           type: string
           minLength: 1
           description: Targeted proof request prompt sent to the customer.
-          example: "Please provide a clear photo of the serial number sticker on the base of the device."
+          example: Please provide a clear photo of the serial number sticker on the
+            base of the device.
         customerName:
           type:
-            - string
-            - 'null'
+          - string
+          - 'null'
           description: Optional customer name for email greeting.
-          example: "Alex Morgan"
+          example: Alex Morgan
           x-tentative: true
+        proof_prompt:
+          type: string
+          description: Specific reviewer proof request prompt.
+        customer_name:
+          type: string
+          description: Customer display name.
       x-source: backend/app/schemas/refund.py:ReviewerProofRequest
-
     EvidenceItem:
       type: object
       required:
-        - evidenceId
-        - storageKey
-        - filename
-        - contentType
-        - sizeBytes
-        - url
-        - createdAt
+      - evidenceId
+      - storageKey
+      - filename
+      - contentType
+      - sizeBytes
+      - url
+      - createdAt
       properties:
         evidenceId:
           type: string
@@ -859,15 +2268,61 @@ components:
           type: string
           format: date-time
           description: ISO-8601 creation timestamp.
-          example: "2026-09-23T14:16:00Z"
+          example: '2026-09-23T14:16:00Z'
+        evidence_id:
+          type: string
+          description: Unique evidence attachment ID.
+        storage_key:
+          type: string
+          description: S3 storage key.
+        content_type:
+          type: string
+          description: MIME type.
+        size_bytes:
+          type: integer
+          description: File size in bytes.
+        created_at:
+          type: string
+          description: ISO-8601 upload timestamp.
+        width:
+          type: integer
+          description: Image width in pixels.
+        height:
+          type: integer
+          description: Image height in pixels.
+        scan_status:
+          type: string
+          enum:
+          - clean
+          - pending
+          - infected
+          description: Malware scan status.
+        scanStatus:
+          type: string
+          enum:
+          - clean
+          - pending
+          - infected
+          description: Malware scan status alias.
+        scanned_at:
+          type: string
+          description: ISO-8601 scan timestamp.
+        scannedAt:
+          type: string
+          description: ISO-8601 scan timestamp alias.
+        threat_name:
+          type: string
+          description: Identified threat signature name.
+        threatName:
+          type: string
+          description: Identified threat signature name alias.
       x-source: backend/app/schemas/refund.py:EvidenceItem
-
     ClarificationTurn:
       type: object
       required:
-        - cycle
-        - timestamp
-        - evidenceIds
+      - cycle
+      - timestamp
+      - evidenceIds
       properties:
         cycle:
           type: integer
@@ -876,40 +2331,45 @@ components:
           example: 1
         prompt:
           type:
-            - string
-            - 'null'
+          - string
+          - 'null'
           description: Clarification prompt sent to the customer.
-          example: "Please provide a clear photo of the shoe box label."
+          example: Please provide a clear photo of the shoe box label.
         response:
           type:
-            - string
-            - 'null'
+          - string
+          - 'null'
           description: Customer response text submitted during this turn.
-          example: "Here is the photo of the box label showing size 8.5."
+          example: Here is the photo of the box label showing size 8.5.
         timestamp:
           type: string
           format: date-time
           description: ISO-8601 timestamp when this clarification turn occurred.
-          example: "2026-09-23T14:15:30Z"
+          example: '2026-09-23T14:15:30Z'
         evidenceIds:
           type: array
           items:
             type: string
           description: Evidence IDs attached during this clarification turn.
           example:
-            - evi_a1b2c3d4
+          - evi_a1b2c3d4
+        evidence_ids:
+          type: array
+          items:
+            type: string
+          description: List of evidence IDs.
       x-source: backend/app/schemas/refund.py:ClarificationTurn
-
     ToolCallAudit:
       type: object
       required:
-        - toolName
-        - inputArgs
-        - timestamp
+      - toolName
+      - inputArgs
+      - timestamp
       properties:
         toolName:
           type: string
-          description: External verification tool executed (e.g. `query_carrier_tracking` or `query_payment_transaction`).
+          description: External verification tool executed (e.g. `query_carrier_tracking`
+            or `query_payment_transaction`).
           example: query_carrier_tracking
         inputArgs:
           type: object
@@ -923,7 +2383,7 @@ components:
           description: Raw response payload received from the external vendor service.
           example:
             status: delivered
-            deliveryTimestamp: "2026-09-20T10:30:00Z"
+            deliveryTimestamp: '2026-09-20T10:30:00Z'
           x-tentative: true
         durationSeconds:
           type: number
@@ -934,9 +2394,8 @@ components:
           type: string
           format: date-time
           description: ISO-8601 timestamp when tool execution completed.
-          example: "2026-09-23T14:10:02Z"
+          example: '2026-09-23T14:10:02Z'
       x-source: backend/app/schemas/refund.py:RefundRecord.tool_calls
-
     MatchedPolicyRule:
       type: object
       description: Evaluated policy rule details matched against the purchase order.
@@ -959,16 +2418,15 @@ components:
           description: Whether customer must return item prior to refund disbursement.
           example: false
       x-source: backend/app/schemas/refund.py:RefundRecord.matched_policy_rule
-
-    RefundDetail:
+    RefundDetail: &id001
       type: object
       required:
-        - refundId
-        - orderId
-        - customerRequestText
-        - status
-        - createdAt
-        - updatedAt
+      - refundId
+      - orderId
+      - customerRequestText
+      - status
+      - createdAt
+      - updatedAt
       properties:
         refundId:
           type: string
@@ -976,90 +2434,93 @@ components:
           example: ref_543c86069f0f
         orderId:
           type: string
-          pattern: '^ORD-\d{4}$'
+          pattern: ^ORD-\d{4}$
           description: Associated purchase order identifier.
           example: ORD-1007
         customerRequestText:
           type: string
           description: Original customer refund explanation.
-          example: "The chair armrest arrived completely broken and cracked during delivery."
+          example: The chair armrest arrived completely broken and cracked during
+            delivery.
         status:
           $ref: '#/components/schemas/RefundStatus'
         decision:
           anyOf:
-            - $ref: '#/components/schemas/RefundDecision'
-            - type: 'null'
+          - $ref: '#/components/schemas/RefundDecision'
+          - type: 'null'
           description: Automated or human-adjudicated refund decision.
           example: auto_approve
         reasoning:
           type:
-            - string
-            - 'null'
+          - string
+          - 'null'
           description: Detailed explanation justifying the decision.
-          example: "Refund automatically approved. Category 'damaged' satisfied all policy rules."
+          example: Refund automatically approved. Category 'damaged' satisfied all
+            policy rules.
         matchedPolicyRule:
           anyOf:
-            - $ref: '#/components/schemas/MatchedPolicyRule'
-            - type: 'null'
+          - $ref: '#/components/schemas/MatchedPolicyRule'
+          - type: 'null'
           x-tentative: true
         confidenceScore:
           type:
-            - number
-            - 'null'
+          - number
+          - 'null'
           format: float
           minimum: 0.0
           maximum: 1.0
-          description: Model confidence score (0.0 to 1.0), or null if resolved without LLM.
+          description: Model confidence score (0.0 to 1.0), or null if resolved without
+            LLM.
           example: 0.95
           x-tentative: true
         category:
           anyOf:
-            - $ref: '#/components/schemas/RefundCategory'
-            - type: 'null'
+          - $ref: '#/components/schemas/RefundCategory'
+          - type: 'null'
           description: Classified refund category.
           example: damaged
         createdAt:
           type: string
           format: date-time
           description: ISO-8601 creation timestamp.
-          example: "2026-09-23T14:10:00Z"
+          example: '2026-09-23T14:10:00Z'
         updatedAt:
           type: string
           format: date-time
           description: ISO-8601 timestamp of last modification.
-          example: "2026-09-23T14:10:05Z"
+          example: '2026-09-23T14:10:05Z'
         overrideDecision:
           anyOf:
-            - $ref: '#/components/schemas/OverrideDecisionType'
-            - type: 'null'
+          - $ref: '#/components/schemas/OverrideDecisionType'
+          - type: 'null'
           description: Decision applied by human reviewer override, if applicable.
           example: null
         overrideReason:
           type:
-            - string
-            - 'null'
+          - string
+          - 'null'
           description: Justification provided during human operator override, if applicable.
           example: null
         overriddenAt:
           type:
-            - string
-            - 'null'
+          - string
+          - 'null'
           format: date-time
           description: ISO-8601 timestamp when manual override occurred, if applicable.
           example: null
         clarificationPrompt:
           type:
-            - string
-            - 'null'
+          - string
+          - 'null'
           description: Question asked to customer for request clarification.
-          example: "Could you please provide photos of the damaged shipping box?"
+          example: Could you please provide photos of the damaged shipping box?
           x-tentative: true
         clarificationResponse:
           type:
-            - string
-            - 'null'
+          - string
+          - 'null'
           description: Customer-provided clarification response.
-          example: "The box was torn open at the bottom corner upon delivery."
+          example: The box was torn open at the bottom corner upon delivery.
           x-tentative: true
         clarificationCount:
           type: integer
@@ -1070,7 +2531,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ClarificationTurn'
-          description: Structured turn-by-turn audit history of clarification and proof request cycles.
+          description: Structured turn-by-turn audit history of clarification and
+            proof request cycles.
           example: []
         evidence:
           type: array
@@ -1082,46 +2544,111 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ToolCallAudit'
-          description: Chronological audit log of external tool invocations, inputs, and results.
+          description: Chronological audit log of external tool invocations, inputs,
+            and results.
           example: []
         approvalEmailText:
           type:
-            - string
-            - 'null'
-          description: Customer confirmation and product return instructions email text generated for approved refunds.
-          example: "Dear Customer,\n\nYour refund request has been approved..."
+          - string
+          - 'null'
+          description: Customer confirmation and product return instructions email
+            text generated for approved refunds.
+          example: 'Dear Customer,
+
+
+            Your refund request has been approved...'
         denialEmailText:
           type:
-            - string
-            - 'null'
+          - string
+          - 'null'
           description: Customer notification email text explaining policy denial reasoning.
           example: null
         clarificationEmailText:
           type:
-            - string
-            - 'null'
+          - string
+          - 'null'
           description: Customer notification email text requesting evidence or clarification.
           example: null
+        refund_id:
+          type: string
+          description: Refund ID.
+        order_id:
+          type: string
+          description: Order ID.
+        customer_request_text:
+          type: string
+          description: Customer explanation text.
+        confidence_score:
+          type: number
+          description: Classification confidence score.
+        created_at:
+          type: string
+          description: Creation timestamp.
+        updated_at:
+          type: string
+          description: Last updated timestamp.
+        override_decision:
+          type: string
+          description: Manual override decision.
+        override_reason:
+          type: string
+          description: Manual override reason.
+        overridden_at:
+          type: string
+          description: Override applied timestamp.
+        overridden_by:
+          type: string
+          description: Operator identifier.
+        escalation_tier:
+          type: string
+          enum:
+          - supervisor
+          - senior_manager
+          description: Escalation tier.
+        escalationTier:
+          type: string
+          enum:
+          - supervisor
+          - senior_manager
+          description: Escalation tier alias.
+        refund_amount:
+          type: number
+          description: Refund monetary amount.
+        refundAmount:
+          type: number
+          description: Refund monetary amount alias.
+        order_amount:
+          type: number
+          description: Order total monetary amount.
+        orderAmount:
+          type: number
+          description: Order total monetary amount alias.
+        approval_email_text:
+          type: string
+          description: Generated approval email text.
+        denial_email_text:
+          type: string
+          description: Generated denial email text.
       x-source: backend/app/schemas/refund.py:RefundRecord
-
     ProblemDetails:
       type: object
-      description: RFC 7807 / RFC 9457 problem details object describing an error condition.
+      description: RFC 7807 / RFC 9457 problem details object describing an error
+        condition.
       required:
-        - type
-        - title
-        - status
-        - detail
+      - type
+      - title
+      - status
+      - detail
       properties:
         type:
           type: string
           format: uri
           description: URI reference identifying the problem type.
-          example: "urn:problem:not-found"
+          example: urn:problem:not-found
         title:
           type: string
           description: Short human-readable summary of problem type.
-          example: "Resource Not Found"
+          example: Resource Not Found
         status:
           type: integer
           description: HTTP status code generated by origin server.
@@ -1129,31 +2656,29 @@ components:
         detail:
           type: string
           description: Human-readable explanation specific to this occurrence.
-          example: "Refund request 'ref_12345' not found."
+          example: Refund request 'ref_12345' not found.
         instance:
           type: string
           format: uri-reference
           description: URI reference identifying the specific occurrence of the problem.
-          example: "/v1/refunds/ref_12345"
+          example: /v1/refunds/ref_12345
       x-source: backend/app/api/refunds.py:HTTPException
-
     ValidationProblemDetails:
       allOf:
-        - $ref: '#/components/schemas/ProblemDetails'
-        - type: object
-          properties:
-            invalidParams:
-              type: array
-              description: Specific payload or parameter validation failures.
-              items:
-                $ref: '#/components/schemas/InvalidParam'
+      - $ref: '#/components/schemas/ProblemDetails'
+      - type: object
+        properties:
+          invalidParams:
+            type: array
+            description: Specific payload or parameter validation failures.
+            items:
+              $ref: '#/components/schemas/InvalidParam'
       x-source: backend/app/schemas/refund.py:field_validator
-
     InvalidParam:
       type: object
       required:
-        - name
-        - reason
+      - name
+      - reason
       properties:
         name:
           type: string
@@ -1162,5 +2687,691 @@ components:
         reason:
           type: string
           description: Description of the validation failure constraint.
-          example: "Field cannot be blank or empty."
+          example: Field cannot be blank or empty.
       x-source: backend/app/schemas/refund.py:not_blank
+    AnalyticsMetricsResponse:
+      properties:
+        total_requests:
+          type: integer
+          minimum: 0.0
+          title: Total Requests
+          description: Total count of refund requests.
+          default: 0
+        status_breakdown:
+          $ref: '#/components/schemas/StatusBreakdown'
+          description: Counts of requests by status.
+        decision_breakdown:
+          $ref: '#/components/schemas/DecisionBreakdown'
+          description: Counts of requests by decision outcome.
+        auto_approval_rate:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Auto Approval Rate
+          description: Proportion of total requests auto-approved (0.0 - 1.0).
+          default: 0.0
+        override_rate:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Override Rate
+          description: Proportion of completed requests with supervisor overrides
+            (0.0 - 1.0).
+          default: 0.0
+        average_confidence:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Average Confidence
+          description: Arithmetic mean of AI confidence scores (0.0 - 1.0).
+          default: 0.0
+        category_breakdown:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Category Breakdown
+          description: Counts of requests grouped by product/reason category.
+        average_latency_ms:
+          type: number
+          minimum: 0.0
+          title: Average Latency Ms
+          description: Average end-to-end evaluation latency in milliseconds across
+            evaluated requests.
+          default: 0.0
+        node_latency_breakdown:
+          additionalProperties:
+            type: number
+          type: object
+          title: Node Latency Breakdown
+          description: Average latency in milliseconds broken down by agent node.
+      type: object
+      title: AnalyticsMetricsResponse
+      description: Aggregate operational analytics and AI performance metrics.
+    AnalyticsTrendsResponse:
+      properties:
+        interval:
+          type: string
+          enum:
+          - daily
+          - weekly
+          title: Interval
+          description: Time bucket interval ('daily' or 'weekly').
+          default: daily
+        start_date:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Start Date
+          description: Start date filter applied.
+        end_date:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: End Date
+          description: End date filter applied.
+        points:
+          items:
+            $ref: '#/components/schemas/TrendDataPoint'
+          type: array
+          title: Points
+          description: Chronologically sorted trend data points.
+      type: object
+      title: AnalyticsTrendsResponse
+      description: Historical time-series trend response with bucketed data points.
+    BulkExportJobRequest:
+      properties:
+        format:
+          type: string
+          enum:
+          - csv
+          - json
+          title: Format
+          description: Export file format.
+          default: csv
+        status:
+          anyOf:
+          - type: string
+            enum:
+            - pending
+            - completed
+            - escalated
+            - awaiting_clarification
+          - type: 'null'
+          title: Status
+          description: Optional refund status filter.
+        start_date:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Start Date
+          description: Optional ISO-8601 or YYYY-MM-DD start date filter (inclusive).
+        end_date:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: End Date
+          description: Optional ISO-8601 or YYYY-MM-DD end date filter (inclusive).
+        columns:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Columns
+          description: Optional ordered list of column identifiers or header names
+            to include.
+      type: object
+      title: BulkExportJobRequest
+      description: Request payload for initiating an asynchronous bulk queue export
+        job.
+    BulkExportJobResponse:
+      properties:
+        job_id:
+          type: string
+          title: Job Id
+          description: Unique export job identifier prefixed with exp_.
+        status:
+          type: string
+          enum:
+          - pending
+          - processing
+          - completed
+          - failed
+          title: Status
+          description: Current job execution status.
+        format:
+          type: string
+          enum:
+          - csv
+          - json
+          title: Format
+          description: Export format.
+        created_at:
+          type: string
+          title: Created At
+          description: ISO-8601 creation timestamp.
+        expires_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Expires At
+          description: ISO-8601 expiration timestamp (default 1 hour after creation).
+        completed_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Completed At
+          description: ISO-8601 completion timestamp.
+        download_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Download Url
+          description: Direct presigned S3 download URL or local download route.
+        record_count:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Record Count
+          description: Number of exported refund records.
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error
+          description: Error message if export job failed.
+      type: object
+      required:
+      - job_id
+      - status
+      - format
+      - created_at
+      title: BulkExportJobResponse
+      description: Response payload representing an asynchronous bulk export job status
+        and artifact.
+    DecisionBreakdown:
+      properties:
+        auto_approve:
+          type: integer
+          minimum: 0.0
+          title: Auto Approve
+          description: Requests automatically approved.
+          default: 0
+        deny:
+          type: integer
+          minimum: 0.0
+          title: Deny
+          description: Requests denied based on policy rules.
+          default: 0
+        escalate:
+          type: integer
+          minimum: 0.0
+          title: Escalate
+          description: Requests escalated for human intervention.
+          default: 0
+        pending:
+          type: integer
+          minimum: 0.0
+          title: Pending
+          description: Requests with decision unfinalized or pending.
+          default: 0
+      type: object
+      title: DecisionBreakdown
+      description: Breakdown of refund requests by decision outcome.
+    ExportScheduleCreate:
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          minLength: 1
+          title: Name
+          description: Friendly schedule name.
+        recipients:
+          items:
+            type: string
+          type: array
+          minItems: 1
+          title: Recipients
+          description: List of recipient email addresses.
+        frequency:
+          type: string
+          enum:
+          - daily
+          - weekly
+          title: Frequency
+          description: Schedule trigger frequency.
+          default: daily
+        format:
+          type: string
+          enum:
+          - csv
+          - json
+          title: Format
+          description: Export attachment format.
+          default: csv
+        status_filter:
+          anyOf:
+          - type: string
+            enum:
+            - pending
+            - completed
+            - escalated
+            - awaiting_clarification
+          - type: 'null'
+          title: Status Filter
+          description: Optional refund status filter.
+        columns:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Columns
+          description: Optional list of column names or identifiers.
+        enabled:
+          type: boolean
+          title: Enabled
+          description: Whether the schedule is currently enabled.
+          default: true
+      type: object
+      required:
+      - name
+      - recipients
+      title: ExportScheduleCreate
+      description: Request payload for creating a new recurring export delivery schedule.
+    ExportScheduleResponse:
+      properties:
+        schedule_id:
+          type: string
+          title: Schedule Id
+        name:
+          type: string
+          title: Name
+        recipients:
+          items:
+            type: string
+          type: array
+          title: Recipients
+        frequency:
+          type: string
+          enum:
+          - daily
+          - weekly
+          title: Frequency
+        format:
+          type: string
+          enum:
+          - csv
+          - json
+          title: Format
+        status_filter:
+          anyOf:
+          - type: string
+            enum:
+            - pending
+            - completed
+            - escalated
+            - awaiting_clarification
+          - type: 'null'
+          title: Status Filter
+        columns:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Columns
+        enabled:
+          type: boolean
+          title: Enabled
+        created_at:
+          type: string
+          title: Created At
+        last_run:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Last Run
+        last_status:
+          type: string
+          enum:
+          - success
+          - failure
+          - never_run
+          title: Last Status
+          default: never_run
+      type: object
+      required:
+      - schedule_id
+      - name
+      - recipients
+      - frequency
+      - format
+      - enabled
+      - created_at
+      title: ExportScheduleResponse
+      description: Response payload representing an export schedule configuration
+        and status.
+    ExportScheduleUpdate:
+      properties:
+        name:
+          anyOf:
+          - type: string
+            maxLength: 100
+            minLength: 1
+          - type: 'null'
+          title: Name
+          description: Friendly schedule name.
+        recipients:
+          anyOf:
+          - items:
+              type: string
+            type: array
+            minItems: 1
+          - type: 'null'
+          title: Recipients
+          description: List of recipient email addresses.
+        frequency:
+          anyOf:
+          - type: string
+            enum:
+            - daily
+            - weekly
+          - type: 'null'
+          title: Frequency
+          description: Schedule trigger frequency.
+        format:
+          anyOf:
+          - type: string
+            enum:
+            - csv
+            - json
+          - type: 'null'
+          title: Format
+          description: Export attachment format.
+        status_filter:
+          anyOf:
+          - type: string
+            enum:
+            - pending
+            - completed
+            - escalated
+            - awaiting_clarification
+          - type: 'null'
+          title: Status Filter
+          description: Optional refund status filter.
+        columns:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Columns
+          description: Optional list of column names or identifiers.
+        enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Enabled
+          description: Whether the schedule is enabled.
+      type: object
+      title: ExportScheduleUpdate
+      description: Request payload for updating an existing recurring export delivery
+        schedule.
+    ExportTriggerResponse:
+      properties:
+        schedule_id:
+          type: string
+          title: Schedule Id
+        records_exported:
+          type: integer
+          title: Records Exported
+        recipients_delivered:
+          items:
+            type: string
+          type: array
+          title: Recipients Delivered
+        status:
+          type: string
+          enum:
+          - success
+          - failure
+          title: Status
+        executed_at:
+          type: string
+          title: Executed At
+      type: object
+      required:
+      - schedule_id
+      - records_exported
+      - recipients_delivered
+      - status
+      - executed_at
+      title: ExportTriggerResponse
+      description: Response payload returned when manually triggering an export schedule.
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    PolicyAuditEntry:
+      properties:
+        audit_id:
+          type: string
+          title: Audit Id
+          description: Unique audit entry identifier.
+        category:
+          type: string
+          title: Category
+          description: Refund category name.
+        timestamp:
+          type: string
+          title: Timestamp
+          description: ISO-8601 UTC timestamp of change.
+        operator_id:
+          type: string
+          title: Operator Id
+          description: Identifier or role of the operator making the change.
+          default: supervisor
+        changes:
+          additionalProperties:
+            anyOf:
+            - $ref: '#/components/schemas/PolicyFieldChange'
+            - additionalProperties: true
+              type: object
+          type: object
+          title: Changes
+          description: Dictionary mapping field names to old and new values.
+        previous_state:
+          additionalProperties: true
+          type: object
+          title: Previous State
+          description: Snapshot dictionary of the category policy prior to this change.
+        action:
+          type: string
+          title: Action
+          description: 'Type of action: update or rollback.'
+          default: update
+      type: object
+      required:
+      - audit_id
+      - category
+      - timestamp
+      title: PolicyAuditEntry
+      description: Audit log entry capturing policy rule changes and rollback snapshots.
+    PolicyFieldChange:
+      properties:
+        old_value:
+          title: Old Value
+          description: Previous threshold or rule value.
+        new_value:
+          title: New Value
+          description: Updated threshold or rule value.
+      type: object
+      required:
+      - old_value
+      - new_value
+      title: PolicyFieldChange
+      description: Field-level diff tracking previous and new threshold values.
+    PolicyItemResponse:
+      properties:
+        category:
+          type: string
+          title: Category
+          description: Refund category name.
+        return_window_days:
+          type: integer
+          exclusiveMinimum: 0.0
+          title: Return Window Days
+          description: Return window in days.
+        max_refund_amount:
+          type: number
+          minimum: 0.0
+          title: Max Refund Amount
+          description: Maximum refund amount.
+        auto_approve_threshold:
+          type: number
+          minimum: 0.0
+          title: Auto Approve Threshold
+          description: Auto-approve threshold.
+          default: 0.0
+        requires_proof:
+          type: boolean
+          title: Requires Proof
+          description: Whether customer photo evidence is required.
+          default: false
+        eligible_delivery_statuses:
+          items:
+            type: string
+          type: array
+          minItems: 1
+          title: Eligible Delivery Statuses
+          description: Eligible delivery statuses.
+        refund_window_days:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Refund Window Days
+          description: Backward-compatible alias for return_window_days.
+        max_order_amount:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Max Order Amount
+          description: Backward-compatible alias for max_refund_amount.
+      type: object
+      required:
+      - category
+      - return_window_days
+      - max_refund_amount
+      - eligible_delivery_statuses
+      title: PolicyItemResponse
+      description: Response schema for a single category policy configuration item.
+    RefundRecord: *id001
+    StatusBreakdown:
+      properties:
+        pending:
+          type: integer
+          minimum: 0.0
+          title: Pending
+          description: Requests currently pending evaluation.
+          default: 0
+        completed:
+          type: integer
+          minimum: 0.0
+          title: Completed
+          description: Requests successfully evaluated or finalized.
+          default: 0
+        escalated:
+          type: integer
+          minimum: 0.0
+          title: Escalated
+          description: Requests escalated for human/supervisor review.
+          default: 0
+        awaiting_clarification:
+          type: integer
+          minimum: 0.0
+          title: Awaiting Clarification
+          description: Requests awaiting customer clarification or evidence.
+          default: 0
+      type: object
+      title: StatusBreakdown
+      description: Breakdown of refund requests by current processing status.
+    TrendDataPoint:
+      properties:
+        period:
+          type: string
+          title: Period
+          description: Period bucket identifier ('YYYY-MM-DD' or 'YYYY-Www').
+        total_requests:
+          type: integer
+          minimum: 0.0
+          title: Total Requests
+          description: Total requests submitted in period.
+          default: 0
+        auto_approved:
+          type: integer
+          minimum: 0.0
+          title: Auto Approved
+          description: Requests automatically approved.
+          default: 0
+        denied:
+          type: integer
+          minimum: 0.0
+          title: Denied
+          description: Requests denied.
+          default: 0
+        escalated:
+          type: integer
+          minimum: 0.0
+          title: Escalated
+          description: Requests escalated.
+          default: 0
+        average_confidence:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Average Confidence
+          description: Average AI confidence score (0.0 - 1.0).
+          default: 0.0
+        average_latency_ms:
+          type: number
+          minimum: 0.0
+          title: Average Latency Ms
+          description: Average processing latency in milliseconds.
+          default: 0.0
+      type: object
+      required:
+      - period
+      title: TrendDataPoint
+      description: Historical trend aggregate metrics for a single time period.
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError

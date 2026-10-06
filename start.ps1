@@ -44,7 +44,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("all", "backend", "frontend", "setup", "seed", "test", "test-backend", "test-frontend", "build", "stop", "help")]
+    [ValidateSet("all", "backend", "frontend", "setup", "seed", "test", "test-backend", "test-offline", "test-aws", "test-frontend", "test-e2e", "typecheck", "generate-types", "build", "stop", "help")]
     [string]$Mode = "all",
 
     [Parameter()]
@@ -177,9 +177,14 @@ if ($Mode -eq "help") {
     Write-Host "  stop           Stop any active backend or frontend processes" -ForegroundColor Green
     Write-Host "  setup          Install uv/python deps, npm packages, and seed DynamoDB" -ForegroundColor Green
     Write-Host "  seed           Seed mock order records into DynamoDB" -ForegroundColor Green
-    Write-Host "  test           Run all backend (pytest) and frontend (vitest) tests" -ForegroundColor Green
-    Write-Host "  test-backend   Run backend test suite only" -ForegroundColor Green
-    Write-Host "  test-frontend  Run frontend test suite only" -ForegroundColor Green
+    Write-Host "  test           Run all offline backend and frontend tests" -ForegroundColor Green
+    Write-Host "  test-backend   Run backend offline test suite (pytest -m 'not aws')" -ForegroundColor Green
+    Write-Host "  test-offline   Run backend offline test suite (pytest -m 'not aws')" -ForegroundColor Green
+    Write-Host "  test-aws       Run backend live AWS integration tests (pytest -m 'aws')" -ForegroundColor Green
+    Write-Host "  test-frontend  Run frontend unit and component tests (vitest)" -ForegroundColor Green
+    Write-Host "  test-e2e       Run Playwright browser end-to-end test suite" -ForegroundColor Green
+    Write-Host "  typecheck      Run TypeScript strict typecheck (tsc --noEmit)" -ForegroundColor Green
+    Write-Host "  generate-types Regenerate frontend types from openapi.yaml" -ForegroundColor Green
     Write-Host "  build          Build production frontend bundle into frontend/dist" -ForegroundColor Green
     Write-Host "  help           Display this help screen" -ForegroundColor Green
     Write-Host ""
@@ -247,18 +252,18 @@ if ($Mode -eq "seed") {
 }
 
 # Mode: Test
-if ($Mode -eq "test" -or $Mode -eq "test-backend" -or $Mode -eq "test-frontend") {
-    if ($Mode -eq "test" -or $Mode -eq "test-backend") {
-        Write-Host "--- Running Backend Tests (pytest) ---" -ForegroundColor Cyan
+if ($Mode -eq "test" -or $Mode -eq "test-backend" -or $Mode -eq "test-offline" -or $Mode -eq "test-frontend") {
+    if ($Mode -eq "test" -or $Mode -eq "test-backend" -or $Mode -eq "test-offline") {
+        Write-Host "--- Running Backend Offline Tests (pytest -m 'not aws') ---" -ForegroundColor Cyan
         Assert-CommandAvailable "uv" "Install uv"
         Push-Location $BackendDir
         try {
-            uv run pytest
+            uv run pytest -m "not aws"
             if ($LASTEXITCODE -ne 0) {
-                Write-Host "[FAIL] Backend tests failed." -ForegroundColor Red
-                if ($Mode -eq "test-backend") { exit $LASTEXITCODE }
+                Write-Host "[FAIL] Backend offline tests failed." -ForegroundColor Red
+                if ($Mode -eq "test-backend" -or $Mode -eq "test-offline") { exit $LASTEXITCODE }
             } else {
-                Write-Host "[PASS] Backend tests passed." -ForegroundColor Green
+                Write-Host "[PASS] Backend offline tests passed." -ForegroundColor Green
             }
         } finally {
             Pop-Location
@@ -270,7 +275,7 @@ if ($Mode -eq "test" -or $Mode -eq "test-backend" -or $Mode -eq "test-frontend")
         Assert-CommandAvailable "npm" "Install npm"
         Push-Location $FrontendDir
         try {
-            npm run test -- --run
+            npm run test:run
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "[FAIL] Frontend tests failed." -ForegroundColor Red
                 exit $LASTEXITCODE
@@ -280,6 +285,82 @@ if ($Mode -eq "test" -or $Mode -eq "test-backend" -or $Mode -eq "test-frontend")
         } finally {
             Pop-Location
         }
+    }
+    exit 0
+}
+
+# Mode: Test Live AWS
+if ($Mode -eq "test-aws") {
+    Write-Host "--- Running Backend Live AWS Integration Tests (pytest -m 'aws') ---" -ForegroundColor Cyan
+    Assert-CommandAvailable "uv" "Install uv"
+    Push-Location $BackendDir
+    try {
+        uv run pytest -m "aws"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[FAIL] Live AWS integration tests failed." -ForegroundColor Red
+            exit $LASTEXITCODE
+        } else {
+            Write-Host "[PASS] Live AWS integration tests passed." -ForegroundColor Green
+        }
+    } finally {
+        Pop-Location
+    }
+    exit 0
+}
+
+# Mode: Test Playwright E2E
+if ($Mode -eq "test-e2e") {
+    Write-Host "--- Running Playwright Browser End-to-End Tests ---" -ForegroundColor Cyan
+    Assert-CommandAvailable "npm" "Install npm"
+    Push-Location $FrontendDir
+    try {
+        npm run test:e2e
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[FAIL] Playwright E2E tests failed." -ForegroundColor Red
+            exit $LASTEXITCODE
+        } else {
+            Write-Host "[PASS] Playwright E2E tests passed." -ForegroundColor Green
+        }
+    } finally {
+        Pop-Location
+    }
+    exit 0
+}
+
+# Mode: TypeScript Typecheck
+if ($Mode -eq "typecheck") {
+    Write-Host "--- Running Frontend Strict Typecheck (tsc --noEmit) ---" -ForegroundColor Cyan
+    Assert-CommandAvailable "npm" "Install npm"
+    Push-Location $FrontendDir
+    try {
+        npm run typecheck
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[FAIL] Typecheck failed." -ForegroundColor Red
+            exit $LASTEXITCODE
+        } else {
+            Write-Host "[PASS] Typecheck clean (0 errors)." -ForegroundColor Green
+        }
+    } finally {
+        Pop-Location
+    }
+    exit 0
+}
+
+# Mode: Generate Types
+if ($Mode -eq "generate-types") {
+    Write-Host "--- Regenerating TypeScript Types from openapi.yaml ---" -ForegroundColor Cyan
+    Assert-CommandAvailable "npm" "Install npm"
+    Push-Location $FrontendDir
+    try {
+        npm run generate:types
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[FAIL] Type generation failed." -ForegroundColor Red
+            exit $LASTEXITCODE
+        } else {
+            Write-Host "[PASS] Types generated successfully." -ForegroundColor Green
+        }
+    } finally {
+        Pop-Location
     }
     exit 0
 }

@@ -4,7 +4,7 @@
  */
 
 export interface paths {
-    "/": {
+    "/v1/refunds": {
         parameters: {
             query?: never;
             header?: never;
@@ -12,10 +12,994 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get service metadata
-         * @description Retrieve top-level service health and identity information.
+         * List refund requests with optional status filtering
+         * @description Retrieve refund queue records with optional status filtering.
          */
-        get: operations["getServiceInfo"];
+        get: operations["list_refund_requests_v1_refunds_get"];
+        put?: never;
+        /**
+         * Submit a refund request for automated evaluation
+         * @description Accept and initiate asynchronous multi-agent processing for a refund request.
+         */
+        post: operations["submit_refund_request_v1_refunds_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/{refund_id}/override": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Manually override a refund request decision
+         * @description Apply a human operator decision override to a refund request.
+         */
+        post: operations["override_refund_decision_v1_refunds__refund_id__override_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Subscribe to real-time refund server-sent events (SSE)
+         * @description Stream real-time refund update events to connected SSE clients.
+         */
+        get: operations["subscribe_refund_events_v1_refunds_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export refund queue records as CSV or JSON
+         * @description Export refund requests matching the optional status filter in CSV or JSON format.
+         */
+        get: operations["export_refund_requests_v1_refunds_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/export/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create asynchronous bulk queue export job
+         * @description Create a new asynchronous bulk queue export job.
+         */
+        post: operations["create_bulk_export_job_v1_refunds_export_jobs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/export/jobs/{job_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download bulk export file
+         * @description Download the generated export file from local filesystem or redirect to S3.
+         */
+        get: operations["download_bulk_export_v1_refunds_export_jobs__job_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/export/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get bulk export job status
+         * @description Retrieve status, metadata, and download URL for an export job.
+         */
+        get: operations["get_bulk_export_job_v1_refunds_export_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/export/schedules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List all recurring queue export schedules
+         * @description List all configured export schedules.
+         */
+        get: operations["list_export_schedules_v1_refunds_export_schedules_get"];
+        put?: never;
+        /**
+         * Create a recurring queue export schedule
+         * @description Create a new automated recurring export schedule.
+         */
+        post: operations["create_export_schedule_v1_refunds_export_schedules_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/export/schedules/{schedule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get export schedule details
+         * @description Retrieve details for a specific export schedule.
+         */
+        get: operations["get_export_schedule_v1_refunds_export_schedules__schedule_id__get"];
+        /**
+         * Update an existing export schedule
+         * @description Update configuration fields on an existing export schedule.
+         */
+        put: operations["update_export_schedule_v1_refunds_export_schedules__schedule_id__put"];
+        post?: never;
+        /**
+         * Delete an export schedule
+         * @description Delete an existing export schedule.
+         */
+        delete: operations["delete_export_schedule_v1_refunds_export_schedules__schedule_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/export/schedules/{schedule_id}/trigger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Manually trigger an export schedule run and email delivery
+         * @description Manually trigger immediate execution and email delivery for an export schedule.
+         */
+        post: operations["trigger_export_schedule_v1_refunds_export_schedules__schedule_id__trigger_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/{refund_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Poll or inspect refund request status and decision
+         * @description Retrieve refund request details, workflow status, and agent decision.
+         */
+        get: operations["get_refund_request_by_id_v1_refunds__refund_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/{refund_id}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload photo evidence for a refund request
+         * @description Accept multipart file upload, validate, store, and append evidence metadata.
+         */
+        post: operations["upload_refund_evidence_v1_refunds__refund_id__evidence_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/{refund_id}/evidence/{evidence_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download refund evidence file
+         * @description Retrieve or download evidence attachment, enforcing malware quarantine blocking.
+         */
+        get: operations["get_refund_evidence_v1_refunds__refund_id__evidence__evidence_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/{refund_id}/evidence/{evidence_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Retrieve or download refund evidence file
+         * @description Retrieve or download evidence attachment, enforcing malware quarantine blocking.
+         */
+        get: operations["get_refund_evidence_v1_refunds__refund_id__evidence__evidence_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/{refund_id}/clarify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit customer clarification response and resume evaluation
+         * @description Submit customer clarification response to resume paused evaluation.
+         */
+        post: operations["clarify_refund_request_v1_refunds__refund_id__clarify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/refunds/{refund_id}/request-proof": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit reviewer proof request for an escalated refund
+         * @description Accept reviewer proof request for an escalated refund, generate customer notification email, and transition to awaiting_clarification.
+         */
+        post: operations["request_reviewer_proof_endpoint_v1_refunds__refund_id__request_proof_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List refund requests with optional status filtering
+         * @description Retrieve refund queue records with optional status filtering.
+         */
+        get: operations["list_refund_requests_refunds_get"];
+        put?: never;
+        /**
+         * Submit a refund request for automated evaluation
+         * @description Accept and initiate asynchronous multi-agent processing for a refund request.
+         */
+        post: operations["submit_refund_request_refunds_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/{refund_id}/override": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Manually override a refund request decision
+         * @description Apply a human operator decision override to a refund request.
+         */
+        post: operations["override_refund_decision_refunds__refund_id__override_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Subscribe to real-time refund server-sent events (SSE)
+         * @description Stream real-time refund update events to connected SSE clients.
+         */
+        get: operations["subscribe_refund_events_refunds_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export refund queue records as CSV or JSON
+         * @description Export refund requests matching the optional status filter in CSV or JSON format.
+         */
+        get: operations["export_refund_requests_refunds_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/export/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create asynchronous bulk queue export job
+         * @description Create a new asynchronous bulk queue export job.
+         */
+        post: operations["create_bulk_export_job_refunds_export_jobs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/export/jobs/{job_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download bulk export file
+         * @description Download the generated export file from local filesystem or redirect to S3.
+         */
+        get: operations["download_bulk_export_refunds_export_jobs__job_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/export/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get bulk export job status
+         * @description Retrieve status, metadata, and download URL for an export job.
+         */
+        get: operations["get_bulk_export_job_refunds_export_jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/export/schedules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List all recurring queue export schedules
+         * @description List all configured export schedules.
+         */
+        get: operations["list_export_schedules_refunds_export_schedules_get"];
+        put?: never;
+        /**
+         * Create a recurring queue export schedule
+         * @description Create a new automated recurring export schedule.
+         */
+        post: operations["create_export_schedule_refunds_export_schedules_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/export/schedules/{schedule_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get export schedule details
+         * @description Retrieve details for a specific export schedule.
+         */
+        get: operations["get_export_schedule_refunds_export_schedules__schedule_id__get"];
+        /**
+         * Update an existing export schedule
+         * @description Update configuration fields on an existing export schedule.
+         */
+        put: operations["update_export_schedule_refunds_export_schedules__schedule_id__put"];
+        post?: never;
+        /**
+         * Delete an export schedule
+         * @description Delete an existing export schedule.
+         */
+        delete: operations["delete_export_schedule_refunds_export_schedules__schedule_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/export/schedules/{schedule_id}/trigger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Manually trigger an export schedule run and email delivery
+         * @description Manually trigger immediate execution and email delivery for an export schedule.
+         */
+        post: operations["trigger_export_schedule_refunds_export_schedules__schedule_id__trigger_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/{refund_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Poll or inspect refund request status and decision
+         * @description Retrieve refund request details, workflow status, and agent decision.
+         */
+        get: operations["get_refund_request_by_id_refunds__refund_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/{refund_id}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload photo evidence for a refund request
+         * @description Accept multipart file upload, validate, store, and append evidence metadata.
+         */
+        post: operations["upload_refund_evidence_refunds__refund_id__evidence_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/{refund_id}/evidence/{evidence_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download refund evidence file
+         * @description Retrieve or download evidence attachment, enforcing malware quarantine blocking.
+         */
+        get: operations["get_refund_evidence_refunds__refund_id__evidence__evidence_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/{refund_id}/evidence/{evidence_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Retrieve or download refund evidence file
+         * @description Retrieve or download evidence attachment, enforcing malware quarantine blocking.
+         */
+        get: operations["get_refund_evidence_refunds__refund_id__evidence__evidence_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/{refund_id}/clarify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit customer clarification response and resume evaluation
+         * @description Submit customer clarification response to resume paused evaluation.
+         */
+        post: operations["clarify_refund_request_refunds__refund_id__clarify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/refunds/{refund_id}/request-proof": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit reviewer proof request for an escalated refund
+         * @description Accept reviewer proof request for an escalated refund, generate customer notification email, and transition to awaiting_clarification.
+         */
+        post: operations["request_reviewer_proof_endpoint_refunds__refund_id__request_proof_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List active refund policy rules for all categories
+         * @description Retrieve active policy rules across all 5 refund categories.
+         */
+        get: operations["list_policies_v1_policies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/policies/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Retrieve policy configuration version history and audit log
+         * @description Retrieve audit history entries, optionally filtered by category.
+         *
+         *     Returns HTTP 200 with list[PolicyAuditEntry] sorted reverse chronologically.
+         *     Returns HTTP 404 ProblemDetails if category is unrecognized.
+         */
+        get: operations["get_policies_history_v1_policies_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/policies/{category}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rollback policy configuration for a specific refund category
+         * @description Restore policy configuration to previous state from audit log.
+         *
+         *     Accepts optional audit_id via query parameter or JSON body.
+         *     Broadcasts policy_update event via SSE.
+         */
+        post: operations["rollback_category_policy_v1_policies__category__rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/policies/{category}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update policy configuration for a specific refund category
+         * @description Update active thresholds and rules for a specified refund category.
+         *
+         *     Returns RFC 9457 ProblemDetails (HTTP 404) if category is unknown.
+         *     Returns RFC 9457 ValidationProblemDetails (HTTP 422) if parameters fail validation.
+         */
+        put: operations["update_policy_v1_policies__category__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List active refund policy rules for all categories
+         * @description Retrieve active policy rules across all 5 refund categories.
+         */
+        get: operations["list_policies_policies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/policies/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Retrieve policy configuration version history and audit log
+         * @description Retrieve audit history entries, optionally filtered by category.
+         *
+         *     Returns HTTP 200 with list[PolicyAuditEntry] sorted reverse chronologically.
+         *     Returns HTTP 404 ProblemDetails if category is unrecognized.
+         */
+        get: operations["get_policies_history_policies_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/policies/{category}/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rollback policy configuration for a specific refund category
+         * @description Restore policy configuration to previous state from audit log.
+         *
+         *     Accepts optional audit_id via query parameter or JSON body.
+         *     Broadcasts policy_update event via SSE.
+         */
+        post: operations["rollback_category_policy_policies__category__rollback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/policies/{category}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update policy configuration for a specific refund category
+         * @description Update active thresholds and rules for a specified refund category.
+         *
+         *     Returns RFC 9457 ProblemDetails (HTTP 404) if category is unknown.
+         *     Returns RFC 9457 ValidationProblemDetails (HTTP 422) if parameters fail validation.
+         */
+        put: operations["update_policy_policies__category__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/analytics/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get aggregate operational analytics and AI metrics
+         * @description Retrieve operational visibility metrics including decision/status distributions and AI rates.
+         */
+        get: operations["get_analytics_metrics_v1_analytics_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/analytics/trends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get historical trend analytics
+         * @description Retrieve historical time-series trends grouped by daily or weekly intervals.
+         */
+        get: operations["get_analytics_trends_v1_analytics_trends_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/analytics/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export operational analytics reports as CSV or PDF
+         * @description Export operational analytics KPI summary and trends in CSV or PDF format.
+         */
+        get: operations["export_analytics_report_v1_analytics_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/analytics/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get aggregate operational analytics and AI metrics
+         * @description Retrieve operational visibility metrics including decision/status distributions and AI rates.
+         */
+        get: operations["get_analytics_metrics_analytics_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/analytics/trends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get historical trend analytics
+         * @description Retrieve historical time-series trends grouped by daily or weekly intervals.
+         */
+        get: operations["get_analytics_trends_analytics_trends_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/analytics/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export operational analytics reports as CSV or PDF
+         * @description Export operational analytics KPI summary and trends in CSV or PDF format.
+         */
+        get: operations["export_analytics_report_analytics_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Root */
+        get: operations["root__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Health */
+        get: operations["health_health_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -31,151 +1015,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Health check
-         * @description Probe endpoint for container orchestrators and load balancers to assess application liveness.
-         */
+        /** Health */
         get: operations["getHealthStatus"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/refunds": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List refund requests
-         * @description Retrieve a list of refund requests from the evaluation queue with optional
-         *     status filtering. Records are ordered by creation timestamp descending.
-         */
-        get: operations["listRefundRequests"];
-        put?: never;
-        /**
-         * Submit refund request for evaluation
-         * @description Accept an incoming customer refund request, persist a pending record in DynamoDB,
-         *     and schedule asynchronous multi-agent evaluation via LangGraph and AWS Bedrock.
-         *     Supports JSON payload or multipart form data with an optional initial evidence photo.
-         */
-        post: operations["submitRefundRequest"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/refunds/{refundId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get refund request details
-         * @description Retrieve the latest status, agent classification, policy check outcome, evidence attachments,
-         *     and final decision for a specific refund request.
-         */
-        get: operations["getRefundRequestById"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/refunds/{refundId}/override": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Manually override refund decision
-         * @description Apply a human operator decision override to an existing refund request (typically
-         *     one escalated for human review). Transitions status to `completed` and records an
-         *     audit trail of operator decision and rationale.
-         */
-        post: operations["overrideRefundDecision"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/refunds/{refundId}/clarify": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Submit customer clarification
-         * @description Provide customer clarification response for a refund request that is paused in
-         *     `awaiting_clarification` status. Supports plain JSON text responses or multipart form
-         *     data with an optional attached evidence image. Automatically resumes multi-agent evaluation
-         *     in the background.
-         */
-        post: operations["submitRefundClarification"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/refunds/{refundId}/evidence": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Upload photo evidence for a refund request
-         * @description Upload a customer proof image (JPEG, PNG, WebP up to 5MB) for a refund request.
-         *     If the refund request is currently paused in `awaiting_clarification` status, uploading
-         *     evidence automatically enqueues background workflow resumption without requiring a separate
-         *     call to `/clarify`.
-         */
-        post: operations["uploadRefundEvidence"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/refunds/{refundId}/request-proof": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Submit reviewer proof request for an escalated refund
-         * @description Accept an inquiry prompt from a human supervisor for an escalated refund request,
-         *     generate a formal customer notification email instructing supported upload formats,
-         *     and transition the refund record from `escalated` back to `awaiting_clarification`.
-         */
-        post: operations["requestReviewerProof"];
         delete?: never;
         options?: never;
         head?: never;
@@ -267,6 +1110,12 @@ export interface components {
              * @example 2026-09-23T14:15:30Z
              */
             createdAt: string;
+            /** @description Created refund ID. */
+            refund_id?: string;
+            /** @description Order identifier. */
+            order_id?: string;
+            /** @description Creation timestamp. */
+            created_at?: string;
         };
         RefundClarificationRequest: {
             /**
@@ -294,6 +1143,10 @@ export interface components {
              * @example Alex Morgan
              */
             customerName?: string | null;
+            /** @description Specific reviewer proof request prompt. */
+            proof_prompt?: string;
+            /** @description Customer display name. */
+            customer_name?: string;
         };
         EvidenceItem: {
             /**
@@ -332,6 +1185,38 @@ export interface components {
              * @example 2026-09-23T14:16:00Z
              */
             createdAt: string;
+            /** @description Unique evidence attachment ID. */
+            evidence_id?: string;
+            /** @description S3 storage key. */
+            storage_key?: string;
+            /** @description MIME type. */
+            content_type?: string;
+            /** @description File size in bytes. */
+            size_bytes?: number;
+            /** @description ISO-8601 upload timestamp. */
+            created_at?: string;
+            /** @description Image width in pixels. */
+            width?: number;
+            /** @description Image height in pixels. */
+            height?: number;
+            /**
+             * @description Malware scan status.
+             * @enum {string}
+             */
+            scan_status?: "clean" | "pending" | "infected";
+            /**
+             * @description Malware scan status alias.
+             * @enum {string}
+             */
+            scanStatus?: "clean" | "pending" | "infected";
+            /** @description ISO-8601 scan timestamp. */
+            scanned_at?: string;
+            /** @description ISO-8601 scan timestamp alias. */
+            scannedAt?: string;
+            /** @description Identified threat signature name. */
+            threat_name?: string;
+            /** @description Identified threat signature name alias. */
+            threatName?: string;
         };
         ClarificationTurn: {
             /**
@@ -362,6 +1247,8 @@ export interface components {
              *     ]
              */
             evidenceIds: string[];
+            /** @description List of evidence IDs. */
+            evidence_ids?: string[];
         };
         ToolCallAudit: {
             /**
@@ -538,6 +1425,48 @@ export interface components {
              * @example null
              */
             clarificationEmailText?: string | null;
+            /** @description Refund ID. */
+            refund_id?: string;
+            /** @description Order ID. */
+            order_id?: string;
+            /** @description Customer explanation text. */
+            customer_request_text?: string;
+            /** @description Classification confidence score. */
+            confidence_score?: number;
+            /** @description Creation timestamp. */
+            created_at?: string;
+            /** @description Last updated timestamp. */
+            updated_at?: string;
+            /** @description Manual override decision. */
+            override_decision?: string;
+            /** @description Manual override reason. */
+            override_reason?: string;
+            /** @description Override applied timestamp. */
+            overridden_at?: string;
+            /** @description Operator identifier. */
+            overridden_by?: string;
+            /**
+             * @description Escalation tier.
+             * @enum {string}
+             */
+            escalation_tier?: "supervisor" | "senior_manager";
+            /**
+             * @description Escalation tier alias.
+             * @enum {string}
+             */
+            escalationTier?: "supervisor" | "senior_manager";
+            /** @description Refund monetary amount. */
+            refund_amount?: number;
+            /** @description Refund monetary amount alias. */
+            refundAmount?: number;
+            /** @description Order total monetary amount. */
+            order_amount?: number;
+            /** @description Order total monetary amount alias. */
+            orderAmount?: number;
+            /** @description Generated approval email text. */
+            approval_email_text?: string;
+            /** @description Generated denial email text. */
+            denial_email_text?: string;
         };
         /** @description RFC 7807 / RFC 9457 problem details object describing an error condition. */
         ProblemDetails: {
@@ -584,6 +1513,713 @@ export interface components {
              * @example Field cannot be blank or empty.
              */
             reason: string;
+        };
+        /**
+         * AnalyticsMetricsResponse
+         * @description Aggregate operational analytics and AI performance metrics.
+         */
+        AnalyticsMetricsResponse: {
+            /**
+             * Total Requests
+             * @description Total count of refund requests.
+             * @default 0
+             */
+            total_requests: number;
+            /** @description Counts of requests by status. */
+            status_breakdown?: components["schemas"]["StatusBreakdown"];
+            /** @description Counts of requests by decision outcome. */
+            decision_breakdown?: components["schemas"]["DecisionBreakdown"];
+            /**
+             * Auto Approval Rate
+             * @description Proportion of total requests auto-approved (0.0 - 1.0).
+             * @default 0
+             */
+            auto_approval_rate: number;
+            /**
+             * Override Rate
+             * @description Proportion of completed requests with supervisor overrides (0.0 - 1.0).
+             * @default 0
+             */
+            override_rate: number;
+            /**
+             * Average Confidence
+             * @description Arithmetic mean of AI confidence scores (0.0 - 1.0).
+             * @default 0
+             */
+            average_confidence: number;
+            /**
+             * Category Breakdown
+             * @description Counts of requests grouped by product/reason category.
+             */
+            category_breakdown?: {
+                [key: string]: number;
+            };
+            /**
+             * Average Latency Ms
+             * @description Average end-to-end evaluation latency in milliseconds across evaluated requests.
+             * @default 0
+             */
+            average_latency_ms: number;
+            /**
+             * Node Latency Breakdown
+             * @description Average latency in milliseconds broken down by agent node.
+             */
+            node_latency_breakdown?: {
+                [key: string]: number;
+            };
+        };
+        /**
+         * AnalyticsTrendsResponse
+         * @description Historical time-series trend response with bucketed data points.
+         */
+        AnalyticsTrendsResponse: {
+            /**
+             * Interval
+             * @description Time bucket interval ('daily' or 'weekly').
+             * @default daily
+             * @enum {string}
+             */
+            interval: "daily" | "weekly";
+            /**
+             * Start Date
+             * @description Start date filter applied.
+             */
+            start_date?: string | null;
+            /**
+             * End Date
+             * @description End date filter applied.
+             */
+            end_date?: string | null;
+            /**
+             * Points
+             * @description Chronologically sorted trend data points.
+             */
+            points?: components["schemas"]["TrendDataPoint"][];
+        };
+        /**
+         * BulkExportJobRequest
+         * @description Request payload for initiating an asynchronous bulk queue export job.
+         */
+        BulkExportJobRequest: {
+            /**
+             * Format
+             * @description Export file format.
+             * @default csv
+             * @enum {string}
+             */
+            format: "csv" | "json";
+            /**
+             * Status
+             * @description Optional refund status filter.
+             */
+            status?: ("pending" | "completed" | "escalated" | "awaiting_clarification") | null;
+            /**
+             * Start Date
+             * @description Optional ISO-8601 or YYYY-MM-DD start date filter (inclusive).
+             */
+            start_date?: string | null;
+            /**
+             * End Date
+             * @description Optional ISO-8601 or YYYY-MM-DD end date filter (inclusive).
+             */
+            end_date?: string | null;
+            /**
+             * Columns
+             * @description Optional ordered list of column identifiers or header names to include.
+             */
+            columns?: string[] | null;
+        };
+        /**
+         * BulkExportJobResponse
+         * @description Response payload representing an asynchronous bulk export job status and artifact.
+         */
+        BulkExportJobResponse: {
+            /**
+             * Job Id
+             * @description Unique export job identifier prefixed with exp_.
+             */
+            job_id: string;
+            /**
+             * Status
+             * @description Current job execution status.
+             * @enum {string}
+             */
+            status: "pending" | "processing" | "completed" | "failed";
+            /**
+             * Format
+             * @description Export format.
+             * @enum {string}
+             */
+            format: "csv" | "json";
+            /**
+             * Created At
+             * @description ISO-8601 creation timestamp.
+             */
+            created_at: string;
+            /**
+             * Expires At
+             * @description ISO-8601 expiration timestamp (default 1 hour after creation).
+             */
+            expires_at?: string | null;
+            /**
+             * Completed At
+             * @description ISO-8601 completion timestamp.
+             */
+            completed_at?: string | null;
+            /**
+             * Download Url
+             * @description Direct presigned S3 download URL or local download route.
+             */
+            download_url?: string | null;
+            /**
+             * Record Count
+             * @description Number of exported refund records.
+             */
+            record_count?: number | null;
+            /**
+             * Error
+             * @description Error message if export job failed.
+             */
+            error?: string | null;
+        };
+        /**
+         * DecisionBreakdown
+         * @description Breakdown of refund requests by decision outcome.
+         */
+        DecisionBreakdown: {
+            /**
+             * Auto Approve
+             * @description Requests automatically approved.
+             * @default 0
+             */
+            auto_approve: number;
+            /**
+             * Deny
+             * @description Requests denied based on policy rules.
+             * @default 0
+             */
+            deny: number;
+            /**
+             * Escalate
+             * @description Requests escalated for human intervention.
+             * @default 0
+             */
+            escalate: number;
+            /**
+             * Pending
+             * @description Requests with decision unfinalized or pending.
+             * @default 0
+             */
+            pending: number;
+        };
+        /**
+         * ExportScheduleCreate
+         * @description Request payload for creating a new recurring export delivery schedule.
+         */
+        ExportScheduleCreate: {
+            /**
+             * Name
+             * @description Friendly schedule name.
+             */
+            name: string;
+            /**
+             * Recipients
+             * @description List of recipient email addresses.
+             */
+            recipients: string[];
+            /**
+             * Frequency
+             * @description Schedule trigger frequency.
+             * @default daily
+             * @enum {string}
+             */
+            frequency: "daily" | "weekly";
+            /**
+             * Format
+             * @description Export attachment format.
+             * @default csv
+             * @enum {string}
+             */
+            format: "csv" | "json";
+            /**
+             * Status Filter
+             * @description Optional refund status filter.
+             */
+            status_filter?: ("pending" | "completed" | "escalated" | "awaiting_clarification") | null;
+            /**
+             * Columns
+             * @description Optional list of column names or identifiers.
+             */
+            columns?: string[] | null;
+            /**
+             * Enabled
+             * @description Whether the schedule is currently enabled.
+             * @default true
+             */
+            enabled: boolean;
+        };
+        /**
+         * ExportScheduleResponse
+         * @description Response payload representing an export schedule configuration and status.
+         */
+        ExportScheduleResponse: {
+            /** Schedule Id */
+            schedule_id: string;
+            /** Name */
+            name: string;
+            /** Recipients */
+            recipients: string[];
+            /**
+             * Frequency
+             * @enum {string}
+             */
+            frequency: "daily" | "weekly";
+            /**
+             * Format
+             * @enum {string}
+             */
+            format: "csv" | "json";
+            /** Status Filter */
+            status_filter?: ("pending" | "completed" | "escalated" | "awaiting_clarification") | null;
+            /** Columns */
+            columns?: string[] | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Created At */
+            created_at: string;
+            /** Last Run */
+            last_run?: string | null;
+            /**
+             * Last Status
+             * @default never_run
+             * @enum {string}
+             */
+            last_status: "success" | "failure" | "never_run";
+        };
+        /**
+         * ExportScheduleUpdate
+         * @description Request payload for updating an existing recurring export delivery schedule.
+         */
+        ExportScheduleUpdate: {
+            /**
+             * Name
+             * @description Friendly schedule name.
+             */
+            name?: string | null;
+            /**
+             * Recipients
+             * @description List of recipient email addresses.
+             */
+            recipients?: string[] | null;
+            /**
+             * Frequency
+             * @description Schedule trigger frequency.
+             */
+            frequency?: ("daily" | "weekly") | null;
+            /**
+             * Format
+             * @description Export attachment format.
+             */
+            format?: ("csv" | "json") | null;
+            /**
+             * Status Filter
+             * @description Optional refund status filter.
+             */
+            status_filter?: ("pending" | "completed" | "escalated" | "awaiting_clarification") | null;
+            /**
+             * Columns
+             * @description Optional list of column names or identifiers.
+             */
+            columns?: string[] | null;
+            /**
+             * Enabled
+             * @description Whether the schedule is enabled.
+             */
+            enabled?: boolean | null;
+        };
+        /**
+         * ExportTriggerResponse
+         * @description Response payload returned when manually triggering an export schedule.
+         */
+        ExportTriggerResponse: {
+            /** Schedule Id */
+            schedule_id: string;
+            /** Records Exported */
+            records_exported: number;
+            /** Recipients Delivered */
+            recipients_delivered: string[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "failure";
+            /** Executed At */
+            executed_at: string;
+        };
+        /** HTTPValidationError */
+        HTTPValidationError: {
+            /** Detail */
+            detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * PolicyAuditEntry
+         * @description Audit log entry capturing policy rule changes and rollback snapshots.
+         */
+        PolicyAuditEntry: {
+            /**
+             * Audit Id
+             * @description Unique audit entry identifier.
+             */
+            audit_id: string;
+            /**
+             * Category
+             * @description Refund category name.
+             */
+            category: string;
+            /**
+             * Timestamp
+             * @description ISO-8601 UTC timestamp of change.
+             */
+            timestamp: string;
+            /**
+             * Operator Id
+             * @description Identifier or role of the operator making the change.
+             * @default supervisor
+             */
+            operator_id: string;
+            /**
+             * Changes
+             * @description Dictionary mapping field names to old and new values.
+             */
+            changes?: {
+                [key: string]: components["schemas"]["PolicyFieldChange"] | {
+                    [key: string]: unknown;
+                };
+            };
+            /**
+             * Previous State
+             * @description Snapshot dictionary of the category policy prior to this change.
+             */
+            previous_state?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Action
+             * @description Type of action: update or rollback.
+             * @default update
+             */
+            action: string;
+        };
+        /**
+         * PolicyFieldChange
+         * @description Field-level diff tracking previous and new threshold values.
+         */
+        PolicyFieldChange: {
+            /**
+             * Old Value
+             * @description Previous threshold or rule value.
+             */
+            old_value: unknown;
+            /**
+             * New Value
+             * @description Updated threshold or rule value.
+             */
+            new_value: unknown;
+        };
+        /**
+         * PolicyItemResponse
+         * @description Response schema for a single category policy configuration item.
+         */
+        PolicyItemResponse: {
+            /**
+             * Category
+             * @description Refund category name.
+             */
+            category: string;
+            /**
+             * Return Window Days
+             * @description Return window in days.
+             */
+            return_window_days: number;
+            /**
+             * Max Refund Amount
+             * @description Maximum refund amount.
+             */
+            max_refund_amount: number;
+            /**
+             * Auto Approve Threshold
+             * @description Auto-approve threshold.
+             * @default 0
+             */
+            auto_approve_threshold: number;
+            /**
+             * Requires Proof
+             * @description Whether customer photo evidence is required.
+             * @default false
+             */
+            requires_proof: boolean;
+            /**
+             * Eligible Delivery Statuses
+             * @description Eligible delivery statuses.
+             */
+            eligible_delivery_statuses: string[];
+            /**
+             * Refund Window Days
+             * @description Backward-compatible alias for return_window_days.
+             */
+            refund_window_days?: number | null;
+            /**
+             * Max Order Amount
+             * @description Backward-compatible alias for max_refund_amount.
+             */
+            max_order_amount?: number | null;
+        };
+        RefundRecord: {
+            /**
+             * @description Unique refund request identifier.
+             * @example ref_543c86069f0f
+             */
+            refundId: string;
+            /**
+             * @description Associated purchase order identifier.
+             * @example ORD-1007
+             */
+            orderId: string;
+            /**
+             * @description Original customer refund explanation.
+             * @example The chair armrest arrived completely broken and cracked during delivery.
+             */
+            customerRequestText: string;
+            status: components["schemas"]["RefundStatus"];
+            /**
+             * @description Automated or human-adjudicated refund decision.
+             * @example auto_approve
+             */
+            decision?: components["schemas"]["RefundDecision"] | null;
+            /**
+             * @description Detailed explanation justifying the decision.
+             * @example Refund automatically approved. Category 'damaged' satisfied all policy rules.
+             */
+            reasoning?: string | null;
+            matchedPolicyRule?: components["schemas"]["MatchedPolicyRule"] | null;
+            /**
+             * Format: float
+             * @description Model confidence score (0.0 to 1.0), or null if resolved without LLM.
+             * @example 0.95
+             */
+            confidenceScore?: number | null;
+            /**
+             * @description Classified refund category.
+             * @example damaged
+             */
+            category?: components["schemas"]["RefundCategory"] | null;
+            /**
+             * Format: date-time
+             * @description ISO-8601 creation timestamp.
+             * @example 2026-09-23T14:10:00Z
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description ISO-8601 timestamp of last modification.
+             * @example 2026-09-23T14:10:05Z
+             */
+            updatedAt: string;
+            /**
+             * @description Decision applied by human reviewer override, if applicable.
+             * @example null
+             */
+            overrideDecision?: components["schemas"]["OverrideDecisionType"] | null;
+            /**
+             * @description Justification provided during human operator override, if applicable.
+             * @example null
+             */
+            overrideReason?: string | null;
+            /**
+             * Format: date-time
+             * @description ISO-8601 timestamp when manual override occurred, if applicable.
+             * @example null
+             */
+            overriddenAt?: string | null;
+            /**
+             * @description Question asked to customer for request clarification.
+             * @example Could you please provide photos of the damaged shipping box?
+             */
+            clarificationPrompt?: string | null;
+            /**
+             * @description Customer-provided clarification response.
+             * @example The box was torn open at the bottom corner upon delivery.
+             */
+            clarificationResponse?: string | null;
+            /**
+             * @description Number of clarification cycles attempted.
+             * @example 0
+             */
+            clarificationCount?: number;
+            /**
+             * @description Structured turn-by-turn audit history of clarification and proof request cycles.
+             * @example []
+             */
+            clarificationHistory?: components["schemas"]["ClarificationTurn"][];
+            /**
+             * @description Customer-uploaded proof attachments (images).
+             * @example []
+             */
+            evidence?: components["schemas"]["EvidenceItem"][];
+            /**
+             * @description Chronological audit log of external tool invocations, inputs, and results.
+             * @example []
+             */
+            toolCalls?: components["schemas"]["ToolCallAudit"][];
+            /**
+             * @description Customer confirmation and product return instructions email text generated for approved refunds.
+             * @example Dear Customer,
+             *
+             *     Your refund request has been approved...
+             */
+            approvalEmailText?: string | null;
+            /**
+             * @description Customer notification email text explaining policy denial reasoning.
+             * @example null
+             */
+            denialEmailText?: string | null;
+            /**
+             * @description Customer notification email text requesting evidence or clarification.
+             * @example null
+             */
+            clarificationEmailText?: string | null;
+            /** @description Refund ID. */
+            refund_id?: string;
+            /** @description Order ID. */
+            order_id?: string;
+            /** @description Customer explanation text. */
+            customer_request_text?: string;
+            /** @description Classification confidence score. */
+            confidence_score?: number;
+            /** @description Creation timestamp. */
+            created_at?: string;
+            /** @description Last updated timestamp. */
+            updated_at?: string;
+            /** @description Manual override decision. */
+            override_decision?: string;
+            /** @description Manual override reason. */
+            override_reason?: string;
+            /** @description Override applied timestamp. */
+            overridden_at?: string;
+            /** @description Operator identifier. */
+            overridden_by?: string;
+            /**
+             * @description Escalation tier.
+             * @enum {string}
+             */
+            escalation_tier?: "supervisor" | "senior_manager";
+            /**
+             * @description Escalation tier alias.
+             * @enum {string}
+             */
+            escalationTier?: "supervisor" | "senior_manager";
+            /** @description Refund monetary amount. */
+            refund_amount?: number;
+            /** @description Refund monetary amount alias. */
+            refundAmount?: number;
+            /** @description Order total monetary amount. */
+            order_amount?: number;
+            /** @description Order total monetary amount alias. */
+            orderAmount?: number;
+            /** @description Generated approval email text. */
+            approval_email_text?: string;
+            /** @description Generated denial email text. */
+            denial_email_text?: string;
+        };
+        /**
+         * StatusBreakdown
+         * @description Breakdown of refund requests by current processing status.
+         */
+        StatusBreakdown: {
+            /**
+             * Pending
+             * @description Requests currently pending evaluation.
+             * @default 0
+             */
+            pending: number;
+            /**
+             * Completed
+             * @description Requests successfully evaluated or finalized.
+             * @default 0
+             */
+            completed: number;
+            /**
+             * Escalated
+             * @description Requests escalated for human/supervisor review.
+             * @default 0
+             */
+            escalated: number;
+            /**
+             * Awaiting Clarification
+             * @description Requests awaiting customer clarification or evidence.
+             * @default 0
+             */
+            awaiting_clarification: number;
+        };
+        /**
+         * TrendDataPoint
+         * @description Historical trend aggregate metrics for a single time period.
+         */
+        TrendDataPoint: {
+            /**
+             * Period
+             * @description Period bucket identifier ('YYYY-MM-DD' or 'YYYY-Www').
+             */
+            period: string;
+            /**
+             * Total Requests
+             * @description Total requests submitted in period.
+             * @default 0
+             */
+            total_requests: number;
+            /**
+             * Auto Approved
+             * @description Requests automatically approved.
+             * @default 0
+             */
+            auto_approved: number;
+            /**
+             * Denied
+             * @description Requests denied.
+             * @default 0
+             */
+            denied: number;
+            /**
+             * Escalated
+             * @description Requests escalated.
+             * @default 0
+             */
+            escalated: number;
+            /**
+             * Average Confidence
+             * @description Average AI confidence score (0.0 - 1.0).
+             * @default 0
+             */
+            average_confidence: number;
+            /**
+             * Average Latency Ms
+             * @description Average processing latency in milliseconds.
+             * @default 0
+             */
+            average_latency_ms: number;
+        };
+        /** ValidationError */
+        ValidationError: {
+            /** Location */
+            loc: (string | number)[];
+            /** Message */
+            msg: string;
+            /** Error Type */
+            type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
         };
     };
     responses: {
@@ -683,6 +2319,42 @@ export interface components {
                 "application/problem+json": components["schemas"]["ProblemDetails"];
             };
         };
+        /** @description Unauthorized - Bearer token missing, invalid, or expired. */
+        ProblemUnauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "type": "urn:problem:unauthorized",
+                 *       "title": "Unauthorized",
+                 *       "status": 401,
+                 *       "detail": "Invalid or expired authentication token",
+                 *       "instance": "/v1/refunds"
+                 *     }
+                 */
+                "application/problem+json": components["schemas"]["ProblemDetails"];
+            };
+        };
+        /** @description Forbidden - Insufficient operator privileges or role approval limits exceeded. */
+        ProblemForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "type": "urn:problem:forbidden",
+                 *       "title": "Forbidden",
+                 *       "status": 403,
+                 *       "detail": "Refund amount exceeds your approval limit. Escalation required.",
+                 *       "instance": "/v1/refunds/ref_123/override"
+                 *     }
+                 */
+                "application/problem+json": components["schemas"]["ProblemDetails"];
+            };
+        };
     };
     parameters: {
         /**
@@ -697,7 +2369,273 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    getServiceInfo: {
+    list_refund_requests_v1_refunds_get: {
+        parameters: {
+            query?: {
+                status?: ("pending" | "completed" | "escalated" | "awaiting_clarification") | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundRecord"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_refund_request_v1_refunds_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Identifier of the order to evaluate. */
+                    order_id: string;
+                    /** @description Customer explanation for the refund request. */
+                    customer_request_text: string;
+                };
+                "multipart/form-data": {
+                    /** @description Identifier of the order to evaluate. */
+                    order_id: string;
+                    /** @description Customer explanation for the refund request. */
+                    customer_request_text: string;
+                    /**
+                     * Format: binary
+                     * @description Optional supporting evidence image file.
+                     */
+                    file?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundCreateResponse"];
+                };
+            };
+        };
+    };
+    override_refund_decision_v1_refunds__refund_id__override_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                refund_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefundOverrideRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    subscribe_refund_events_v1_refunds_events_get: {
+        parameters: {
+            query?: {
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_refund_requests_v1_refunds_export_get: {
+        parameters: {
+            query?: {
+                format?: string;
+                status?: ("pending" | "completed" | "escalated" | "awaiting_clarification") | null;
+                columns?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_bulk_export_job_v1_refunds_export_jobs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkExportJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkExportJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_bulk_export_v1_refunds_export_jobs__job_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_bulk_export_job_v1_refunds_export_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkExportJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_export_schedules_v1_refunds_export_schedules_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -706,23 +2644,1537 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Service information successfully retrieved. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    /**
-                     * @example {
-                     *       "status": "ok",
-                     *       "service": "refund-request-processor"
-                     *     }
-                     */
-                    "application/json": components["schemas"]["ServiceInfo"];
+                    "application/json": components["schemas"]["ExportScheduleResponse"][];
                 };
             };
-            400: components["responses"]["ProblemBadRequest"];
-            500: components["responses"]["ProblemInternalServerError"];
+        };
+    };
+    create_export_schedule_v1_refunds_export_schedules_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportScheduleCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportScheduleResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_export_schedule_v1_refunds_export_schedules__schedule_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportScheduleResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_export_schedule_v1_refunds_export_schedules__schedule_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportScheduleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportScheduleResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_export_schedule_v1_refunds_export_schedules__schedule_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trigger_export_schedule_v1_refunds_export_schedules__schedule_id__trigger_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportTriggerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_refund_request_by_id_v1_refunds__refund_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                refund_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_refund_evidence_v1_refunds__refund_id__evidence_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                refund_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description Evidence image file.
+                     */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_refund_evidence_v1_refunds__refund_id__evidence__evidence_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                refund_id: string;
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_refund_evidence_v1_refunds__refund_id__evidence__evidence_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                refund_id: string;
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clarify_refund_request_v1_refunds__refund_id__clarify_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                refund_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Customer clarification response text. */
+                    response_text: string;
+                };
+                "multipart/form-data": {
+                    /** @description Customer clarification response text. */
+                    response_text: string;
+                    /**
+                     * Format: binary
+                     * @description Optional supporting evidence image file.
+                     */
+                    evidence_file?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_reviewer_proof_endpoint_v1_refunds__refund_id__request_proof_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                refund_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewerProofRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_refund_requests_refunds_get: {
+        parameters: {
+            query?: {
+                status?: ("pending" | "completed" | "escalated" | "awaiting_clarification") | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundRecord"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_refund_request_refunds_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Identifier of the order to evaluate. */
+                    order_id: string;
+                    /** @description Customer explanation for the refund request. */
+                    customer_request_text: string;
+                };
+                "multipart/form-data": {
+                    /** @description Identifier of the order to evaluate. */
+                    order_id: string;
+                    /** @description Customer explanation for the refund request. */
+                    customer_request_text: string;
+                    /**
+                     * Format: binary
+                     * @description Optional supporting evidence image file.
+                     */
+                    file?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundCreateResponse"];
+                };
+            };
+        };
+    };
+    override_refund_decision_refunds__refund_id__override_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                refund_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefundOverrideRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    subscribe_refund_events_refunds_events_get: {
+        parameters: {
+            query?: {
+                limit?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_refund_requests_refunds_export_get: {
+        parameters: {
+            query?: {
+                format?: string;
+                status?: ("pending" | "completed" | "escalated" | "awaiting_clarification") | null;
+                columns?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_bulk_export_job_refunds_export_jobs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkExportJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkExportJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_bulk_export_refunds_export_jobs__job_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_bulk_export_job_refunds_export_jobs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkExportJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_export_schedules_refunds_export_schedules_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportScheduleResponse"][];
+                };
+            };
+        };
+    };
+    create_export_schedule_refunds_export_schedules_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportScheduleCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportScheduleResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_export_schedule_refunds_export_schedules__schedule_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportScheduleResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_export_schedule_refunds_export_schedules__schedule_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExportScheduleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportScheduleResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_export_schedule_refunds_export_schedules__schedule_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trigger_export_schedule_refunds_export_schedules__schedule_id__trigger_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                schedule_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportTriggerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_refund_request_by_id_refunds__refund_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                refund_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_refund_evidence_refunds__refund_id__evidence_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                refund_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description Evidence image file.
+                     */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_refund_evidence_refunds__refund_id__evidence__evidence_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                refund_id: string;
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_refund_evidence_refunds__refund_id__evidence__evidence_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                refund_id: string;
+                evidence_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clarify_refund_request_refunds__refund_id__clarify_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                refund_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Customer clarification response text. */
+                    response_text: string;
+                };
+                "multipart/form-data": {
+                    /** @description Customer clarification response text. */
+                    response_text: string;
+                    /**
+                     * Format: binary
+                     * @description Optional supporting evidence image file.
+                     */
+                    evidence_file?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_reviewer_proof_endpoint_refunds__refund_id__request_proof_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                refund_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewerProofRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_policies_v1_policies_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyItemResponse"][];
+                };
+            };
+        };
+    };
+    get_policies_history_v1_policies_history_get: {
+        parameters: {
+            query?: {
+                category?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyAuditEntry"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rollback_category_policy_v1_policies__category__rollback_post: {
+        parameters: {
+            query?: {
+                audit_id?: string | null;
+            };
+            header?: never;
+            path: {
+                category: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyItemResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_policy_v1_policies__category__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                category: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyItemResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_policies_policies_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyItemResponse"][];
+                };
+            };
+        };
+    };
+    get_policies_history_policies_history_get: {
+        parameters: {
+            query?: {
+                category?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyAuditEntry"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rollback_category_policy_policies__category__rollback_post: {
+        parameters: {
+            query?: {
+                audit_id?: string | null;
+            };
+            header?: never;
+            path: {
+                category: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyItemResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_policy_policies__category__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                category: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyItemResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_analytics_metrics_v1_analytics_metrics_get: {
+        parameters: {
+            query?: {
+                /** @description Start date filter (inclusive). */
+                start_date?: string | null;
+                /** @description End date filter (inclusive). */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyticsMetricsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_analytics_trends_v1_analytics_trends_get: {
+        parameters: {
+            query?: {
+                /** @description Start date filter (inclusive). */
+                start_date?: string | null;
+                /** @description End date filter (inclusive). */
+                end_date?: string | null;
+                /** @description Time aggregation interval. */
+                interval?: "daily" | "weekly";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyticsTrendsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_analytics_report_v1_analytics_export_get: {
+        parameters: {
+            query?: {
+                /** @description Export format ('csv' or 'pdf'). */
+                format?: "csv" | "pdf";
+                /** @description Start date filter (inclusive). */
+                start_date?: string | null;
+                /** @description End date filter (inclusive). */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_analytics_metrics_analytics_metrics_get: {
+        parameters: {
+            query?: {
+                /** @description Start date filter (inclusive). */
+                start_date?: string | null;
+                /** @description End date filter (inclusive). */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyticsMetricsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_analytics_trends_analytics_trends_get: {
+        parameters: {
+            query?: {
+                /** @description Start date filter (inclusive). */
+                start_date?: string | null;
+                /** @description End date filter (inclusive). */
+                end_date?: string | null;
+                /** @description Time aggregation interval. */
+                interval?: "daily" | "weekly";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyticsTrendsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_analytics_report_analytics_export_get: {
+        parameters: {
+            query?: {
+                /** @description Export format ('csv' or 'pdf'). */
+                format?: "csv" | "pdf";
+                /** @description Start date filter (inclusive). */
+                start_date?: string | null;
+                /** @description End date filter (inclusive). */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    root__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    health_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
         };
     };
     getHealthStatus: {
@@ -734,556 +4186,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Service is healthy and responsive. */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    /**
-                     * @example {
-                     *       "status": "healthy"
-                     *     }
-                     */
-                    "application/json": components["schemas"]["HealthStatus"];
+                    "application/json": unknown;
                 };
             };
-            400: components["responses"]["ProblemBadRequest"];
-            500: components["responses"]["ProblemInternalServerError"];
-            /** @description Service Unavailable - System dependencies are degraded or unhealthy. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "type": "urn:problem:service-unavailable",
-                     *       "title": "Service Unavailable",
-                     *       "status": 503,
-                     *       "detail": "Service is temporarily unable to handle incoming requests.",
-                     *       "instance": "/v1/health"
-                     *     }
-                     */
-                    "application/problem+json": components["schemas"]["ProblemDetails"];
-                };
-            };
-        };
-    };
-    listRefundRequests: {
-        parameters: {
-            query?: {
-                /**
-                 * @description Filter refund requests by current workflow processing status.
-                 * @example escalated
-                 */
-                status?: components["schemas"]["RefundStatus"];
-                /**
-                 * @description Maximum number of refund records to return.
-                 * @example 20
-                 */
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successfully retrieved list of refund requests. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example [
-                     *       {
-                     *         "refundId": "ref_543c86069f0f",
-                     *         "orderId": "ORD-1007",
-                     *         "customerRequestText": "The chair armrest arrived completely broken and cracked during delivery.",
-                     *         "status": "completed",
-                     *         "decision": "auto_approve",
-                     *         "reasoning": "Refund automatically approved. Category 'damaged' satisfied all policy rules.",
-                     *         "matchedPolicyRule": {
-                     *           "category": "damaged",
-                     *           "policyName": "standard_30_day_damaged",
-                     *           "action": "auto_approve",
-                     *           "returnRequired": false
-                     *         },
-                     *         "confidenceScore": 0.95,
-                     *         "category": "damaged",
-                     *         "clarificationPrompt": null,
-                     *         "clarificationResponse": null,
-                     *         "clarificationCount": 0,
-                     *         "clarificationHistory": [],
-                     *         "evidence": [],
-                     *         "toolCalls": [],
-                     *         "approvalEmailText": "Dear Customer,\n\nYour refund request has been approved. Your RMA number is RMA-1007-AB12CD.\n\nSincerely,\nCustomer Support Team",
-                     *         "denialEmailText": null,
-                     *         "clarificationEmailText": null,
-                     *         "createdAt": "2026-09-23T14:10:00Z",
-                     *         "updatedAt": "2026-09-23T14:10:05Z",
-                     *         "overrideDecision": null,
-                     *         "overrideReason": null,
-                     *         "overriddenAt": null
-                     *       }
-                     *     ]
-                     */
-                    "application/json": components["schemas"]["RefundDetail"][];
-                };
-            };
-            400: components["responses"]["ProblemBadRequest"];
-            422: components["responses"]["ProblemUnprocessableEntity"];
-            500: components["responses"]["ProblemInternalServerError"];
-        };
-    };
-    submitRefundRequest: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** @description Customer order identifier, explanation, and optional evidence image. */
-        requestBody: {
-            content: {
-                /**
-                 * @example {
-                 *       "orderId": "ORD-1001",
-                 *       "customerRequestText": "The ceramic vase arrived shattered inside the package with no protective bubble wrap."
-                 *     }
-                 */
-                "application/json": components["schemas"]["RefundCreateRequest"];
-                "multipart/form-data": {
-                    /**
-                     * @description Identifier of the order to evaluate.
-                     * @example ORD-1001
-                     */
-                    orderId: string;
-                    /**
-                     * @description Customer refund explanation.
-                     * @example The ceramic vase arrived shattered inside the package.
-                     */
-                    customerRequestText: string;
-                    /**
-                     * Format: binary
-                     * @description Optional supporting proof photo (JPEG, PNG, WebP up to 5MB).
-                     */
-                    file?: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Refund request accepted for background processing. */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "refundId": "ref_7f9b1c2e3a4d",
-                     *       "orderId": "ORD-1001",
-                     *       "status": "pending",
-                     *       "createdAt": "2026-09-23T14:15:30Z"
-                     *     }
-                     */
-                    "application/json": components["schemas"]["RefundCreateResponse"];
-                };
-            };
-            400: components["responses"]["ProblemBadRequest"];
-            413: components["responses"]["ProblemPayloadTooLarge"];
-            422: components["responses"]["ProblemUnprocessableEntity"];
-            500: components["responses"]["ProblemInternalServerError"];
-        };
-    };
-    getRefundRequestById: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /**
-                 * @description Unique identifier of the refund request (e.g. `ref_543c86069f0f`).
-                 * @example ref_543c86069f0f
-                 */
-                refundId: components["parameters"]["RefundIdPathParam"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Detailed refund request record. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "refundId": "ref_543c86069f0f",
-                     *       "orderId": "ORD-1007",
-                     *       "customerRequestText": "Received wrong shoe size (ordered 10, received 8.5).",
-                     *       "status": "escalated",
-                     *       "decision": "escalate",
-                     *       "reasoning": "Escalated to human review due to ambiguous item condition.",
-                     *       "matchedPolicyRule": {
-                     *         "category": "wrong_item",
-                     *         "policyName": "wrong_item_exchange_policy",
-                     *         "action": "manual_review",
-                     *         "returnRequired": true
-                     *       },
-                     *       "confidenceScore": 0.88,
-                     *       "category": "wrong_item",
-                     *       "clarificationPrompt": null,
-                     *       "clarificationResponse": null,
-                     *       "clarificationCount": 0,
-                     *       "clarificationHistory": [],
-                     *       "evidence": [],
-                     *       "toolCalls": [],
-                     *       "approvalEmailText": null,
-                     *       "denialEmailText": null,
-                     *       "clarificationEmailText": null,
-                     *       "createdAt": "2026-09-23T14:10:00Z",
-                     *       "updatedAt": "2026-09-23T14:10:04Z",
-                     *       "overrideDecision": null,
-                     *       "overrideReason": null,
-                     *       "overriddenAt": null
-                     *     }
-                     */
-                    "application/json": components["schemas"]["RefundDetail"];
-                };
-            };
-            400: components["responses"]["ProblemBadRequest"];
-            404: components["responses"]["ProblemNotFound"];
-            422: components["responses"]["ProblemUnprocessableEntity"];
-            500: components["responses"]["ProblemInternalServerError"];
-        };
-    };
-    overrideRefundDecision: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /**
-                 * @description Unique identifier of the refund request (e.g. `ref_543c86069f0f`).
-                 * @example ref_543c86069f0f
-                 */
-                refundId: components["parameters"]["RefundIdPathParam"];
-            };
-            cookie?: never;
-        };
-        /** @description Operator manual decision and justification. */
-        requestBody: {
-            content: {
-                /**
-                 * @example {
-                 *       "overrideDecision": "approve",
-                 *       "overrideReason": "Verified return tracking code delivered to warehouse. Discretionary customer satisfaction approval."
-                 *     }
-                 */
-                "application/json": components["schemas"]["RefundOverrideRequest"];
-            };
-        };
-        responses: {
-            /** @description Override successfully recorded. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "refundId": "ref_543c86069f0f",
-                     *       "orderId": "ORD-1007",
-                     *       "customerRequestText": "Received wrong shoe size (ordered 10, received 8.5).",
-                     *       "status": "completed",
-                     *       "decision": "approve",
-                     *       "reasoning": "Escalated to human review due to ambiguous item condition.",
-                     *       "matchedPolicyRule": {
-                     *         "category": "wrong_item",
-                     *         "policyName": "wrong_item_exchange_policy",
-                     *         "action": "manual_review",
-                     *         "returnRequired": true
-                     *       },
-                     *       "confidenceScore": 0.88,
-                     *       "category": "wrong_item",
-                     *       "clarificationPrompt": null,
-                     *       "clarificationResponse": null,
-                     *       "clarificationCount": 0,
-                     *       "clarificationHistory": [],
-                     *       "evidence": [],
-                     *       "toolCalls": [],
-                     *       "approvalEmailText": null,
-                     *       "denialEmailText": null,
-                     *       "clarificationEmailText": null,
-                     *       "createdAt": "2026-09-23T14:10:00Z",
-                     *       "updatedAt": "2026-09-23T14:25:12Z",
-                     *       "overrideDecision": "approve",
-                     *       "overrideReason": "Verified return tracking code delivered to warehouse. Discretionary customer satisfaction approval.",
-                     *       "overriddenAt": "2026-09-23T14:25:12Z"
-                     *     }
-                     */
-                    "application/json": components["schemas"]["RefundDetail"];
-                };
-            };
-            400: components["responses"]["ProblemBadRequest"];
-            404: components["responses"]["ProblemNotFound"];
-            422: components["responses"]["ProblemUnprocessableEntity"];
-            500: components["responses"]["ProblemInternalServerError"];
-        };
-    };
-    submitRefundClarification: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /**
-                 * @description Unique identifier of the refund request (e.g. `ref_543c86069f0f`).
-                 * @example ref_543c86069f0f
-                 */
-                refundId: components["parameters"]["RefundIdPathParam"];
-            };
-            cookie?: never;
-        };
-        /** @description Customer clarification response text and optional evidence image. */
-        requestBody: {
-            content: {
-                /**
-                 * @example {
-                 *       "responseText": "The package was left at the front porch in heavy rain, soaked through."
-                 *     }
-                 */
-                "application/json": components["schemas"]["RefundClarificationRequest"];
-                "multipart/form-data": {
-                    /**
-                     * @description Customer clarification explanation.
-                     * @example Item arrived damaged with ripped outer box.
-                     */
-                    responseText: string;
-                    /**
-                     * Format: binary
-                     * @description Optional supporting proof photo (JPEG, PNG, WebP up to 5MB).
-                     */
-                    evidenceFile?: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Clarification accepted and workflow resumed. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "refundId": "ref_543c86069f0f",
-                     *       "orderId": "ORD-1007",
-                     *       "customerRequestText": "Received wrong shoe size (ordered 10, received 8.5).",
-                     *       "status": "pending",
-                     *       "decision": null,
-                     *       "reasoning": null,
-                     *       "matchedPolicyRule": null,
-                     *       "confidenceScore": null,
-                     *       "category": "wrong_item",
-                     *       "clarificationPrompt": "Could you please specify if the packaging was unopened?",
-                     *       "clarificationResponse": "The package was left at the front porch in heavy rain, soaked through.",
-                     *       "clarificationCount": 1,
-                     *       "clarificationHistory": [
-                     *         {
-                     *           "cycle": 1,
-                     *           "prompt": "Could you please specify if the packaging was unopened?",
-                     *           "response": "The package was left at the front porch in heavy rain, soaked through.",
-                     *           "timestamp": "2026-09-23T14:15:30Z",
-                     *           "evidenceIds": []
-                     *         }
-                     *       ],
-                     *       "evidence": [],
-                     *       "toolCalls": [],
-                     *       "approvalEmailText": null,
-                     *       "denialEmailText": null,
-                     *       "clarificationEmailText": null,
-                     *       "createdAt": "2026-09-23T14:10:00Z",
-                     *       "updatedAt": "2026-09-23T14:15:30Z",
-                     *       "overrideDecision": null,
-                     *       "overrideReason": null,
-                     *       "overriddenAt": null
-                     *     }
-                     */
-                    "application/json": components["schemas"]["RefundDetail"];
-                };
-            };
-            400: components["responses"]["ProblemBadRequest"];
-            404: components["responses"]["ProblemNotFound"];
-            413: components["responses"]["ProblemPayloadTooLarge"];
-            422: components["responses"]["ProblemUnprocessableEntity"];
-            500: components["responses"]["ProblemInternalServerError"];
-        };
-    };
-    uploadRefundEvidence: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /**
-                 * @description Unique identifier of the refund request (e.g. `ref_543c86069f0f`).
-                 * @example ref_543c86069f0f
-                 */
-                refundId: components["parameters"]["RefundIdPathParam"];
-            };
-            cookie?: never;
-        };
-        /** @description Multipart image file to attach as proof. */
-        requestBody: {
-            content: {
-                "multipart/form-data": {
-                    /**
-                     * Format: binary
-                     * @description Evidence photo file (JPEG, PNG, WebP up to 5MB).
-                     */
-                    file: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Photo evidence successfully uploaded and attached to refund record. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "refundId": "ref_543c86069f0f",
-                     *       "orderId": "ORD-1007",
-                     *       "customerRequestText": "Received wrong shoe size (ordered 10, received 8.5).",
-                     *       "status": "pending",
-                     *       "decision": null,
-                     *       "reasoning": null,
-                     *       "matchedPolicyRule": null,
-                     *       "confidenceScore": null,
-                     *       "category": "wrong_item",
-                     *       "clarificationPrompt": "Please provide a clear photo of the shoe box label.",
-                     *       "clarificationResponse": null,
-                     *       "clarificationCount": 1,
-                     *       "clarificationHistory": [
-                     *         {
-                     *           "cycle": 1,
-                     *           "prompt": "Please provide a clear photo of the shoe box label.",
-                     *           "response": null,
-                     *           "timestamp": "2026-09-23T14:15:30Z",
-                     *           "evidenceIds": [
-                     *             "evi_a1b2c3d4"
-                     *           ]
-                     *         }
-                     *       ],
-                     *       "evidence": [
-                     *         {
-                     *           "evidenceId": "evi_a1b2c3d4",
-                     *           "storageKey": "refunds/ref_543c86069f0f/box_label.jpg",
-                     *           "filename": "box_label.jpg",
-                     *           "contentType": "image/jpeg",
-                     *           "sizeBytes": 154230,
-                     *           "url": "/uploads/refunds/ref_543c86069f0f/box_label.jpg",
-                     *           "createdAt": "2026-09-23T14:16:00Z"
-                     *         }
-                     *       ],
-                     *       "toolCalls": [],
-                     *       "approvalEmailText": null,
-                     *       "denialEmailText": null,
-                     *       "clarificationEmailText": null,
-                     *       "createdAt": "2026-09-23T14:10:00Z",
-                     *       "updatedAt": "2026-09-23T14:16:00Z",
-                     *       "overrideDecision": null,
-                     *       "overrideReason": null,
-                     *       "overriddenAt": null
-                     *     }
-                     */
-                    "application/json": components["schemas"]["RefundDetail"];
-                };
-            };
-            400: components["responses"]["ProblemBadRequest"];
-            404: components["responses"]["ProblemNotFound"];
-            413: components["responses"]["ProblemPayloadTooLarge"];
-            422: components["responses"]["ProblemUnprocessableEntity"];
-            500: components["responses"]["ProblemInternalServerError"];
-        };
-    };
-    requestReviewerProof: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /**
-                 * @description Unique identifier of the refund request (e.g. `ref_543c86069f0f`).
-                 * @example ref_543c86069f0f
-                 */
-                refundId: components["parameters"]["RefundIdPathParam"];
-            };
-            cookie?: never;
-        };
-        /** @description Reviewer proof prompt and optional customer greeting name. */
-        requestBody: {
-            content: {
-                /**
-                 * @example {
-                 *       "proofPrompt": "Please provide a clear photo of the serial number sticker on the base of the device.",
-                 *       "customerName": "Alex Morgan"
-                 *     }
-                 */
-                "application/json": components["schemas"]["ReviewerProofRequest"];
-            };
-        };
-        responses: {
-            /** @description Reviewer proof request recorded and transitioned to awaiting_clarification. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    /**
-                     * @example {
-                     *       "refundId": "ref_543c86069f0f",
-                     *       "orderId": "ORD-1007",
-                     *       "customerRequestText": "Device stopped charging after two weeks.",
-                     *       "status": "awaiting_clarification",
-                     *       "decision": null,
-                     *       "reasoning": null,
-                     *       "matchedPolicyRule": null,
-                     *       "confidenceScore": null,
-                     *       "category": "damaged",
-                     *       "clarificationPrompt": "Please provide a clear photo of the serial number sticker on the base of the device.",
-                     *       "clarificationResponse": null,
-                     *       "clarificationCount": 1,
-                     *       "clarificationHistory": [
-                     *         {
-                     *           "cycle": 1,
-                     *           "prompt": "Please provide a clear photo of the serial number sticker on the base of the device.",
-                     *           "response": null,
-                     *           "timestamp": "2026-09-23T14:30:00Z",
-                     *           "evidenceIds": []
-                     *         }
-                     *       ],
-                     *       "evidence": [],
-                     *       "toolCalls": [],
-                     *       "approvalEmailText": null,
-                     *       "denialEmailText": null,
-                     *       "clarificationEmailText": "Dear Alex Morgan,\n\nOur quality review team requires additional proof regarding order ORD-1007.\nPlease provide a clear photo of the serial number sticker on the base of the device.\n\nAccepted formats: JPEG, PNG, WebP up to 5MB.",
-                     *       "createdAt": "2026-09-23T14:10:00Z",
-                     *       "updatedAt": "2026-09-23T14:30:00Z",
-                     *       "overrideDecision": null,
-                     *       "overrideReason": null,
-                     *       "overriddenAt": null
-                     *     }
-                     */
-                    "application/json": components["schemas"]["RefundDetail"];
-                };
-            };
-            400: components["responses"]["ProblemBadRequest"];
-            404: components["responses"]["ProblemNotFound"];
-            422: components["responses"]["ProblemUnprocessableEntity"];
-            500: components["responses"]["ProblemInternalServerError"];
         };
     };
 }

@@ -8,7 +8,7 @@
 [![React 18](https://img.shields.io/badge/React-18.3+-61DAFB.svg)](frontend/package.json)
 [![Playwright](https://img.shields.io/badge/Playwright-E2E_Verified-45ba4b.svg)](frontend/playwright.config.ts)
 
-> ⚡ **AI Refund Request Processor** is a production-grade back-office AI platform that automates e-commerce refund intake, multimodal damage verification, policy evaluation, and tiered human-in-the-loop escalation using **LangGraph**, **AWS Bedrock**, **Amazon DynamoDB**, and **React**.
+> ⚡ **AI Refund Request Processor** is an autonomous back-office AI platform that automates e-commerce refund intake, multimodal damage verification, policy evaluation, and tiered human-in-the-loop escalation using **LangGraph**, **AWS Bedrock**, **Amazon DynamoDB**, and **React**.
 
 ---
 

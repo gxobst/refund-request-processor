@@ -1,10 +1,10 @@
-.PHONY: help install setup dev backend frontend seed test test-backend test-frontend build clean
+.PHONY: help install setup dev backend frontend seed test test-offline test-aws test-frontend test-e2e typecheck build clean generate-types
 
 .DEFAULT_GOAL := help
 
 help: ## Show this help message
 	@echo "AI Refund Request Processor - Available Make Targets:"
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 setup: install seed ## Install dependencies and seed mock DynamoDB orders
 
@@ -29,18 +29,30 @@ stop: ## Stop running services (PowerShell: .\\start.ps1 -Mode stop)
 seed: ## Seed mock orders in DynamoDB table
 	cd backend && uv run python -m app.db.seed
 
-test: test-backend test-frontend ## Run all backend and frontend tests
+test: test-offline test-frontend ## Run all offline backend and frontend tests
 
-test-backend: ## Run backend unit and integration tests (pytest)
-	cd backend && uv run pytest
+test-offline: ## Run backend offline unit and integration tests (pytest -m 'not aws')
+	cd backend && uv run pytest -m "not aws"
+
+test-aws: ## Run backend live AWS integration tests (pytest -m 'aws')
+	cd backend && uv run pytest -m "aws"
 
 test-frontend: ## Run frontend unit and component tests (vitest)
-	cd frontend && npm run test -- --run
+	cd frontend && npm run test:run
+
+test-e2e: ## Run Playwright browser end-to-end tests
+	cd frontend && npm run test:e2e
+
+typecheck: ## Run frontend TypeScript strict typecheck (tsc --noEmit)
+	cd frontend && npm run typecheck
+
+generate-types: ## Regenerate frontend TypeScript types from openapi.yaml
+	cd frontend && npm run generate:types
 
 build: ## Build frontend production bundle into frontend/dist
 	cd frontend && npm run build
 
-clean: ## Clean cache directories and build artifacts
-	rm -rf frontend/dist frontend/node_modules/.vite
+clean: ## Clean cache directories, build artifacts, and test reports
+	rm -rf frontend/dist frontend/node_modules/.vite frontend/playwright-report frontend/test-results
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
