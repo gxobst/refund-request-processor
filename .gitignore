@@ -30,6 +30,13 @@ uploads/
 node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/playwright-report/
+frontend/test-results/
+playwright-report/
+test-results/
+scratch/
+frontend/scratch/
+frontend/scratch_*.mjs
 
 # IDE & OS
 .vscode/
