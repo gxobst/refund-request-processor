@@ -215,6 +215,12 @@ From the project root:
 
 # 3. Run full automated test suite across backend and frontend
 .\start.ps1 -Mode test
+
+# Additional specialized modes:
+# .\start.ps1 -Mode test-aws        # Run live AWS Bedrock & DynamoDB integration tests
+# .\start.ps1 -Mode test-e2e        # Run Playwright browser end-to-end tests
+# .\start.ps1 -Mode typecheck       # Run TypeScript strict typechecking
+# .\start.ps1 -Mode generate-types  # Regenerate frontend types from openapi.yaml
 ```
 
 ### 🐧 Option B: Linux / macOS / WSL Makefile
@@ -228,8 +234,13 @@ make backend
 # 3. Start frontend server (Vite on :5173) in a second terminal
 make frontend
 
-# 4. Run full test suites
+# 4. Run offline test suites
 make test
+
+# Additional targets:
+# make test-aws      # Run live AWS integration tests
+# make test-e2e      # Run Playwright browser end-to-end tests
+# make typecheck     # Run TypeScript strict typechecking
 ```
 
 ### 🌐 Accessing Local Services
@@ -343,7 +354,7 @@ The system is architected for cloud-native deployment on AWS:
 ### 🗺️ Future Roadmap
 1. 🚚 **Carrier Webhook Ingestion**: Ingest real-time delivery scan events directly from FedEx and UPS tracking webhooks into DynamoDB.
 2. 🎯 **Visual Segmentation & Bounding-Box Detection**: Enhance the multimodal vision agent to output normalized bounding-box coordinates for detected product defects, overlaying interactive inspection heatmaps in the frontend.
-3. 🌍 **Multi-Language Customer Support**: Extend `approval_notifier.py` and `denial_notifier.py` with localized template generation supporting Spanish, French, German, and Japanese.
+3. 🌍 **Multi-Language Customer Support**: Extend `approval_notifier.py` and `denial_notifier.py` with localized template generation supporting Spanish, French, German, Japanese, and Chinese (Simplified & Traditional).
 4. 🤝 **Dispute Re-Appeal Portal**: Provide a dedicated self-service customer portal allowing customers to submit secondary appeals with additional documentation.
 
 ---
