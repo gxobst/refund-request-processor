@@ -165,9 +165,8 @@ export function RefundQueueTable({
         : undefined
       return listRefunds(params)
     },
-    // Dynamic polling: poll every 3000ms if any item has pending status; disable if SSE active
+    // Dynamic polling: poll every 3000ms if any item has pending status
     refetchInterval: (query) => {
-      if (sseConnected) return false
       const dataset = query.state.data
       if (!dataset || dataset.length === 0) return false
       const hasPending = dataset.some((r) => {

@@ -243,6 +243,24 @@ def clarification_node(state: dict[str, Any]) -> dict[str, Any]:
             except (RefundNotFoundError, Exception):
                 pass
 
+        try:
+            import asyncio
+            from app.services.broadcaster import broadcaster
+
+            event_payload = {
+                "refund_id": refund_id,
+                "order_id": order_id,
+                "status": "awaiting_clarification",
+                "clarification_prompt": prompt,
+            }
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(broadcaster.publish("refund_update", event_payload))
+            except RuntimeError:
+                asyncio.run(broadcaster.publish("refund_update", event_payload))
+        except Exception:
+            pass
+
     return {
         "clarification_prompt": prompt,
         "clarification_count": current_count,

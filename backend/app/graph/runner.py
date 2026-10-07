@@ -79,6 +79,24 @@ async def run_refund_workflow(
         config["callbacks"] = callbacks
 
     final_state = await graph.ainvoke(initial_state, config=config)
+
+    try:
+        from app.services.broadcaster import broadcaster
+
+        await broadcaster.publish(
+            "refund_update",
+            {
+                "refund_id": refund_id,
+                "order_id": final_state.get("order_id") or order_id,
+                "status": final_state.get("status", "completed"),
+                "decision": final_state.get("decision", "escalate"),
+                "reasoning": final_state.get("reasoning", ""),
+                "confidence_score": float(final_state.get("confidence_score", 0.0)),
+            },
+        )
+    except Exception:
+        pass
+
     return final_state
 
 

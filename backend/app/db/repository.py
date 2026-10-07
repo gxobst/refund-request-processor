@@ -2,6 +2,8 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal
+import json
+from pathlib import Path
 from typing import Any, Literal
 import uuid
 import boto3
@@ -91,38 +93,81 @@ def _filter_items_by_date_range(
     return filtered
 
 
+_ORDERS_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _get_orders_cache() -> dict[str, dict[str, Any]]:
+    global _ORDERS_CACHE
+    if not _ORDERS_CACHE:
+        orders_path = Path(__file__).resolve().parent.parent / "data" / "mock_orders.json"
+        if orders_path.is_file():
+            try:
+                with open(orders_path, "r", encoding="utf-8") as f:
+                    orders = json.load(f)
+                for order in orders:
+                    oid = order.get("order_id")
+                    if oid:
+                        _ORDERS_CACHE[oid] = order
+            except Exception:
+                pass
+    return _ORDERS_CACHE
+
+
 class RefundRepository:
     """Data access repository for managing refund request lifecycles in DynamoDB."""
 
     def __init__(self, dynamodb_resource: Any = None, table_name: str | None = None) -> None:
         if table_name is None or dynamodb_resource is None:
-            settings = get_settings()
+            self.settings = get_settings()
         else:
-            settings = None
+            self.settings = None
 
         if table_name is not None:
             self.table_name = table_name
         else:
-            self.table_name = settings.dynamodb_table_refunds
+            self.table_name = self.settings.dynamodb_table_refunds
 
         if dynamodb_resource is not None:
             self.dynamodb_resource = dynamodb_resource
         else:
             kwargs: dict[str, Any] = {
-                "region_name": settings.aws_region,
+                "region_name": self.settings.aws_region,
             }
-            if settings.aws_access_key_id and settings.aws_secret_access_key:
-                kwargs["aws_access_key_id"] = settings.aws_access_key_id
-                kwargs["aws_secret_access_key"] = settings.aws_secret_access_key
-                if settings.aws_session_token:
-                    kwargs["aws_session_token"] = settings.aws_session_token
-            if settings.dynamodb_endpoint_url:
-                kwargs["endpoint_url"] = settings.dynamodb_endpoint_url
+            if self.settings.aws_access_key_id and self.settings.aws_secret_access_key:
+                kwargs["aws_access_key_id"] = self.settings.aws_access_key_id
+                kwargs["aws_secret_access_key"] = self.settings.aws_secret_access_key
+                if self.settings.aws_session_token:
+                    kwargs["aws_session_token"] = self.settings.aws_session_token
+            if self.settings.dynamodb_endpoint_url:
+                kwargs["endpoint_url"] = self.settings.dynamodb_endpoint_url
 
             self.dynamodb_resource = boto3.resource("dynamodb", **kwargs)
 
         self.table = self.dynamodb_resource.Table(self.table_name)
         self._table = self.table
+
+    def _lookup_order(self, order_id: str) -> dict[str, Any] | None:
+        """Lookup order data from in-memory cache, mock-orders json, or DynamoDB."""
+        if not order_id or not str(order_id).strip():
+            return None
+
+        cache = _get_orders_cache()
+        if order_id in cache:
+            return cache[order_id]
+
+        try:
+            table_name = getattr(self.settings, "dynamodb_table_orders", "mock-orders")
+            table = self.dynamodb_resource.Table(table_name)
+            response = table.get_item(Key={"order_id": order_id})
+            item = response.get("Item")
+            if item:
+                res = _convert_decimals_to_float(item)
+                cache[order_id] = res
+                return res
+        except Exception:
+            pass
+
+        return None
 
     def create_refund_request(
         self,
@@ -153,6 +198,16 @@ class RefundRepository:
                 else:
                     raise TypeError("evidence item must be an EvidenceItem or dict.")
 
+        order_amount = None
+        try:
+            order_data = self._lookup_order(order_id)
+            if order_data:
+                raw_amt = order_data.get("order_amount") if order_data.get("order_amount") is not None else order_data.get("amount")
+                if raw_amt is not None:
+                    order_amount = float(raw_amt)
+        except Exception:
+            pass
+
         record = RefundRecord(
             refund_id=refund_id,
             order_id=order_id,
@@ -165,6 +220,8 @@ class RefundRepository:
             clarification_count=0,
             tool_calls=[],
             evidence=evidence_items,
+            order_amount=order_amount,
+            refund_amount=order_amount,
         )
 
         item = _convert_floats_to_decimal(record.model_dump())
@@ -186,6 +243,15 @@ class RefundRepository:
             return None
 
         cleaned = _convert_decimals_to_float(item)
+        if cleaned.get("order_amount") is None and cleaned.get("order_id"):
+            try:
+                order_data = self._lookup_order(cleaned["order_id"])
+                if order_data:
+                    raw_amt = order_data.get("order_amount") if order_data.get("order_amount") is not None else order_data.get("amount")
+                    if raw_amt is not None:
+                        cleaned["order_amount"] = float(raw_amt)
+            except Exception:
+                pass
         return RefundRecord.model_validate(cleaned)
 
     def list_refund_requests(self, status: str | None = None, limit: int = 50) -> list[RefundRecord]:
@@ -201,18 +267,29 @@ class RefundRepository:
         response = self.table.scan()
         raw_items = response.get("Items", [])
 
-        records = [
-            RefundRecord.model_validate(_convert_decimals_to_float(item))
-            for item in raw_items
-        ]
-
         if status is not None:
             status_lower = status.strip().lower()
-            records = [r for r in records if r.status.lower() == status_lower]
+            raw_items = [item for item in raw_items if str(item.get("status", "")).strip().lower() == status_lower]
 
-        # Sort descending by created_at
-        records.sort(key=lambda r: r.created_at, reverse=True)
-        return records[:limit]
+        # Sort descending by created_at before limiting
+        raw_items.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
+        raw_items = raw_items[:limit]
+
+        cleaned_items = []
+        for item in raw_items:
+            c = _convert_decimals_to_float(item)
+            if c.get("order_amount") is None and c.get("order_id"):
+                try:
+                    order_data = self._lookup_order(c["order_id"])
+                    if order_data:
+                        raw_amt = order_data.get("order_amount") if order_data.get("order_amount") is not None else order_data.get("amount")
+                        if raw_amt is not None:
+                            c["order_amount"] = float(raw_amt)
+                except Exception:
+                    pass
+            cleaned_items.append(c)
+
+        return [RefundRecord.model_validate(c) for c in cleaned_items]
 
     def update_decision(
         self,
