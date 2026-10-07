@@ -164,4 +164,126 @@ describe('API Types Contract and Compatibility', () => {
     expect(overrideReq.overrideDecision).toBe('approve')
     expect(proofReq.proofPrompt).toBeTruthy()
   })
+
+  it('validates bulk export job request and response interfaces', () => {
+    const jobReq = {
+      format: 'csv' as const,
+      status: 'completed' as const,
+      columns: ['refund_id', 'order_id', 'refund_amount', 'status'],
+    }
+
+    const jobResp = {
+      job_id: 'job_export_123',
+      status: 'completed' as const,
+      format: 'csv' as const,
+      created_at: '2026-10-06T12:00:00Z',
+      download_url: 'https://s3.example.com/exports/job_123.csv',
+      record_count: 42,
+    }
+
+    expect(jobReq.format).toBe('csv')
+    expect(jobReq.columns).toHaveLength(4)
+    expect(jobResp.job_id).toBe('job_export_123')
+    expect(jobResp.status).toBe('completed')
+    expect(jobResp.record_count).toBe(42)
+  })
+
+  it('validates recurring export schedule and trigger response interfaces', () => {
+    const schedule = {
+      schedule_id: 'sch_abc123',
+      name: 'Weekly Executive Audit',
+      recipients: ['audit@example.com', 'finance@example.com'],
+      frequency: 'weekly' as const,
+      format: 'csv' as const,
+      columns: ['refund_id', 'refund_amount'],
+      enabled: true,
+      created_at: '2026-10-06T12:00:00Z',
+      last_run: '2026-10-06T12:30:00Z',
+      last_status: 'success' as const,
+    }
+
+    const triggerResp = {
+      schedule_id: 'sch_abc123',
+      records_exported: 15,
+      recipients_delivered: ['audit@example.com'],
+      status: 'success' as const,
+      executed_at: '2026-10-06T12:35:00Z',
+    }
+
+    expect(schedule.name).toBe('Weekly Executive Audit')
+    expect(schedule.recipients).toContain('finance@example.com')
+    expect(triggerResp.records_exported).toBe(15)
+    expect(triggerResp.status).toBe('success')
+  })
+
+  it('validates EvidenceItem with malware scan metadata and quarantine states', () => {
+    const cleanItem: EvidenceItem = {
+      evidenceId: 'evi_clean1',
+      storageKey: 'evidence/clean.jpg',
+      filename: 'clean.jpg',
+      contentType: 'image/jpeg',
+      sizeBytes: 20480,
+      url: '/static/evidence/clean.jpg',
+      createdAt: '2026-10-06T12:00:00Z',
+      scanStatus: 'clean',
+      scannedAt: '2026-10-06T12:00:05Z',
+      threatName: undefined,
+    }
+
+    const infectedItem: EvidenceItem = {
+      evidenceId: 'evi_infected2',
+      storageKey: 'evidence/infected.jpg',
+      filename: 'infected.jpg',
+      contentType: 'image/jpeg',
+      sizeBytes: 1500,
+      url: '/static/evidence/infected.jpg',
+      createdAt: '2026-10-06T12:00:00Z',
+      scanStatus: 'infected',
+      scannedAt: '2026-10-06T12:00:02Z',
+      threatName: 'Win32.Eicar.TestFile',
+    }
+
+    expect(cleanItem.scanStatus).toBe('clean')
+    expect(cleanItem.threatName).toBeUndefined()
+    expect(infectedItem.scanStatus).toBe('infected')
+    expect(infectedItem.threatName).toBe('Win32.Eicar.TestFile')
+  })
+
+  it('validates tiered approval limits, monetary amounts, and escalation decision types', () => {
+    const overrideDecisions: ('approve' | 'deny' | 'escalate')[] = ['approve', 'deny', 'escalate']
+    expect(overrideDecisions).toContain('escalate')
+
+    const escalatedRecord: RefundRecord = {
+      refundId: 'ref_high_value',
+      orderId: 'ORD-1010',
+      customerRequestText: 'High value monitor damaged.',
+      status: 'escalated',
+      decision: 'escalate',
+      reasoning: 'Refund amount $1,299.99 exceeds supervisor limit of $500.00.',
+      category: 'damaged',
+      confidenceScore: 0.88,
+      escalationTier: 'senior_manager',
+      refundAmount: 1299.99,
+      orderAmount: 1299.99,
+      matchedPolicyRule: null,
+      clarificationCount: 0,
+      clarificationPrompt: null,
+      clarificationResponse: null,
+      clarificationHistory: [],
+      evidence: [],
+      toolCalls: [],
+      approvalEmailText: null,
+      denialEmailText: null,
+      clarificationEmailText: null,
+      overrideDecision: null,
+      overrideReason: null,
+      overriddenAt: null,
+      createdAt: '2026-10-06T12:00:00Z',
+      updatedAt: '2026-10-06T12:05:00Z',
+    }
+
+    expect(escalatedRecord.escalationTier).toBe('senior_manager')
+    expect(escalatedRecord.refundAmount).toBe(1299.99)
+    expect(escalatedRecord.orderAmount).toBe(1299.99)
+  })
 })
